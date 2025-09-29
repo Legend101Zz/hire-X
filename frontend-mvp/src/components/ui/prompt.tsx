@@ -278,15 +278,6 @@ const PromptPage = () => {
   };
 
   // Handler functions for different WebSocket actions
-  const handlePromptAnalysis = () => {
-    addMessage('assistant', 'Done with analyzing prompt');
-    setCurrentStep(2); // Move to "Finding relevant profiles" step
-  };
-
-  const handleDatabaseLookup = () => {
-    addMessage('assistant', 'Looked up database of 10 million candidates with matching requirements');
-    setCurrentStep(2); // Stay on "Finding relevant profiles" step
-  };
 
   const handleFinalResults = () => {
     console.log('🎉 Final results received, current sessionId:', sessionId);
@@ -307,7 +298,7 @@ const PromptPage = () => {
     setCurrentStep(5); // Move to "Results" step
   };
 
-  const handleProgressUpdate = (progressData: any) => {
+  const handleProgressUpdate = (progressData: { step: string; message: string; progress?: number }) => {
     console.log('📊 Processing progress update:', progressData);
     
     // Extract progress information

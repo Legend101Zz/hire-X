@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import Sidebar from '@/components/ui/sidebar';
 import Header from '@/components/ui/header';
 import ProfileModal from '@/components/ui/profile-modal';
@@ -195,9 +196,9 @@ export default function ShortlistPage() {
                 <h3 className="text-lg font-medium text-gray-900 mb-2">No shortlisted candidates</h3>
                 <p className="text-gray-600 mb-6">
                   Start by searching for candidates and adding them to your shortlist. 
-                  You can shortlist candidates by clicking the "Shortlist" button on their profile cards.
+                  You can shortlist candidates by clicking the &quot;Shortlist&quot; button on their profile cards.
                 </p>
-                <a
+                <Link
                   href="/"
                   className="inline-flex items-center px-4 py-2 bg-violet-600 text-white rounded-md hover:bg-violet-700 transition-colors"
                 >
@@ -205,7 +206,7 @@ export default function ShortlistPage() {
                     <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
                   </svg>
                   Start Searching
-                </a>
+                </Link>
               </div>
             </div>
           ) : (
