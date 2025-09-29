@@ -2,21 +2,25 @@ name: Auto PR from dev to main
 
 on:
   pull_request:
-    types: [closed] # Trigger when PR is closed (merged)
+    types: [labeled, closed] # Trigger on label addition OR PR close
     branches:
       - dev
 
 permissions:
-  contents: write # Allow reading repo contents
-  pull-requests: write # Allow creating PRs
-  issues: write # Allow managing labels
+  contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
-  create-pr-to-main:
-    # Only run if PR was merged (not just closed) and has the label
+  create-production-pr:
+    # Run if:
+    # 1. PR has 'ready-for-prod' label AND
+    # 2. PR is merged (not just closed) AND
+    # 3. Base branch is dev
     if: |
-      github.event.pull_request.merged == true && 
-      contains(github.event.pull_request.labels.*.name, 'ready-for-prod')
+      contains(github.event.pull_request.labels.*.name, 'ready-for-prod') &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'dev'
 
     runs-on: ubuntu-latest
 
@@ -24,60 +28,136 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch all history
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: dev
+          fetch-depth: 0
 
-      - name: Set up Git
+      - name: Check if PR to main already exists
+        id: check_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Check if there's already an open PR from dev to main
+          EXISTING_PR=$(gh pr list --base main --head dev --state open --json number --jq '.[0].number')
 
-      - name: Get PR details
-        id: pr_details
+          if [ -n "$EXISTING_PR" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "pr_number=$EXISTING_PR" >> $GITHUB_OUTPUT
+            echo "⚠️ PR from dev to main already exists: #$EXISTING_PR"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✅ No existing PR found. Will create new one."
+          fi
+
+      - name: Check for differences between dev and main
+        id: check_diff
+        if: steps.check_pr.outputs.exists == 'false'
         run: |
-          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
-          echo "pr_author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
+          git fetch origin main
+          DIFF_COUNT=$(git rev-list --count origin/main..origin/dev)
+          echo "diff_count=$DIFF_COUNT" >> $GITHUB_OUTPUT
+
+          if [ "$DIFF_COUNT" -eq "0" ]; then
+            echo "has_diff=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No differences between dev and main"
+          else
+            echo "has_diff=true" >> $GITHUB_OUTPUT
+            echo "✅ Found $DIFF_COUNT commits ahead in dev"
+          fi
 
       - name: Create Pull Request to main
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: dev
-          base: main
-          title: "🚀 Production Release: ${{ steps.pr_details.outputs.pr_title }}"
-          body: |
-            ## 🎉 Ready for Production Deployment
+        if: |
+          steps.check_pr.outputs.exists == 'false' && 
+          steps.check_diff.outputs.has_diff == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get PR details
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
 
-            This PR was automatically created because PR #${{ steps.pr_details.outputs.pr_number }} was merged to `dev` with the `ready-for-prod` label.
+          # Create PR using GitHub CLI
+          gh pr create \
+            --base main \
+            --head dev \
+            --title "🚀 Production Release: $PR_TITLE" \
+            --body "## 🎉 Ready for Production Deployment
 
-            ### 📋 Original PR Information
-            - **Original PR:** #${{ steps.pr_details.outputs.pr_number }}
-            - **Title:** ${{ steps.pr_details.outputs.pr_title }}
-            - **Author:** @${{ steps.pr_details.outputs.pr_author }}
-            - **Merged to:** dev
+          This PR was automatically created because PR #$PR_NUMBER was labeled with \`ready-for-prod\`.
 
-            ### 🔍 Changes Included
-            ${{ github.event.pull_request.body }}
+          ### 📋 Original PR Information
+          - **Original PR:** [#$PR_NUMBER]($PR_URL)
+          - **Title:** $PR_TITLE
+          - **Author:** @$PR_AUTHOR
+          - **Branch:** dev → main
 
-            ### ✅ Pre-merge Checklist
-            - [ ] All tests passing
-            - [ ] Code reviewed and approved
-            - [ ] Documentation updated
-            - [ ] Ready for production deployment
-            - [ ] Database migrations checked (if applicable)
-            - [ ] Environment variables verified (if applicable)
+          ### 🔍 What's Included
+          All changes from \`dev\` branch that are not yet in \`main\`.
 
-            ---
+          [View full diff](https://github.com/${{ github.repository }}/compare/main...dev)
 
-            ### 🔗 Links
-            - [Original PR](${{ github.event.pull_request.html_url }})
-            - [Changes in this release](https://github.com/${{ github.repository }}/compare/main...dev)
+          ### ✅ Pre-Deployment Checklist
+          - [ ] All automated tests passing
+          - [ ] Code reviewed and approved
+          - [ ] Documentation updated
+          - [ ] Environment variables verified
+          - [ ] Database migrations ready (if applicable)
+          - [ ] Deployment plan reviewed
 
-            ---
-            *🤖 This PR was automatically created by GitHub Actions*
-            *Triggered by merging PR #${{ steps.pr_details.outputs.pr_number }} with label `ready-for-prod`*
-          labels: |
-            production
-            automated-pr
-          draft: false
+          ### 🚀 Deployment Steps
+          1. Review all changes in this PR
+          2. Ensure all checks pass
+          3. Merge this PR to \`main\`
+          4. Deploy to production
+          5. Monitor deployment
+
+          ---
+
+          **Triggered by:** Adding \`ready-for-prod\` label to PR #$PR_NUMBER
+
+          *🤖 This PR was automatically created by GitHub Actions*" \
+            --label "production,automated-pr"
+
+      - name: Comment on original PR
+        if: steps.check_pr.outputs.exists == 'false' && steps.check_diff.outputs.has_diff == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "🚀 **Production PR Created!**
+
+          An automated PR from \`dev\` to \`main\` has been created for production deployment.
+
+          You can review it here: https://github.com/${{ github.repository }}/pulls?q=is%3Aopen+is%3Apr+label%3Aproduction+head%3Adev+base%3Amain
+
+          *This PR is now ready to be deployed to production after final review and approval.* ✨"
+
+      - name: Update existing PR comment
+        if: steps.check_pr.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "ℹ️ **Production PR Already Exists**
+
+          A PR from \`dev\` to \`main\` already exists: #${{ steps.check_pr.outputs.pr_number }}
+
+          Your changes are already included in that PR.
+
+          [View Production PR](https://github.com/${{ github.repository }}/pull/${{ steps.check_pr.outputs.pr_number }})"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### 📊 Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger:** Label \`ready-for-prod\` added to PR #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **PR Status:** ${{ github.event.pull_request.merged && '✅ Merged' || '❌ Not merged' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Existing PR:** ${{ steps.check_pr.outputs.exists == 'true' && format('Yes (#{0})', steps.check_pr.outputs.pr_number) || 'No' }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.check_diff.outputs.has_diff }}" == "true" ]; then
+            echo "- **Differences:** ✅ Found ${{ steps.check_diff.outputs.diff_count }} commits" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.check_diff.outputs.has_diff }}" == "false" ]; then
+            echo "- **Differences:** ⚠️ No differences between dev and main" >> $GITHUB_STEP_SUMMARY
+          fi
