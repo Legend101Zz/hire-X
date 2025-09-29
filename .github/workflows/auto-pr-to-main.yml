@@ -1,51 +1,83 @@
 name: Auto PR from dev to main
 
 on:
-  push:
-    tags:
-      - "ready-for-prod-*" # Triggers when you push a tag like ready-for-prod-v1.0
+  pull_request:
+    types: [closed] # Trigger when PR is closed (merged)
+    branches:
+      - dev
+
+permissions:
+  contents: write # Allow reading repo contents
+  pull-requests: write # Allow creating PRs
+  issues: write # Allow managing labels
 
 jobs:
-  create-pr:
+  create-pr-to-main:
+    # Only run if PR was merged (not just closed) and has the label
+    if: |
+      github.event.pull_request.merged == true && 
+      contains(github.event.pull_request.labels.*.name, 'ready-for-prod')
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch all history for all branches
+          fetch-depth: 0 # Fetch all history
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Get tag name
-        id: tag
-        run: echo "tag_name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      - name: Get PR details
+        id: pr_details
+        run: |
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+          echo "pr_author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
 
-      - name: Create Pull Request
-        uses: repo-sync/pull-request@v2
+      - name: Create Pull Request to main
+        uses: peter-evans/create-pull-request@v5
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          source_branch: dev
-          destination_branch: main
-          pr_title: "🚀 Production Release: ${{ steps.tag.outputs.tag_name }}"
-          pr_body: |
-            ## 🎉 Ready for Production
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: dev
+          base: main
+          title: "🚀 Production Release: ${{ steps.pr_details.outputs.pr_title }}"
+          body: |
+            ## 🎉 Ready for Production Deployment
 
-            This PR was automatically created from the `dev` branch after tagging with `${{ steps.tag.outputs.tag_name }}`.
+            This PR was automatically created because PR #${{ steps.pr_details.outputs.pr_number }} was merged to `dev` with the `ready-for-prod` label.
 
-            ### 📋 Checklist
+            ### 📋 Original PR Information
+            - **Original PR:** #${{ steps.pr_details.outputs.pr_number }}
+            - **Title:** ${{ steps.pr_details.outputs.pr_title }}
+            - **Author:** @${{ steps.pr_details.outputs.pr_author }}
+            - **Merged to:** dev
+
+            ### 🔍 Changes Included
+            ${{ github.event.pull_request.body }}
+
+            ### ✅ Pre-merge Checklist
             - [ ] All tests passing
-            - [ ] Code reviewed
+            - [ ] Code reviewed and approved
             - [ ] Documentation updated
             - [ ] Ready for production deployment
-
-            ### 🔖 Tag Information
-            **Tag:** `${{ steps.tag.outputs.tag_name }}`
-            **Branch:** `dev`
+            - [ ] Database migrations checked (if applicable)
+            - [ ] Environment variables verified (if applicable)
 
             ---
-            *This PR was automatically created by GitHub Actions*
-          pr_label: "production,automated-pr"
+
+            ### 🔗 Links
+            - [Original PR](${{ github.event.pull_request.html_url }})
+            - [Changes in this release](https://github.com/${{ github.repository }}/compare/main...dev)
+
+            ---
+            *🤖 This PR was automatically created by GitHub Actions*
+            *Triggered by merging PR #${{ steps.pr_details.outputs.pr_number }} with label `ready-for-prod`*
+          labels: |
+            production
+            automated-pr
+          draft: false
