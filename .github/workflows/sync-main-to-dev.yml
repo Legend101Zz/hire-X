@@ -1,0 +1,60 @@
+name: Sync main to dev after production merge
+
+on:
+    pull_request:
+        types: [closed]
+        branches:
+            - main
+
+permissions:
+    contents: write
+    pull-requests: write
+
+jobs:
+    sync-to-dev:
+        # Only run if PR was merged (not just closed)
+        if: github.event.pull_request.merged == true
+
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout main
+              uses: actions/checkout@v4
+              with:
+                  ref: main
+                  fetch-depth: 0
+                  token: ${{ secrets.PAT_TOKEN || github.token }}
+
+            - name: Configure Git
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            - name: Merge main into dev
+              env:
+                  GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+              run: |
+                  # Fetch latest dev
+                  git fetch origin dev
+
+                  # Checkout dev
+                  git checkout dev
+
+                  # Merge main into dev
+                  git merge origin/main --no-edit -m "chore: sync main back to dev after production deployment"
+
+                  # Push to dev
+                  git push origin dev
+
+                  echo "✅ Successfully synced main to dev"
+
+            - name: Comment on PR
+              env:
+                  GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+              run: |
+                  gh pr comment ${{ github.event.pull_request.number }} \
+                    --body "✅ **Main synced to dev**
+
+                  The \`main\` branch has been automatically merged back into \`dev\` to keep branches in sync.
+
+                  This ensures \`dev\` includes the merge commit from this production deployment."
