@@ -1,4 +1,4 @@
-name: Sync main to dev after production merge
+name: Sync main to dev
 
 on:
     pull_request:
@@ -8,53 +8,35 @@ on:
 
 permissions:
     contents: write
-    pull-requests: write
 
 jobs:
-    sync-to-dev:
-        # Only run if PR was merged (not just closed)
-        if: github.event.pull_request.merged == true
+    sync:
+        if: |
+            github.event.pull_request.merged == true &&
+            github.event.pull_request.head.ref == 'dev'
 
         runs-on: ubuntu-latest
 
         steps:
-            - name: Checkout main
+            - name: Checkout
               uses: actions/checkout@v4
               with:
                   ref: main
                   fetch-depth: 0
-                  token: ${{ secrets.PAT_TOKEN || github.token }}
+                  token: ${{ secrets.PAT_TOKEN }}
 
-            - name: Configure Git
+            - name: Sync to dev
               run: |
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
 
-            - name: Merge main into dev
-              env:
-                  GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
-              run: |
-                  # Fetch latest dev
                   git fetch origin dev
-
-                  # Checkout dev
                   git checkout dev
 
-                  # Merge main into dev
-                  git merge origin/main --no-edit -m "chore: sync main back to dev after production deployment"
+                  # Fast-forward merge (no commit if possible)
+                  git merge origin/main --ff-only 2>/dev/null || \
+                    git merge origin/main --no-edit -m "chore: sync from main [skip ci]"
 
-                  # Push to dev
                   git push origin dev
 
-                  echo "✅ Successfully synced main to dev"
-
-            - name: Comment on PR
-              env:
-                  GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
-              run: |
-                  gh pr comment ${{ github.event.pull_request.number }} \
-                    --body "✅ **Main synced to dev**
-
-                  The \`main\` branch has been automatically merged back into \`dev\` to keep branches in sync.
-
-                  This ensures \`dev\` includes the merge commit from this production deployment."
+                  echo "✅ Synced"
