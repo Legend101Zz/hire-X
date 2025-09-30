@@ -4,7 +4,11 @@ Run this script to create a sample user in MongoDB.
 """
 import asyncio
 import os
+from dotenv import load_dotenv
 from auth import AuthManager
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 async def create_test_user():

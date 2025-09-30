@@ -118,7 +118,8 @@ const PromptPage = () => {
     'Results'
   ];
 
-  const heroText = "Find the Right Talent from Pool of 10 Million+ People";
+  // const heroText = "Find the Right Talent from Pool of 10 Million+ People";
+  const heroText = "Hello there, what are you looking for today?";
 
   // Typing animation effect
   useEffect(() => {
@@ -419,7 +420,8 @@ const PromptPage = () => {
         throw new Error('No authentication token available for WebSocket connection');
       }
       
-      const ws = new WebSocket(`ws://localhost:8000/session/${sessionId}?token=${encodeURIComponent(token)}`);
+      const wsBaseUrl = process.env.NEXT_PUBLIC_WS_BASE_URL || 'ws://localhost:8000';
+      const ws = new WebSocket(`${wsBaseUrl}/session/${sessionId}?token=${encodeURIComponent(token)}`);
       
       ws.onopen = () => {
         console.log('🔌 WebSocket connected for session:', sessionId);

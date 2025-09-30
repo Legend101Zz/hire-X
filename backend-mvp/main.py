@@ -3,15 +3,21 @@ Main entry point for the Neuraleap API server.
 """
 import uvicorn
 import redis
+import os
+from dotenv import load_dotenv
 from api import API
 from ai_model import Model
 from redis_manager import RedisManager
+
+# Load environment variables from .env file
+load_dotenv()
 
 if __name__ == "__main__":
     try:
         redis_manager = RedisManager()
         
-        model = Model("openai/gpt-5-nano")
+        # Model will use OPENROUTER_API_KEY and AI_MODEL_NAME from env
+        model = Model()
         api = API(model, redis_manager)
         
         print("Starting API server...")

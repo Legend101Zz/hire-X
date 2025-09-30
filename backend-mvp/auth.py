@@ -21,7 +21,7 @@ class AuthManager:
         self.access_token_expire_minutes = 30
         
         # Password hashing
-        self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+        self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12, bcrypt__min_rounds=10)
         
         # MongoDB connection
         self.mongo_client = MongoClient(os.getenv("MONGODB_URL", "mongodb://localhost:27017/"))
@@ -42,7 +42,14 @@ class AuthManager:
     
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Verify a password against its hash."""
-        return self.pwd_context.verify(plain_password, hashed_password)
+        try:
+            # Truncate password if it's too long for bcrypt (72 bytes max)
+            if len(plain_password.encode('utf-8')) > 72:
+                plain_password = plain_password[:72]
+            return self.pwd_context.verify(plain_password, hashed_password)
+        except Exception as e:
+            print(f"Error verifying password: {e}")
+            return False
     
     def get_password_hash(self, password: str) -> str:
         """Hash a password."""
@@ -76,9 +83,16 @@ class AuthManager:
         try:
             user_data = self.users_collection.find_one({"username": username})
             if not user_data:
+                print(f"User not found: {username}")
                 return None
             
+            # Check if password is too long before verification
+            if len(password.encode('utf-8')) > 72:
+                print(f"Password too long for user {username}, truncating")
+                password = password[:72]
+            
             if not self.verify_password(password, user_data["hashed_password"]):
+                print(f"Password verification failed for user: {username}")
                 return None
             
             # Convert MongoDB document to User model
@@ -156,7 +170,8 @@ class AuthManager:
                 "email": email,
                 "hashed_password": hashed_password,
                 "created_at": datetime.datetime.utcnow().isoformat(),
-                "last_login": None
+                "last_login": None,
+                "prompts": []  # Initialize empty prompts array
             }
             
             self.users_collection.insert_one(user_data)
@@ -165,3 +180,35 @@ class AuthManager:
         except Exception as e:
             print(f"Error creating user: {e}")
             return False
+    
+    async def add_prompt_to_user(self, username: str, prompt_id: str) -> bool:
+        """Add a prompt_id to user's prompts array."""
+        try:
+            result = self.users_collection.update_one(
+                {"username": username},
+                {"$push": {"prompts": prompt_id}}
+            )
+            
+            if result.matched_count == 0:
+                print(f"Warning: User {username} not found when trying to store prompt_id")
+                return False
+            
+            print(f"✅ Added prompt_id {prompt_id} to user {username}")
+            return True
+            
+        except Exception as e:
+            print(f"Error adding prompt to user {username}: {e}")
+            return False
+    
+    async def get_user_prompts(self, username: str) -> list:
+        """Get all prompt_ids for a user."""
+        try:
+            user_data = self.users_collection.find_one({"username": username})
+            if not user_data:
+                return []
+            
+            return user_data.get("prompts", [])
+            
+        except Exception as e:
+            print(f"Error getting prompts for user {username}: {e}")
+            return []

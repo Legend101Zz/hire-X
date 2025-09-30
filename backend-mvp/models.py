@@ -33,6 +33,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     user_id: str
     username: str
+    email: Optional[str] = None
 
 
 class User(BaseModel):
@@ -41,6 +42,7 @@ class User(BaseModel):
     hashed_password: str
     created_at: Optional[str] = None
     last_login: Optional[str] = None
+    prompts: Optional[List[str]] = []  # Array of prompt_ids created by this user
 
 
 class IncidentLog(BaseModel):

@@ -1,11 +1,13 @@
 from pymongo import MongoClient
+import os
 import re
 
-# Connect to MongoDB (update if you use auth)
-client = MongoClient("mongodb://localhost:27017")
+# Connect to MongoDB using environment variables
+PROFILES_DB_URL = os.getenv("PROFILES_DB_URL", "mongodb://localhost:27017")
+PROFILES_DB_NAME = os.getenv("PROFILES_DB_NAME", "mydatabase")
 
-# Select DB and collection
-db = client["mydatabase"]
+client = MongoClient(PROFILES_DB_URL)
+db = client[PROFILES_DB_NAME]
 profiles = db["profiles"]
 
 def search_profiles(location=None, country=None, industry=None, expertise=None):

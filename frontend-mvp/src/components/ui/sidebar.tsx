@@ -3,9 +3,18 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
 interface SidebarProps {
   className?: string;
+}
+
+interface PromptHistoryItem {
+  prompt_id: string;
+  session_id: string;
+  prompt: string;
+  created_at: string;
 }
 
 // Support Popup Component
@@ -140,8 +149,13 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
 
 export default function Sidebar({ className = '' }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [shortlistCount, setShortlistCount] = useState(0);
   const [isSupportPopupOpen, setIsSupportPopupOpen] = useState(false);
+  const [promptHistory, setPromptHistory] = useState<PromptHistoryItem[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [mostRecentSessionId, setMostRecentSessionId] = useState<string | null>(null);
+  const { user } = useAuth();
 
   // Load shortlist count from localStorage
   useEffect(() => {
@@ -168,18 +182,68 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     return () => window.removeEventListener('shortlistUpdated', handleShortlistUpdate as EventListener);
   }, []);
 
+  // Load prompt history
+  useEffect(() => {
+    const loadPromptHistory = async () => {
+      if (!user) return;
+      
+      setIsLoadingHistory(true);
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+
+        const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+        const response = await fetch(`${apiBaseUrl}/user/prompt-history`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Full API response:', data);
+          const prompts = data.prompts || [];
+          console.log('Loaded prompts:', prompts);
+          console.log('First prompt:', prompts[0]);
+          setPromptHistory(prompts);
+          
+          // Set the most recent session ID for the Profiles link
+          if (prompts.length > 0 && prompts[0].session_id) {
+            console.log('Setting most recent session ID to:', prompts[0].session_id);
+            setMostRecentSessionId(prompts[0].session_id);
+          } else {
+            console.log('No prompts found or no session_id in first prompt');
+          }
+        } else {
+          const errorText = await response.text();
+          console.error('Failed to load prompt history:', response.status, errorText);
+        }
+      } catch (error) {
+        console.error('Error loading prompt history:', error);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+
+    loadPromptHistory();
+  }, [user]);
+
+  // Debug log
+  console.log('Current mostRecentSessionId:', mostRecentSessionId);
+  console.log('Profiles href will be:', mostRecentSessionId ? `/results/${mostRecentSessionId}` : '/');
+
   const navigationItems = [
     {
-      name: 'Search',
-      href: '/',
+      name: 'Profiles',
+      href: mostRecentSessionId ? `/results/${mostRecentSessionId}` : '/',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
+          <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
         </svg>
       ),
       badge: null,
-      isActive: pathname === '/',
-      editIcon: true,
+      isActive: mostRecentSessionId ? pathname === `/results/${mostRecentSessionId}` : false,
+      editIcon: false,
     },
     {
       name: 'Shortlist',
@@ -261,15 +325,8 @@ export default function Sidebar({ className = '' }: SidebarProps) {
         </div>
       </div>
 
-      {/* Project Selection */}
-      <div className="p-4 border-b border-gray-200">
-        <select className="w-full px-3 py-2 text-black text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500">
-          <option>First Project</option>
-        </select>
-      </div>
-
       {/* Navigation */}
-      <div className="flex-1 p-4">
+      <div className="flex-1 p-4 overflow-y-auto">
         <nav className="space-y-1">
           {navigationItems.map((item) => (
             <Link
@@ -300,6 +357,39 @@ export default function Sidebar({ className = '' }: SidebarProps) {
             </Link>
           ))}
         </nav>
+
+        {/* Separator Line */}
+        <div className="my-4 border-t border-gray-200"></div>
+
+        {/* History Section */}
+        <div>
+          <div className="px-3 mb-2">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">History</h3>
+          </div>
+          <div className="space-y-1">
+            {isLoadingHistory ? (
+              <div className="px-3 py-2 text-xs text-gray-400">Loading...</div>
+            ) : promptHistory.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-gray-400">No search history yet</div>
+            ) : (
+              promptHistory.map((item) => (
+                <button
+                  key={item.prompt_id}
+                  onClick={() => router.push(`/results/${item.session_id}`)}
+                  className="w-full text-left px-3 py-2 rounded-md text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+                  title={item.prompt}
+                >
+                  <div className="truncate">
+                    {item.prompt.length > 50 ? `${item.prompt.substring(0, 50)}...` : item.prompt}
+                  </div>
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    {item.created_at ? new Date(item.created_at).toLocaleDateString() : 'Recent'}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Settings & Support */}
@@ -327,11 +417,13 @@ export default function Sidebar({ className = '' }: SidebarProps) {
       <div className="p-4 border-t border-gray-200">
         <div className="flex items-center">
           <div className="w-8 h-8 bg-gradient-to-br from-violet-500 to-violet-600 rounded-full flex items-center justify-center">
-            <span className="text-white text-sm font-medium">AP</span>
+            <span className="text-white text-sm font-medium">
+              {user?.username ? user.username.slice(0, 2).toUpperCase() : 'U'}
+            </span>
           </div>
           <div className="ml-3">
-            <div className="text-sm font-medium text-gray-900">Aditya Patil</div>
-            <div className="text-xs text-gray-500">Aditya&apos;s Workspace</div>
+            <div className="text-sm font-medium text-gray-900">{user?.username || 'User'}</div>
+            <div className="text-xs text-gray-500">{user?.email || 'No email'}</div>
           </div>
         </div>
       </div>
