@@ -23,7 +23,7 @@ jobs:
               with:
                   ref: main
                   fetch-depth: 0
-                  token: ${{ secrets.PAT_TOKEN }}
+                  token: ${{ github.token }}
 
             - name: Sync to dev
               run: |
