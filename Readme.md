@@ -340,6 +340,47 @@ pip install -r requirements.txt
 
 ---
 
+# Branch Strategy
+
+## Branches
+
+- **`dev`** - Development branch (default)
+- **`main`** - Production branch
+
+## Workflow
+
+1. Create feature branch from `dev`
+2. Open PR to `dev`
+3. After merge, add label `ready-for-prod`
+4. Auto-PR created from `dev` to `main`
+5. Review and merge to deploy to production
+
+## Why is main "ahead" of dev?
+
+When we deploy, GitHub creates a merge commit on `main` that doesn't exist on `dev`.
+
+**This is intentional.** These merge commits serve as deployment markers.
+
+To verify code is identical:
+```bash
+git diff dev main # No output = identical code
+```
+
+## Quick Reference
+
+```bash
+# Start new feature
+
+git checkout dev
+git pull
+git checkout -b feature/my-feature
+
+# After PR merged to dev, deploy to production
+
+gh pr edit <PR_NUMBER> --add-label "ready-for-prod"
+# That's it! Auto-PR will be created.
+```
+
 ## Additional Resources
 
 - **Backend Documentation:** See `backend-mvp/AUTH_SETUP.md`
