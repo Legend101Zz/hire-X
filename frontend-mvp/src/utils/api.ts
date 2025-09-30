@@ -14,9 +14,9 @@ interface ApiOptions extends RequestInit {
 export const apiCall = async (endpoint: string, options: ApiOptions = {}) => {
   const { token, ...fetchOptions } = options;
   
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...fetchOptions.headers,
+    ...(fetchOptions.headers as Record<string, string>),
   };
 
   if (token) {
@@ -76,7 +76,7 @@ export const apiGet = async (endpoint: string, token: string) => {
 /**
  * Make a POST request with authentication
  */
-export const apiPost = async (endpoint: string, data: any, token: string) => {
+export const apiPost = async (endpoint: string, data: unknown, token: string) => {
   const response = await apiCall(endpoint, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -89,7 +89,7 @@ export const apiPost = async (endpoint: string, data: any, token: string) => {
 /**
  * Make a PUT request with authentication
  */
-export const apiPut = async (endpoint: string, data: any, token: string) => {
+export const apiPut = async (endpoint: string, data: unknown, token: string) => {
   const response = await apiCall(endpoint, {
     method: 'PUT',
     body: JSON.stringify(data),
