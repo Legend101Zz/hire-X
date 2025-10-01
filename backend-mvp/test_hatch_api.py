@@ -7,17 +7,17 @@ import json
 import requests
 
 # Configuration
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8080"
 # Get your JWT token from login first
-JWT_TOKEN = "your-jwt-token-here"  # Replace with actual token after login
+JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJNcmlnZXNoIiwidXNlcl9pZCI6Ik1yaWdlc2giLCJleHAiOjE3NTkzMjE0Nzd9.E5tYv7SDUsBbHfcY2JqUE1_EdEICDbhIW7lpnA8fIBk"  # Replace with actual token after login
 
 def test_login():
     """First, login to get JWT token."""
     response = requests.post(
         f"{BASE_URL}/login",
         json={
-            "username": "testuser",
-            "password": "testpassword123"
+            "username": "Mrigesh",
+            "password": "Neura@123"
         }
     )
     
