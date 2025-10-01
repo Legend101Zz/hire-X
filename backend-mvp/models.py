@@ -2,7 +2,8 @@
 Pydantic models for API requests and responses.
 """
 from typing import List, Optional
-from pydantic import BaseModel, EmailStr
+
+from pydantic import BaseModel, EmailStr, Field
 
 
 class PromptRequest(BaseModel):
@@ -52,3 +53,28 @@ class IncidentLog(BaseModel):
     incident_type: str  # "failed_login", "invalid_credentials", etc.
     timestamp: str
     details: Optional[str] = None
+
+class HatchContactRequest(BaseModel):
+    """Request model for single contact lookup."""
+    profile_id: str = Field(..., description="MongoDB ObjectId from profiles collection")
+    linkedin_url: Optional[str] = Field(None, description="LinkedIn profile URL")
+    first_name: Optional[str] = Field(None, description="First name")
+    last_name: Optional[str] = Field(None, description="Last name")
+    company_domain: Optional[str] = Field(None, description="Company domain for email lookup")
+    session_id: Optional[str] = Field(None, description="Session ID for caching")
+    
+class HatchBulkContactRequest(BaseModel):
+    """Request model for bulk contact lookup (max 5)."""
+    profiles: List[HatchContactRequest] = Field(..., max_items=5, description="List of profiles (max 5)")
+    session_id: Optional[str] = Field(None, description="Session ID for caching")
+
+class HatchContactResponse(BaseModel):
+    """Response model for contact information."""
+    success: bool
+    profile_id: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    source: Optional[str] = Field(None, description="'cache' or 'api'")
+    message: Optional[str] = None
+    error: Optional[str] = None
+    cached_at: Optional[str] = None
