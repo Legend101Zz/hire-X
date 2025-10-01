@@ -45,6 +45,7 @@ class API:
                 "http://127.0.0.1:3000",  # Alternative localhost
                 "http://localhost:3001",  # Alternative port
                 "http://127.0.0.1:3001",  # Alternative port
+                "https://dev.damnuiwdbbvte.amplifyapp.com",
             ],
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
