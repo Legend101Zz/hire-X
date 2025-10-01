@@ -1,20 +1,26 @@
 """
 FastAPI application and route definitions.
 """
-import uuid
 import asyncio
 import json
 import os
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, status, Depends, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from models import PromptRequest, SessionResponse, LoginRequest, LoginResponse
+import uuid
+
 from ai_model import AIModel, HiringPromptParser
-from redis_manager import RedisManager
-from workflow import Workflow
-from websocket_manager import WebSocketManager
 from auth import AuthManager
+from fastapi import (Depends, FastAPI, HTTPException, Query, Request,
+                     WebSocket, WebSocketDisconnect, status)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from hatch_service import HatchService
+from models import (HatchBulkContactRequest, HatchContactRequest,
+                    HatchContactResponse, LoginRequest, LoginResponse,
+                    PromptRequest, SessionResponse)
 from pymongo import MongoClient
+from redis_manager import RedisManager
+from websocket_manager import WebSocketManager
+from workflow import Workflow
+
 
 class API:
     """FastAPI application wrapper with session management."""
@@ -23,6 +29,7 @@ class API:
         self.app = FastAPI(title="Neuraleap API", version="1.0.0")
         self.parser = HiringPromptParser(model)
         self.redis_manager = redis_manager
+        self.hatch_service = HatchService(redis_manager)
         self.workflow = Workflow(redis_manager)
         self.websocket_manager = WebSocketManager(redis_manager)
         self.auth_manager = AuthManager()
@@ -541,6 +548,51 @@ class API:
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error retrieving prompt history: {str(e)}")
     
+        @self.app.post("/hatch/contact", response_model=HatchContactResponse)
+        async def get_hatch_contact(
+            request: HatchContactRequest,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get contact information (phone or email) for a single candidate.
+            Checks cache first, then calls Hatch API if needed.
+            """
+            try:
+                result = await self.hatch_service.get_contact_info(
+                    profile_id=request.profile_id,
+                    linkedin_url=request.linkedin_url,
+                    first_name=request.first_name,
+                    last_name=request.last_name,
+                    domain=request.company_domain,
+                    session_id=request.session_id
+                )
+                return result
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/hatch/bulk-contact")
+        async def get_hatch_bulk_contact(
+            request: HatchBulkContactRequest,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get contact information for multiple candidates (max 5).
+            Checks cache first, then calls Hatch API if needed.
+            """
+            try:
+                results = await self.hatch_service.get_bulk_contact_info(
+                    profiles=[p.dict() for p in request.profiles],
+                    session_id=request.session_id
+                )
+                return {
+                    "success": True,
+                    "count": len(results),
+                    "results": results
+                }
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
     
     async def _verify_session_ownership(self, session_id: str, current_user: dict):
         """
