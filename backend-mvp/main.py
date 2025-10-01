@@ -20,8 +20,7 @@ if __name__ == "__main__":
         model = Model()
         api = API(model, redis_manager)
 
-        # App Runner expects port 8080, but use 8000 locally by default
-        port = int(os.getenv("PORT", 8000))
+        port = int(os.getenv("PORT", 8080))
 
         print("Starting API server...")
         print(f"API will be available at: http://localhost:{port}")
