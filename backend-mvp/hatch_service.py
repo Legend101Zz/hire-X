@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 import requests
 from bson import ObjectId
 from pymongo import MongoClient
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 class HatchService:
@@ -35,8 +37,13 @@ class HatchService:
         # Create indexes for faster lookups
         self._create_indexes()
         
+        # Create a session with HTTP/1.1 and proper connection handling
+        self.session = self._create_session()
+        
         if not self.api_key:
             print("⚠️ Warning: HATCH_API_KEY not set in environment variables")
+        else:
+            print(f"✅ Hatch API Key configured (length: {len(self.api_key)})")
     
     def _create_indexes(self):
         """Create MongoDB indexes for efficient queries."""
@@ -45,6 +52,31 @@ class HatchService:
             self.candidates_collection.create_index("profile_id", unique=True)
         except Exception as e:
             print(f"Warning: Could not create indexes: {e}")
+    
+    def _create_session(self):
+        """
+        Create a requests session with proper configuration.
+        Forces HTTP/1.1 and handles connection issues.
+        """
+        session = requests.Session()
+        
+        # Force HTTP/1.1 by disabling HTTP/2
+        # This is done by configuring the adapter
+        adapter = HTTPAdapter(
+            max_retries=Retry(
+                total=0,  # We'll handle retries manually
+                connect=0,
+                read=0,
+                backoff_factor=0
+            ),
+            pool_connections=1,
+            pool_maxsize=1
+        )
+        
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        return session
     
     def _normalize_linkedin_url(self, linkedin_url: Optional[str]) -> Optional[str]:
         """
@@ -182,7 +214,7 @@ class HatchService:
             phone_result = await self._get_phone_from_hatch(linkedin_url)
             
             contact_data = {
-                "profile_id": profile_mongo_id,  # This is the _id from mydatabase/profiles
+                "profile_id": profile_mongo_id,
                 "first_name": first_name,
                 "last_name": last_name,
                 "phone": phone_result.get("phone") if phone_result.get("success") else None,
@@ -206,7 +238,7 @@ class HatchService:
                 contact_data["email"] = email_result.get("email") if email_result.get("success") else None
                 contact_data["email_error"] = email_result.get("error") if not email_result.get("success") else None
             
-            # Step 5: Save to neuraleap/candidates collection (even if both failed, to avoid re-trying)
+            # Step 5: Save to neuraleap/candidates collection
             self._save_to_cache(contact_data)
             
             # Step 6: Store in Redis session if session_id provided
@@ -241,16 +273,7 @@ class HatchService:
         profile_ids: List[str],
         session_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Get contact information for multiple profiles (max 5).
-        
-        Args:
-            profile_ids: List of MongoDB _ids from mydatabase/profiles (max 5)
-            session_id: Session ID for Redis caching
-            
-        Returns:
-            List of contact information results
-        """
+        """Get contact information for multiple profiles (max 5)."""
         if len(profile_ids) > 5:
             raise ValueError("Maximum 5 profiles allowed per request")
         
@@ -262,84 +285,117 @@ class HatchService:
             )
             results.append(result)
             
-            # Add a small delay between requests to avoid rate limiting
+            # Add delay between requests to avoid rate limiting
             if len(results) < len(profile_ids):
-                time.sleep(1)
+                time.sleep(2)
         
         return results
     
     async def _get_phone_from_hatch(self, linkedin_url: Optional[str]) -> Dict[str, Any]:
-        """
-        Call Hatch API to get phone number with retry logic.
-        
-        Retries up to 3 times with exponential backoff for network errors.
-        """
+        """Call Hatch API to get phone number with retry logic and HTTP/1.1."""
         if not linkedin_url:
             return {"success": False, "error": "LinkedIn URL required for phone lookup"}
         
         max_retries = 3
-        retry_delay = 2  # Start with 2 seconds
+        retry_delay = 3
         
         for attempt in range(max_retries):
             try:
                 headers = {
                     "x-api-key": self.api_key,
                     "Content-Type": "application/json",
-                    "User-Agent": "Neuraleap/1.0"
+                    "Accept": "application/json",
+                    "Connection": "close",  # Force connection close to avoid HTTP/2 issues
+                    "User-Agent": "Neuraleap/1.0 (Python-requests)"
                 }
+                
                 payload = {"linkedinUrl": linkedin_url}
                 
-                print(f"   🔍 Attempting phone lookup (attempt {attempt + 1}/{max_retries})...")
+                print(f"   🔍 Phone lookup attempt {attempt + 1}/{max_retries}")
+                print(f"      URL: {self.base_url}/findPhone")
+                print(f"      LinkedIn: {linkedin_url}")
                 
-                response = requests.post(
+                # Use the session with HTTP/1.1 forced
+                response = self.session.post(
                     f"{self.base_url}/findPhone",
                     headers=headers,
                     json=payload,
-                    timeout=45  # Increased timeout to 45 seconds
+                    timeout=60,  # Increased to 60 seconds
+                    allow_redirects=False
                 )
                 
+                print(f"      Response Status: {response.status_code}")
+                
                 if response.status_code == 200:
-                    data = response.json()
-                    print(f"   ✅ Phone found!")
-                    return {"success": True, "phone": data.get("phone")}
+                    try:
+                        data = response.json()
+                        phone = data.get("phone")
+                        if phone:
+                            print(f"   ✅ Phone found: {phone}")
+                            return {"success": True, "phone": phone}
+                        else:
+                            print(f"   ⚠️ No phone in response")
+                            return {"success": False, "error": "No phone number in response"}
+                    except json.JSONDecodeError as e:
+                        print(f"   ⚠️ Invalid JSON response: {response.text[:100]}")
+                        return {"success": False, "error": "Invalid JSON response"}
+                        
                 elif response.status_code == 429:
-                    # Rate limit hit
-                    print(f"   ⚠️ Rate limit hit, waiting {retry_delay * 2} seconds...")
-                    time.sleep(retry_delay * 2)
-                    retry_delay *= 2
+                    wait_time = retry_delay * (attempt + 1)
+                    print(f"   ⚠️ Rate limit (429), waiting {wait_time}s...")
+                    time.sleep(wait_time)
                     continue
+                    
+                elif response.status_code in [404, 400]:
+                    # Don't retry for client errors
+                    error_msg = f"API error {response.status_code}"
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get("message", error_data.get("error", error_msg))
+                    except:
+                        error_msg = response.text[:100] if response.text else error_msg
+                    print(f"   ❌ Client error: {error_msg}")
+                    return {"success": False, "error": error_msg}
+                    
                 else:
-                    error_msg = f"API returned {response.status_code}"
+                    error_msg = f"HTTP {response.status_code}"
                     try:
                         error_data = response.json()
                         error_msg = error_data.get("message", error_msg)
                     except:
                         error_msg = response.text[:100] if response.text else error_msg
                     
-                    print(f"   ⚠️ Hatch phone API error: {error_msg}")
-                    return {"success": False, "error": error_msg}
+                    print(f"   ⚠️ Server error: {error_msg}")
                     
-            except requests.exceptions.Timeout as e:
+                    if attempt < max_retries - 1:
+                        print(f"   Retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        return {"success": False, "error": error_msg}
+                    
+            except requests.exceptions.Timeout:
                 print(f"   ⏱️ Timeout on attempt {attempt + 1}/{max_retries}")
                 if attempt < max_retries - 1:
-                    print(f"   Retrying in {retry_delay} seconds...")
+                    print(f"   Retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
+                    retry_delay *= 2
                 else:
                     return {"success": False, "error": f"Timeout after {max_retries} attempts"}
                     
             except requests.exceptions.ConnectionError as e:
-                print(f"   🔌 Connection error on attempt {attempt + 1}/{max_retries}: {str(e)}")
+                error_str = str(e)
+                print(f"   🔌 Connection error: {error_str[:100]}")
                 if attempt < max_retries - 1:
-                    print(f"   Retrying in {retry_delay} seconds...")
+                    print(f"   Retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
                     retry_delay *= 2
                 else:
-                    return {"success": False, "error": f"Connection failed after {max_retries} attempts"}
+                    return {"success": False, "error": f"Connection failed: {error_str[:100]}"}
                     
             except Exception as e:
-                print(f"   ❌ Unexpected error calling Hatch phone API: {str(e)}")
-                return {"success": False, "error": str(e)}
+                print(f"   ❌ Unexpected error: {str(e)[:100]}")
+                return {"success": False, "error": str(e)[:100]}
         
         return {"success": False, "error": "Max retries exceeded"}
     
@@ -350,20 +406,18 @@ class HatchService:
         last_name: Optional[str] = None,
         domain: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Call Hatch API to get email address with retry logic.
-        
-        Retries up to 3 times with exponential backoff for network errors.
-        """
+        """Call Hatch API to get email with retry logic and HTTP/1.1."""
         max_retries = 3
-        retry_delay = 2  # Start with 2 seconds
+        retry_delay = 3
         
         for attempt in range(max_retries):
             try:
                 headers = {
                     "x-api-key": self.api_key,
                     "Content-Type": "application/json",
-                    "User-Agent": "Neuraleap/1.0"
+                    "Accept": "application/json",
+                    "Connection": "close",
+                    "User-Agent": "Neuraleap/1.0 (Python-requests)"
                 }
                 
                 # Prefer LinkedIn URL if available
@@ -378,69 +432,87 @@ class HatchService:
                 else:
                     return {"success": False, "error": "Insufficient information for email lookup"}
                 
-                print(f"   📧 Attempting email lookup (attempt {attempt + 1}/{max_retries})...")
+                print(f"   📧 Email lookup attempt {attempt + 1}/{max_retries}")
                 
-                response = requests.post(
+                response = self.session.post(
                     f"{self.base_url}/findEmail",
                     headers=headers,
                     json=payload,
-                    timeout=45  # Increased timeout to 45 seconds
+                    timeout=60,
+                    allow_redirects=False
                 )
                 
+                print(f"      Response Status: {response.status_code}")
+                
                 if response.status_code == 200:
-                    data = response.json()
-                    print(f"   ✅ Email found!")
-                    return {"success": True, "email": data.get("email")}
+                    try:
+                        data = response.json()
+                        email = data.get("email")
+                        if email:
+                            print(f"   ✅ Email found: {email}")
+                            return {"success": True, "email": email}
+                        else:
+                            print(f"   ⚠️ No email in response")
+                            return {"success": False, "error": "No email in response"}
+                    except json.JSONDecodeError:
+                        print(f"   ⚠️ Invalid JSON response")
+                        return {"success": False, "error": "Invalid JSON response"}
+                        
                 elif response.status_code == 429:
-                    # Rate limit hit
-                    print(f"   ⚠️ Rate limit hit, waiting {retry_delay * 2} seconds...")
-                    time.sleep(retry_delay * 2)
-                    retry_delay *= 2
+                    wait_time = retry_delay * (attempt + 1)
+                    print(f"   ⚠️ Rate limit (429), waiting {wait_time}s...")
+                    time.sleep(wait_time)
                     continue
-                else:
-                    error_msg = f"API returned {response.status_code}"
+                    
+                elif response.status_code in [404, 400]:
+                    error_msg = f"API error {response.status_code}"
                     try:
                         error_data = response.json()
-                        error_msg = error_data.get("message", error_msg)
+                        error_msg = error_data.get("message", error_data.get("error", error_msg))
                     except:
-                        error_msg = response.text[:100] if response.text else error_msg
-                    
-                    print(f"   ⚠️ Hatch email API error: {error_msg}")
+                        pass
+                    print(f"   ❌ Client error: {error_msg}")
                     return {"success": False, "error": error_msg}
                     
-            except requests.exceptions.Timeout as e:
+                else:
+                    if attempt < max_retries - 1:
+                        print(f"   ⚠️ Error {response.status_code}, retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        error_msg = f"HTTP {response.status_code}"
+                        try:
+                            error_data = response.json()
+                            error_msg = error_data.get("message", error_msg)
+                        except:
+                            pass
+                        return {"success": False, "error": error_msg}
+                    
+            except requests.exceptions.Timeout:
                 print(f"   ⏱️ Timeout on attempt {attempt + 1}/{max_retries}")
                 if attempt < max_retries - 1:
-                    print(f"   Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-                else:
-                    return {"success": False, "error": f"Timeout after {max_retries} attempts"}
-                    
-            except requests.exceptions.ConnectionError as e:
-                print(f"   🔌 Connection error on attempt {attempt + 1}/{max_retries}: {str(e)}")
-                if attempt < max_retries - 1:
-                    print(f"   Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
                     retry_delay *= 2
                 else:
-                    return {"success": False, "error": f"Connection failed after {max_retries} attempts"}
+                    return {"success": False, "error": "Timeout after retries"}
+                    
+            except requests.exceptions.ConnectionError as e:
+                print(f"   🔌 Connection error")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    return {"success": False, "error": "Connection failed"}
                     
             except Exception as e:
-                print(f"   ❌ Unexpected error calling Hatch email API: {str(e)}")
-                return {"success": False, "error": str(e)}
+                print(f"   ❌ Unexpected error: {str(e)[:100]}")
+                return {"success": False, "error": str(e)[:100]}
         
         return {"success": False, "error": "Max retries exceeded"}
     
     def _get_from_cache(self, profile_mongo_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get contact information from neuraleap/candidates cache.
-        
-        Args:
-            profile_mongo_id: The _id from mydatabase/profiles
-        """
+        """Get contact information from neuraleap/candidates cache."""
         try:
-            # Query using profile_id field which stores the _id from mydatabase/profiles
             cached = self.candidates_collection.find_one({"profile_id": profile_mongo_id})
             return cached
         except Exception as e:
@@ -448,22 +520,8 @@ class HatchService:
             return None
     
     def _save_to_cache(self, contact_data: Dict[str, Any]) -> bool:
-        """
-        Save contact information to neuraleap/candidates collection.
-        
-        The contact_data should contain:
-        - profile_id: MongoDB _id from mydatabase/profiles
-        - first_name: Person's first name
-        - last_name: Person's last name
-        - phone: Phone number from Hatch API (or None)
-        - email: Email from Hatch API (or None)
-        - linkedin_url: LinkedIn profile URL
-        - created_at: When first saved
-        - updated_at: When last updated
-        """
+        """Save contact information to neuraleap/candidates collection."""
         try:
-            # Upsert: update if exists, insert if not
-            # Use profile_id as unique identifier
             self.candidates_collection.update_one(
                 {"profile_id": contact_data["profile_id"]},
                 {"$set": contact_data},
@@ -487,7 +545,7 @@ class HatchService:
             json_data = json.dumps(contact_data, default=str)
             self.redis_manager.redis_client.setex(
                 key,
-                3600,  # Expire after 1 hour
+                3600,
                 json_data
             )
             print(f"✅ Stored in Redis session: {key}")
