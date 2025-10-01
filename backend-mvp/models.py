@@ -55,23 +55,21 @@ class IncidentLog(BaseModel):
     details: Optional[str] = None
 
 class HatchContactRequest(BaseModel):
-    """Request model for single contact lookup."""
-    profile_id: str = Field(..., description="MongoDB ObjectId from profiles collection")
-    linkedin_url: Optional[str] = Field(None, description="LinkedIn profile URL")
-    first_name: Optional[str] = Field(None, description="First name")
-    last_name: Optional[str] = Field(None, description="Last name")
-    company_domain: Optional[str] = Field(None, description="Company domain for email lookup")
-    session_id: Optional[str] = Field(None, description="Session ID for caching")
-    
+    """Request model for single contact lookup using profile MongoDB ID."""
+    profile_id: str = Field(..., description="MongoDB _id from mydatabase/profiles collection")
+    session_id: Optional[str] = Field(None, description="Session ID for Redis caching")
+
 class HatchBulkContactRequest(BaseModel):
     """Request model for bulk contact lookup (max 5)."""
-    profiles: List[HatchContactRequest] = Field(..., max_items=5, description="List of profiles (max 5)")
+    profile_ids: List[str] = Field(..., max_items=5, description="List of MongoDB _ids from mydatabase/profiles (max 5)")
     session_id: Optional[str] = Field(None, description="Session ID for caching")
 
 class HatchContactResponse(BaseModel):
     """Response model for contact information."""
     success: bool
     profile_id: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     source: Optional[str] = Field(None, description="'cache' or 'api'")
