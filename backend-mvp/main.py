@@ -19,16 +19,19 @@ if __name__ == "__main__":
         # Model will use OPENROUTER_API_KEY and AI_MODEL_NAME from env
         model = Model()
         api = API(model, redis_manager)
-        
+
+        # App Runner expects port 8080, but use 8000 locally by default
+        port = int(os.getenv("PORT", 8000))
+
         print("Starting API server...")
-        print("API will be available at: http://localhost:8000")
-        print("Test endpoint: POST http://localhost:8000/parse-prompt with JSON body: {\"prompt\": \"We need a Data Scientist in New York\"}")
-        print("Session status endpoint: GET http://localhost:8000/session/{session_id}/status")
-        print("WebSocket endpoint: ws://localhost:8000/session/{session_id}")
-        print("Health check: GET http://localhost:8000/health")
+        print(f"API will be available at: http://localhost:{port}")
+        print(f"Test endpoint: POST http://localhost:{port}/parse-prompt with JSON body: {{\"prompt\": \"We need a Data Scientist in New York\"}}")
+        print(f"Session status endpoint: GET http://localhost:{port}/session/{{session_id}}/status")
+        print(f"WebSocket endpoint: ws://localhost:{port}/session/{{session_id}}")
+        print(f"Health check: GET http://localhost:{port}/health")
         print("CORS enabled for: http://localhost:3000, http://localhost:3001")
         
-        uvicorn.run(api.app, host="0.0.0.0", port=8000)
+        uvicorn.run(api.app, host="0.0.0.0", port=port)
         
     except redis.ConnectionError:
         print("❌ Failed to start server: Redis connection failed")
