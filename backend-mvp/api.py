@@ -4,6 +4,7 @@ FastAPI application and route definitions.
 import uuid
 import asyncio
 import json
+import os
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, status, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -13,6 +14,7 @@ from redis_manager import RedisManager
 from workflow import Workflow
 from websocket_manager import WebSocketManager
 from auth import AuthManager
+from pymongo import MongoClient
 
 class API:
     """FastAPI application wrapper with session management."""
@@ -25,6 +27,12 @@ class API:
         self.websocket_manager = WebSocketManager(redis_manager)
         self.auth_manager = AuthManager()
         self.security = HTTPBearer()
+        
+        # MongoDB connection for prompts collection
+        self.mongo_client = MongoClient(os.getenv("MONGODB_URL", "mongodb://localhost:27017/"))
+        self.db = self.mongo_client.get_database(os.getenv("DATABASE_NAME", "neuraleap"))
+        self.prompts_collection = self.db["prompts"]
+        
         self._setup_cors()
         self._setup_routes()
     
@@ -135,7 +143,8 @@ class API:
                     access_token=access_token,
                     token_type="bearer",
                     user_id=user.username,
-                    username=user.username
+                    username=user.username,
+                    email=user.email
                 )
                 
             except HTTPException:
@@ -184,8 +193,14 @@ class API:
                     "created_at": str(asyncio.get_event_loop().time())
                 })
                 
+                # Add prompt_id to user's prompts array in MongoDB
+                await self.auth_manager.add_prompt_to_user(username, session_id)
+                
                 # Start workflow - it will pause after followup questions
                 await self.workflow.process_session(session_id)
+                
+                # Log initial session creation to Neural Leap database
+                await self.workflow.log_user_session_data(session_id)
                 
                 return SessionResponse(
                     session_id=session_id,
@@ -281,6 +296,10 @@ class API:
                                 question = message_data.get("question")
                                 answer = message_data.get("answer")
                                 await self._store_followup_answer(session_id, question, answer)
+                                
+                                # Log follow-up interaction to Neural Leap database
+                                await self.workflow.log_followup_interaction(session_id, question, answer)
+                                
                                 print(f"✅ Stored follow-up answer for session {session_id}")
                                 
                                 # Check if all followup questions are answered and resume workflow
@@ -338,6 +357,9 @@ class API:
                 # Store the answer
                 await self._store_followup_answer(session_id, question, answer)
                 
+                # Log follow-up interaction to Neural Leap database
+                await self.workflow.log_followup_interaction(session_id, question, answer)
+                
                 return {"message": "Answer submitted successfully"}
                 
             except HTTPException:
@@ -348,23 +370,23 @@ class API:
         @self.app.get("/session/{session_id}/results")
         async def get_session_results(session_id: str, current_user: dict = Depends(self.get_current_user)):
             """
-            Get the final results/profiles for a session.
+            Get the final results/profiles for a session from MongoDB.
             
             Args:
                 session_id: The session ID to get results for
                 current_user: Authenticated user information from JWT token
                 
             Returns:
-                dict: Session results including profiles and summary
+                dict: Session results including profiles and summary (same schema as before)
             """
             try:
                 # Verify user owns this session
                 await self._verify_session_ownership(session_id, current_user)
                 
-                # Get final results from Redis
-                final_results = self.redis_manager.get_data(session_id, "final_results")
+                # Get final results from MongoDB
+                mongo_result = self.prompts_collection.find_one({"session_id": session_id})
                 
-                if not final_results:
+                if not mongo_result:
                     # Check if workflow is still in progress
                     status = self.redis_manager.get_workflow_status(session_id)
                     if status == "not_found":
@@ -380,13 +402,14 @@ class API:
                     else:
                         raise HTTPException(status_code=404, detail="No results available for this session")
                 
+                # Return same schema as before (frontend compatible)
                 return {
                     "session_id": session_id,
                     "status": "completed",
-                    "profiles": final_results.get("profiles", []),
-                    "summary": final_results.get("summary", {}),
-                    "total_profiles_found": final_results.get("total_profiles_found", 0),
-                    "profiles_returned": final_results.get("profiles_returned", 0)
+                    "profiles": mongo_result.get("profiles", []),
+                    "summary": mongo_result.get("summary", {}),
+                    "total_profiles_found": mongo_result.get("total_profiles_found", 0),
+                    "profiles_returned": mongo_result.get("profiles_returned", 0)
                 }
                 
             except HTTPException:
@@ -430,6 +453,91 @@ class API:
                     
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error resuming workflow: {str(e)}")
+        
+        @self.app.get("/user/prompts")
+        async def get_user_prompts(current_user: dict = Depends(self.get_current_user)):
+            """
+            Get all prompt_ids for the current user.
+            
+            Args:
+                current_user: Authenticated user information from JWT token
+                
+            Returns:
+                dict: List of prompt_ids created by the user
+            """
+            try:
+                username = current_user.get("sub")
+                if not username:
+                    raise HTTPException(status_code=400, detail="Invalid user information")
+                
+                # Get user's prompts using the auth manager
+                prompts = await self.auth_manager.get_user_prompts(username)
+                
+                return {
+                    "username": username,
+                    "prompts": prompts,
+                    "total_prompts": len(prompts)
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error retrieving user prompts: {str(e)}")
+        
+        @self.app.get("/user/prompt-history")
+        async def get_user_prompt_history(current_user: dict = Depends(self.get_current_user)):
+            """
+            Get full prompt history for the current user with prompt text.
+            
+            Args:
+                current_user: Authenticated user information from JWT token
+                
+            Returns:
+                dict: List of prompts with their text, session_id, and created_at timestamp
+            """
+            try:
+                username = current_user.get("sub")
+                if not username:
+                    raise HTTPException(status_code=400, detail="Invalid user information")
+                
+                # Get user's prompt_ids from users collection
+                prompts_ids = await self.auth_manager.get_user_prompts(username)
+                
+                # Fetch prompt details from prompts collection
+                prompt_history = []
+                for prompt_id in prompts_ids:
+                    prompt_doc = self.prompts_collection.find_one(
+                        {"prompt_id": prompt_id},
+                        {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "_id": 0}
+                    )
+                    if prompt_doc:
+                        # Convert datetime to ISO string if it exists
+                        created_at = prompt_doc.get("created_at")
+                        if created_at and hasattr(created_at, 'isoformat'):
+                            created_at = created_at.isoformat()
+                        elif created_at:
+                            created_at = str(created_at)
+                        
+                        prompt_history.append({
+                            "prompt_id": prompt_doc.get("prompt_id"),
+                            "session_id": prompt_doc.get("session_id"),
+                            "prompt": prompt_doc.get("prompt", ""),
+                            "created_at": created_at
+                        })
+                
+                # Sort by created_at descending (most recent first)
+                prompt_history.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+                
+                return {
+                    "username": username,
+                    "prompts": prompt_history,
+                    "total_prompts": len(prompt_history)
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error retrieving prompt history: {str(e)}")
     
     
     async def _verify_session_ownership(self, session_id: str, current_user: dict):

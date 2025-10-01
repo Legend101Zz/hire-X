@@ -125,7 +125,8 @@ export default function ResultsPage() {
   useEffect(() => {
     if (!sessionId || !token) return;
 
-    const ws = new WebSocket(`ws://localhost:8000/session/${sessionId}?token=${encodeURIComponent(token)}`);
+    const wsBaseUrl = process.env.NEXT_PUBLIC_WS_BASE_URL || 'ws://localhost:8000';
+    const ws = new WebSocket(`${wsBaseUrl}/session/${sessionId}?token=${encodeURIComponent(token)}`);
     
     ws.onopen = () => {
       console.log('🔌 WebSocket connected for results page, session:', sessionId);

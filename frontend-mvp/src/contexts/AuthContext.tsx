@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 
 interface AuthContextType {
   isAuthenticated: boolean;
-  user: { username: string } | null;
+  user: { username: string; email?: string } | null;
   token: string | null;
   login: (username: string, password: string) => Promise<boolean>;
   loginWithGoogle: () => Promise<boolean>;
@@ -24,7 +24,7 @@ export const useAuth = () => {
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [user, setUser] = useState<{ username: string } | null>(null);
+  const [user, setUser] = useState<{ username: string; email?: string } | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -46,7 +46,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     try {
       // Call backend login endpoint
-      const response = await fetch('http://localhost:8000/login', {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiBaseUrl}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -64,7 +65,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = await response.json();
       
       // Store user data and token
-      const userData = { username: data.username };
+      const userData = { username: data.username, email: data.email };
       setUser(userData);
       setToken(data.access_token);
       setIsAuthenticated(true);

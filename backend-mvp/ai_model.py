@@ -2,6 +2,7 @@
 AI model operations and prompt parsing logic.
 """
 import json
+import os
 import requests
 from typing import List, Dict, Any, Protocol
 
@@ -15,12 +16,15 @@ class AIModel(Protocol):
 class Model:
     """AI model implementation using OpenRouter API."""
     
-    def __init__(self, model_name: str = "openai/gpt-5-nano"):
+    def __init__(self, model_name: str = None):
         self.url = "https://openrouter.ai/api/v1/chat/completions"
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY environment variable is required")
         self.headers = {
-            "Authorization": "Bearer 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",
+            "Authorization": f"Bearer {api_key}",
         }
-        self.model_name = model_name
+        self.model_name = model_name or os.getenv("AI_MODEL_NAME", "openai/gpt-4o-mini")
 
     def extract(self, prompt: str) -> Dict[str, Any]:
         """

@@ -2,6 +2,7 @@
 Redis connection and session management.
 """
 import json
+import os
 import asyncio
 from typing import Dict, Any, Optional, Callable
 import redis
@@ -9,15 +10,20 @@ import redis.asyncio as aioredis
 
 
 class RedisManager:
-    def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0):
+    def __init__(self, host: str = None, port: int = None, db: int = None):
         """
         Initialize Redis connection manager.
         
         Args:
-            host: Redis server host
-            port: Redis server port
-            db: Redis database number
+            host: Redis server host (uses REDIS_HOST env var if not provided)
+            port: Redis server port (uses REDIS_PORT env var if not provided)
+            db: Redis database number (uses REDIS_DB env var if not provided)
         """
+        # Use environment variables with fallbacks
+        host = host or os.getenv("REDIS_HOST", "localhost")
+        port = port or int(os.getenv("REDIS_PORT", "6379"))
+        db = db or int(os.getenv("REDIS_DB", "0"))
+        
         try:
             self.redis_client = redis.Redis(host=host, port=port, db=db, decode_responses=True)
             self.async_redis_client = aioredis.from_url(f"redis://{host}:{port}/{db}", decode_responses=True)

@@ -46,9 +46,12 @@ Stores user account information:
   "email": "test@example.com",
   "hashed_password": "$2b$12$...",
   "created_at": "2024-01-01T00:00:00.000Z",
-  "last_login": "2024-01-01T12:00:00.000Z"
+  "last_login": "2024-01-01T12:00:00.000Z",
+  "prompts": ["prompt-uuid-1", "prompt-uuid-2"]  // Array of prompt_ids created by user
 }
 ```
+
+**Note**: The `prompts` field is automatically populated when users create prompts and get results. It stores references to all prompts created by the user.
 
 ### `incident-logs` Collection
 Stores security incidents:

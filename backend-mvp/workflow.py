@@ -5,11 +5,12 @@ import json
 import os
 import re
 import asyncio
+import datetime
+import uuid
 from typing import Dict, Any, List, Optional
 from redis_manager import RedisManager
 from ai_model import HiringPromptParser, Model
 from pymongo import MongoClient
-import re
 
 
 class Workflow:
@@ -23,10 +24,175 @@ class Workflow:
         self.redis_manager = redis_manager
         self.model = Model()
         self.hiring_parser = HiringPromptParser(self.model)
-        client = MongoClient("mongodb://localhost:27017")
-        self.db = client["mydatabase"]
+        
+        # Profiles database connection (use env vars with fallback)
+        profiles_db_url = os.getenv("PROFILES_DB_URL", "mongodb://localhost:27017")
+        profiles_db_name = os.getenv("PROFILES_DB_NAME", "mydatabase")
+        client = MongoClient(profiles_db_url)
+        self.db = client[profiles_db_name]
         self.profiles = self.db["profiles"]
         
+        # Neural Leap database for user logs and prompts
+        neuraleap_db_url = os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
+        neuraleap_db_name = os.getenv("DATABASE_NAME", "neuraleap")
+        self.neuraleap_client = MongoClient(neuraleap_db_url)
+        self.neuraleap_db = self.neuraleap_client[neuraleap_db_name]
+        self.user_logs = self.neuraleap_db["user_logs"]
+        self.prompts_collection = self.neuraleap_db["prompts"]
+        self.users_collection = self.neuraleap_db["users"]
+        
+        # Create indexes for prompts collection
+        self._create_prompts_indexes()
+    
+    def _create_prompts_indexes(self):
+        """Create necessary database indexes for prompts collection."""
+        try:
+            self.prompts_collection.create_index("session_id", unique=True)
+            self.prompts_collection.create_index("prompt_id", unique=True)
+            self.prompts_collection.create_index([("username", 1), ("created_at", -1)])
+            print("✅ Created indexes for prompts collection")
+        except Exception as e:
+            print(f"Warning: Could not create prompts indexes: {e}")
+    
+    async def _add_prompt_to_user_profile(self, username: str, prompt_id: str) -> bool:
+        """
+        Add a prompt_id to user's prompts array in their profile.
+        
+        Args:
+            username: Username of the user
+            prompt_id: Unique prompt identifier to add
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Use $addToSet to avoid duplicates and ensure prompts array exists
+            result = self.users_collection.update_one(
+                {"username": username},
+                {
+                    "$addToSet": {"prompts": prompt_id},
+                    "$setOnInsert": {"prompts": []}  # Initialize if doesn't exist
+                },
+                upsert=False  # Don't create user if doesn't exist
+            )
+            
+            if result.matched_count > 0:
+                print(f"  ✅ Added prompt_id {prompt_id} to user {username}'s profile")
+                return True
+            else:
+                print(f"  ⚠️  User {username} not found when trying to add prompt_id")
+                return False
+                
+        except Exception as e:
+            print(f"  ❌ Error adding prompt_id to user profile: {e}")
+            return False
+    
+    async def log_user_session_data(self, session_id: str) -> bool:
+        """
+        Log complete session data to Neural Leap database user_logs collection.
+        
+        Args:
+            session_id: Unique session identifier
+            
+        Returns:
+            bool: True if logged successfully, False otherwise
+        """
+        try:
+            print(f"📝 Logging session data to Neural Leap database for session: {session_id}")
+            
+            # Get user context
+            user_context = self._get_data(session_id, "user_context")
+            if not user_context:
+                print(f"❌ No user context found for session {session_id}")
+                return False
+            
+            username = user_context.get("username")
+            if not username:
+                print(f"❌ No username found in user context for session {session_id}")
+                return False
+            
+            # Collect all session data from Redis
+            session_data = {
+                "session_id": session_id,
+                "username": username,
+                "user_id": user_context.get("user_id", username),
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "session_created_at": user_context.get("created_at"),
+                "data": {}
+            }
+            
+            # Get all available data keys for this session
+            redis_keys = self.redis_manager.redis_client.keys(f"{session_id}:*")
+            
+            for key in redis_keys:
+                # Extract action tag from key (format: session_id:action_tag)
+                action_tag = key.split(":", 1)[1] if ":" in key else key
+                
+                # Skip user_context as it's already included
+                if action_tag == "user_context":
+                    continue
+                
+                # Get data for this action tag
+                data = self._get_data(session_id, action_tag)
+                if data is not None:
+                    session_data["data"][action_tag] = data
+            
+            # Store in Neural Leap database
+            self.user_logs.insert_one(session_data)
+            
+            print(f"✅ Successfully logged session data for user {username}, session {session_id}")
+            print(f"📊 Logged {len(session_data['data'])} data entries")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error logging session data for session {session_id}: {e}")
+            return False
+    
+    async def log_followup_interaction(self, session_id: str, question: str, answer: str) -> bool:
+        """
+        Log individual follow-up question interaction to Neural Leap database.
+        
+        Args:
+            session_id: Unique session identifier
+            question: The follow-up question
+            answer: User's answer
+            
+        Returns:
+            bool: True if logged successfully, False otherwise
+        """
+        try:
+            # Get user context
+            user_context = self._get_data(session_id, "user_context")
+            if not user_context:
+                return False
+            
+            username = user_context.get("username")
+            if not username:
+                return False
+            
+            # Create interaction log entry
+            interaction_log = {
+                "session_id": session_id,
+                "username": username,
+                "user_id": user_context.get("user_id", username),
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "interaction_type": "followup_question",
+                "question": question,
+                "answer": answer,
+                "session_created_at": user_context.get("created_at")
+            }
+            
+            # Store in Neural Leap database
+            self.user_logs.insert_one(interaction_log)
+            
+            print(f"📝 Logged follow-up interaction for user {username}, session {session_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error logging follow-up interaction for session {session_id}: {e}")
+            return False
+    
     
     async def store_followup_answers(self, session_id: str, answers: List[str]) -> bool:
         """
@@ -117,6 +283,9 @@ class Workflow:
                 "progress": 100
             })
             await asyncio.sleep(0.5)  # Small delay for progressive display
+            
+            # Log complete session data to Neural Leap database
+            await self.log_user_session_data(session_id)
             
             print(f"✅ Workflow completed for session: {session_id}")
             print(f"📊 Served {len(scored_profiles)} scored and ranked profiles")
@@ -686,7 +855,7 @@ class Workflow:
     
     async def _serve_scored_profiles(self, session_id: str, scored_profiles: List[Dict[str, Any]], analysis_result: Dict[str, Any]) -> None:
         """
-        Serve scored and ranked profiles to the user via websocket.
+        Serve scored and ranked profiles to the user via websocket and store in MongoDB.
         
         Args:
             session_id: Unique session identifier
@@ -741,7 +910,43 @@ class Workflow:
                 }
             }
             
-            # Store scored results in Redis (this will trigger websocket broadcast)
+            # Get user context and prompt from Redis
+            user_context = self._get_data(session_id, "user_context")
+            prompt = self.redis_manager.get_prompt(session_id)
+            
+            # Generate unique prompt_id
+            prompt_id = str(uuid.uuid4())
+            
+            # Create MongoDB document with all required fields
+            mongo_document = {
+                "prompt_id": prompt_id,
+                "session_id": session_id,
+                "username": user_context.get("username", "unknown") if user_context else "unknown",
+                "prompt": prompt or "",
+                "profiles": scored_profiles,
+                "summary": summary,
+                "analysis_metadata": scored_results["analysis_metadata"],
+                "created_at": datetime.datetime.utcnow(),
+                "total_profiles_found": len(scored_profiles),
+                "profiles_returned": len(scored_profiles)
+            }
+            
+            # Store in MongoDB (upsert in case of retry)
+            self.prompts_collection.update_one(
+                {"session_id": session_id},
+                {"$set": mongo_document},
+                upsert=True
+            )
+            print(f"  💾 Stored results in MongoDB for session {session_id} with prompt_id {prompt_id}")
+            
+            # Add prompt_id to user's profile
+            username = user_context.get("username") if user_context else None
+            if username:
+                await self._add_prompt_to_user_profile(username, prompt_id)
+            else:
+                print(f"  ⚠️  Could not add prompt_id to user profile: username not found")
+            
+            # Also store in Redis for WebSocket broadcast (temporary, for real-time updates)
             await self._store_data(session_id, "final_results", scored_results)
             
             print(f"  ✅ Served {len(scored_profiles)} scored profiles for session {session_id}")
