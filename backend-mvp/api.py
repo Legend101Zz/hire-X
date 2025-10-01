@@ -555,15 +555,19 @@ class API:
         ):
             """
             Get contact information (phone or email) for a single candidate.
-            Checks cache first, then calls Hatch API if needed.
+            
+            Process:
+            1. Gets profile from mydatabase/profiles using the profile_id (_id)
+            2. Checks neuraleap/candidates for cached contact info
+            3. If cache miss, calls Hatch API and saves result
+            
+            Args:
+                profile_id: MongoDB _id from mydatabase/profiles
+                session_id: Optional session ID for Redis caching
             """
             try:
-                result = await self.hatch_service.get_contact_info(
-                    profile_id=request.profile_id,
-                    linkedin_url=request.linkedin_url,
-                    first_name=request.first_name,
-                    last_name=request.last_name,
-                    domain=request.company_domain,
+                result = await self.hatch_service.get_contact_info_by_profile_id(
+                    profile_mongo_id=request.profile_id,
                     session_id=request.session_id
                 )
                 return result
@@ -577,11 +581,19 @@ class API:
         ):
             """
             Get contact information for multiple candidates (max 5).
-            Checks cache first, then calls Hatch API if needed.
+            
+            Process:
+            1. For each profile_id, gets profile from mydatabase/profiles
+            2. Checks neuraleap/candidates for cached contact info
+            3. If cache miss, calls Hatch API and saves result
+            
+            Args:
+                profile_ids: List of MongoDB _ids from mydatabase/profiles (max 5)
+                session_id: Optional session ID for Redis caching
             """
             try:
                 results = await self.hatch_service.get_bulk_contact_info(
-                    profiles=[p.dict() for p in request.profiles],
+                    profile_ids=request.profile_ids,
                     session_id=request.session_id
                 )
                 return {
@@ -593,6 +605,7 @@ class API:
                 raise HTTPException(status_code=400, detail=str(e))
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
+    
     
     async def _verify_session_ownership(self, session_id: str, current_user: dict):
         """
