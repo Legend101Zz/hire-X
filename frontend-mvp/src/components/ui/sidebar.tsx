@@ -51,11 +51,11 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
   return (
     <>
       {/* Backdrop */}
-      <div 
+      <div
         className="fixed inset-0 bg-transparent z-50"
         onClick={onClose}
       />
-      
+
       {/* Popup */}
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
@@ -86,13 +86,12 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
             {/* Contact Cards */}
             <div className="space-y-4">
               {contacts.map((contact) => (
-                <div 
+                <div
                   key={contact.name}
-                  className={`p-4 rounded-lg border-2 transition-all hover:shadow-md ${
-                    contact.primary 
-                      ? 'border-violet-200 bg-violet-50' 
-                      : 'border-gray-200 bg-gray-50'
-                  }`}
+                  className={`p-4 rounded-lg border-2 transition-all hover:shadow-md ${contact.primary
+                    ? 'border-violet-200 bg-violet-50'
+                    : 'border-gray-200 bg-gray-50'
+                    }`}
                 >
                   <div className="flex items-start justify-between mb-3">
                     <div>
@@ -105,10 +104,10 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
                       </span>
                     )}
                   </div>
-                  
+
                   <div className="space-y-2">
                     {/* Phone */}
-                    <a 
+                    <a
                       href={`tel:${contact.phone}`}
                       className="flex items-center text-sm text-gray-700 hover:text-violet-600 transition-colors"
                     >
@@ -117,9 +116,9 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
                       </svg>
                       {contact.phone}
                     </a>
-                    
+
                     {/* Email */}
-                    <a 
+                    <a
                       href={`mailto:${contact.email}`}
                       className="flex items-center text-sm text-gray-700 hover:text-violet-600 transition-colors"
                     >
@@ -186,7 +185,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
   useEffect(() => {
     const loadPromptHistory = async () => {
       if (!user) return;
-      
+
       setIsLoadingHistory(true);
       try {
         const token = localStorage.getItem('token');
@@ -206,7 +205,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
           console.log('Loaded prompts:', prompts);
           console.log('First prompt:', prompts[0]);
           setPromptHistory(prompts);
-          
+
           // Set the most recent session ID for the Profiles link
           if (prompts.length > 0 && prompts[0].session_id) {
             console.log('Setting most recent session ID to:', prompts[0].session_id);
@@ -235,7 +234,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
   const navigationItems = [
     {
       name: 'Profiles',
-      href: mostRecentSessionId ? `/results/${mostRecentSessionId}` : '/',
+      href: mostRecentSessionId ? `/results/${mostRecentSessionId}` : '/profiles',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
@@ -259,7 +258,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     },
     {
       name: 'Contacts',
-      href: '/',
+      href: '/contacts',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
@@ -271,7 +270,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     },
     {
       name: 'Sequences',
-      href: '#',
+      href: '/sequences',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm0 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V8zm0 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2z" clipRule="evenodd" />
@@ -283,7 +282,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     },
     {
       name: 'Usage',
-      href: '#',
+      href: '/usage',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
@@ -332,11 +331,10 @@ export default function Sidebar({ className = '' }: SidebarProps) {
             <Link
               key={item.name}
               href={item.href}
-              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                item.isActive
-                  ? 'bg-violet-50 text-violet-700'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-              }`}
+              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${item.isActive
+                ? 'bg-violet-50 text-violet-700'
+                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                }`}
             >
               <div className="flex items-center">
                 <span className={`mr-3 ${item.isActive ? 'text-violet-600' : 'text-gray-400'}`}>
@@ -401,7 +399,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
             </svg>
             Settings
           </Link>
-          <button 
+          <button
             onClick={() => setIsSupportPopupOpen(true)}
             className="flex items-center text-gray-600 hover:text-gray-900 transition-colors"
           >
@@ -429,9 +427,9 @@ export default function Sidebar({ className = '' }: SidebarProps) {
       </div>
 
       {/* Support Popup */}
-      <SupportPopup 
-        isOpen={isSupportPopupOpen} 
-        onClose={() => setIsSupportPopupOpen(false)} 
+      <SupportPopup
+        isOpen={isSupportPopupOpen}
+        onClose={() => setIsSupportPopupOpen(false)}
       />
     </div>
   );

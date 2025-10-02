@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ChevronDown, Plus, Mic, ArrowUp, CpuIcon, Bot, User, Loader2, ExternalLink, LogOut } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiPost, handleApiResponse } from '@/utils/api';
+import Header from './header';
 
 interface Message {
   id: string;
@@ -30,50 +31,46 @@ interface FollowupQuestionComponentProps {
   isCurrentQuestion?: boolean;
 }
 
-const FollowupQuestionComponent: React.FC<FollowupQuestionComponentProps> = ({ 
-  question, 
+const FollowupQuestionComponent: React.FC<FollowupQuestionComponentProps> = ({
+  question,
   isCurrentQuestion = false
 }) => {
   return (
-    <div className={`rounded-xl p-4 transition-all duration-200 ${
-      isCurrentQuestion && !question.isAnswered
-        ? 'bg-violet-100 border-2 border-violet-300 shadow-md'
-        : question.isAnswered
-          ? 'bg-green-50 border border-green-200'
-          : 'bg-violet-50 border border-violet-200'
-    }`}>
+    <div className={`rounded-xl p-4 transition-all duration-200 ${isCurrentQuestion && !question.isAnswered
+      ? 'bg-violet-100 border-2 border-violet-300 shadow-md'
+      : question.isAnswered
+        ? 'bg-green-50 border border-green-200'
+        : 'bg-violet-50 border border-violet-200'
+      }`}>
       <div className="flex items-start gap-3">
-        <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${
-          isCurrentQuestion && !question.isAnswered
-            ? 'bg-violet-300'
-            : question.isAnswered
-              ? 'bg-green-200'
-              : 'bg-violet-200'
-        }`}>
-          <span className={`text-xs font-medium ${
-            isCurrentQuestion && !question.isAnswered
-              ? 'text-violet-800'
-              : question.isAnswered
-                ? 'text-green-700'
-                : 'text-violet-700'
+        <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isCurrentQuestion && !question.isAnswered
+          ? 'bg-violet-300'
+          : question.isAnswered
+            ? 'bg-green-200'
+            : 'bg-violet-200'
           }`}>
+          <span className={`text-xs font-medium ${isCurrentQuestion && !question.isAnswered
+            ? 'text-violet-800'
+            : question.isAnswered
+              ? 'text-green-700'
+              : 'text-violet-700'
+            }`}>
             {question.isAnswered ? '✓' : '?'}
           </span>
         </div>
         <div className="flex-1">
-          <p className={`text-sm font-medium mb-1 ${
-            isCurrentQuestion && !question.isAnswered
-              ? 'text-violet-900'
-              : question.isAnswered
-                ? 'text-green-800'
-                : 'text-violet-800'
-          }`}>
+          <p className={`text-sm font-medium mb-1 ${isCurrentQuestion && !question.isAnswered
+            ? 'text-violet-900'
+            : question.isAnswered
+              ? 'text-green-800'
+              : 'text-violet-800'
+            }`}>
             {isCurrentQuestion && !question.isAnswered ? 'Current Question:' : 'Question:'}
           </p>
           <p className="text-sm text-gray-700 leading-relaxed">{question.question}</p>
         </div>
       </div>
-      
+
       {question.isAnswered && (
         <div className="mt-3 pt-3 border-t border-green-200">
           <div className="bg-white border border-green-200 rounded-lg p-3">
@@ -128,7 +125,7 @@ const PromptPage = () => {
         setDisplayedText(prev => prev + heroText[currentIndex]);
         setCurrentIndex(prev => prev + 1);
       }, 50); // Adjust speed here (50ms per character)
-      
+
       return () => clearTimeout(timeout);
     }
   }, [currentIndex, heroText, isSubmitted]);
@@ -175,7 +172,7 @@ const PromptPage = () => {
 
   // Function to update a message (useful for typing indicators)
   const updateMessage = (id: string, updates: Partial<Message>) => {
-    setMessages(prev => prev.map(msg => 
+    setMessages(prev => prev.map(msg =>
       msg.id === id ? { ...msg, ...updates } : msg
     ));
   };
@@ -214,7 +211,7 @@ const PromptPage = () => {
         question: question,
         answer: answer
       };
-      
+
       console.log('📤 Sending answer via WebSocket:', message);
       websocket.send(JSON.stringify(message));
     } else {
@@ -229,18 +226,18 @@ const PromptPage = () => {
     // Find the current message and question before updating
     const currentMessage = messages.find(m => m.id === messageId);
     const currentQuestion = currentMessage?.questions?.find(q => q.id === questionId);
-    
+
     if (!currentQuestion) return null;
 
     // Update the message to mark question as answered
     setMessages(prev => prev.map(msg => {
       if (msg.id === messageId && msg.questions) {
-        const updatedQuestions = msg.questions.map(q => 
-          q.id === questionId 
+        const updatedQuestions = msg.questions.map(q =>
+          q.id === questionId
             ? { ...q, answer: answer, isAnswered: true }
             : q
         );
-        
+
         return {
           ...msg,
           questions: updatedQuestions
@@ -251,22 +248,22 @@ const PromptPage = () => {
 
     // Send answer via WebSocket
     sendAnswer(currentQuestion.question, answer);
-    
+
     // Add user's answer as a separate message
     addMessage('user', answer);
 
     // Find the next unanswered question from the updated state
     const updatedMessage = currentMessage && currentMessage.questions ? {
       ...currentMessage,
-      questions: currentMessage.questions.map(q => 
-        q.id === questionId 
+      questions: currentMessage.questions.map(q =>
+        q.id === questionId
           ? { ...q, answer: answer, isAnswered: true }
           : q
       )
     } : null;
 
     const unansweredQuestions = updatedMessage?.questions?.filter(q => !q.isAnswered);
-    
+
     // Return information about the next question
     return {
       hasMoreQuestions: unansweredQuestions && unansweredQuestions.length > 0,
@@ -283,7 +280,7 @@ const PromptPage = () => {
   const handleFinalResults = () => {
     console.log('🎉 Final results received, current sessionId:', sessionId);
     addMessage('assistant', 'Results are ready! Click the button below to view your curated candidate list.');
-    
+
     // Add a results button message
     const resultsButtonMessage: Message = {
       id: `results-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -292,24 +289,24 @@ const PromptPage = () => {
       timestamp: new Date(),
       sessionId: sessionId || undefined
     };
-    
+
     console.log('🔘 Creating results button with sessionId:', resultsButtonMessage.sessionId);
     setMessages(prev => [...prev, resultsButtonMessage]);
-    
+
     setCurrentStep(5); // Move to "Results" step
   };
 
   const handleProgressUpdate = (progressData: { step: string; message: string; progress?: number }) => {
     console.log('📊 Processing progress update:', progressData);
-    
+
     // Extract progress information
     const { step, message, progress } = progressData;
-    
+
     // Add progress message to chat (only if message exists and is meaningful)
     if (message && message.trim()) {
       addMessage('assistant', message);
     }
-    
+
     // Update current step based on progress step
     switch (step) {
       case 'analyzing_prompt':
@@ -342,7 +339,7 @@ const PromptPage = () => {
       default:
         console.log('🤷 Unknown progress step:', step);
     }
-    
+
     // Log progress for debugging
     console.log(`📊 Progress: ${progress}% - ${step} - ${message}`);
   };
@@ -350,7 +347,7 @@ const PromptPage = () => {
   const handleFollowupQuestions = (questionsData: unknown) => {
     // Handle different data formats from backend
     let questions: string[] = [];
-    
+
     if (Array.isArray(questionsData)) {
       // If it's already an array of questions
       questions = questionsData.map(q => String(q));
@@ -402,7 +399,7 @@ const PromptPage = () => {
 
     setMessages(prev => [...prev, followupMessage]);
     setCurrentStep(3); // Move to "Follow up questions" step
-    
+
     // Set the first question as the current question to be answered
     if (followupQuestions.length > 0) {
       setCurrentFollowupQuestion({
@@ -419,10 +416,10 @@ const PromptPage = () => {
       if (!token) {
         throw new Error('No authentication token available for WebSocket connection');
       }
-      
+
       const wsBaseUrl = process.env.NEXT_PUBLIC_WS_BASE_URL || 'ws://localhost:8000';
       const ws = new WebSocket(`${wsBaseUrl}/session/${sessionId}?token=${encodeURIComponent(token)}`);
-      
+
       ws.onopen = () => {
         console.log('🔌 WebSocket connected for session:', sessionId);
         setWebsocket(ws);
@@ -430,11 +427,11 @@ const PromptPage = () => {
 
       ws.onmessage = (event) => {
         console.log('📨 WebSocket message received:', event.data);
-        
+
         try {
           const messageData = JSON.parse(event.data);
           console.log('📨 Parsed WebSocket message:', messageData);
-          
+
           // Handle different action types
           switch (messageData.action) {
             case 'prompt_analysis':
@@ -501,16 +498,16 @@ const PromptPage = () => {
   const handleSubmit = async () => {
     if (inputText.trim()) {
       const prompt = inputText.trim();
-      
+
       // Check if we're answering a follow-up question
       if (currentFollowupQuestion) {
         // Handle follow-up question answer and get next question info
         const result = handleAnswerQuestion(
-          currentFollowupQuestion.messageId, 
-          currentFollowupQuestion.questionId, 
+          currentFollowupQuestion.messageId,
+          currentFollowupQuestion.questionId,
           prompt
         );
-        
+
         if (result) {
           if (result.hasMoreQuestions && result.nextQuestion) {
             // Set next unanswered question
@@ -520,42 +517,42 @@ const PromptPage = () => {
             setCurrentFollowupQuestion(null);
           }
         }
-        
+
         setInputText('');
         return;
       }
-      
+
       // Regular prompt submission
       // Add user message
       addMessage('user', prompt);
-      
+
       // Add typing indicator
       const indicatorId = addMessage('indicator', 'Processing your request...', true);
-      
+
       // Collapse the interface and advance to next step
       setIsSubmitted(true);
       setCurrentStep(2);
-      
+
       try {
         // Send POST request to backend
         console.log('📤 Sending prompt to backend:', prompt);
         const newSessionId = await sendPromptToBackend(prompt);
-        
+
         // Store session ID
         setSessionId(newSessionId);
         console.log('💾 Session ID stored:', newSessionId);
-        
+
         // Establish WebSocket connection
         connectWebSocket(newSessionId);
-        
+
       } catch (error) {
         console.error('❌ Error in handleSubmit:', error);
-        updateMessage(indicatorId, { 
+        updateMessage(indicatorId, {
           content: 'Error processing request. Please try again.',
-          isTyping: false 
+          isTyping: false
         });
       }
-      
+
       setInputText('');
     }
   };
@@ -625,11 +622,10 @@ const PromptPage = () => {
               }
             }}
             disabled={!hasSessionId && !sessionId}
-            className={`flex items-center gap-3 px-6 py-3 rounded-xl font-medium transition-all duration-200 shadow-lg transform hover:-translate-y-0.5 ${
-              hasSessionId || sessionId
-                ? 'bg-violet-500 hover:bg-violet-600 text-white hover:shadow-xl cursor-pointer'
-                : 'bg-gray-400 text-gray-200 cursor-not-allowed'
-            }`}
+            className={`flex items-center gap-3 px-6 py-3 rounded-xl font-medium transition-all duration-200 shadow-lg transform hover:-translate-y-0.5 ${hasSessionId || sessionId
+              ? 'bg-violet-500 hover:bg-violet-600 text-white hover:shadow-xl cursor-pointer'
+              : 'bg-gray-400 text-gray-200 cursor-not-allowed'
+              }`}
           >
             <ExternalLink className="w-5 h-5" />
             <span>{message.content}</span>
@@ -676,26 +672,23 @@ const PromptPage = () => {
       <div key={message.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'} py-3`}>
         <div className={`flex items-start gap-3 max-w-3xl ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
           {/* Avatar */}
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-            isUser ? 'bg-violet-500' : 'bg-gray-200'
-          }`}>
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isUser ? 'bg-violet-500' : 'bg-gray-200'
+            }`}>
             {isUser ? (
               <User className="w-4 h-4 text-white" />
             ) : (
               <Bot className="w-4 h-4 text-gray-600" />
             )}
           </div>
-          
+
           {/* Message content */}
-          <div className={`rounded-2xl px-4 py-3 ${
-            isUser 
-              ? 'bg-violet-500 text-white' 
-              : 'bg-white border border-gray-200 text-gray-800'
-          }`}>
-            <p className="text-sm leading-relaxed">{message.content}</p>
-            <p className={`text-xs mt-2 ${
-              isUser ? 'text-violet-100' : 'text-gray-500'
+          <div className={`rounded-2xl px-4 py-3 ${isUser
+            ? 'bg-violet-500 text-white'
+            : 'bg-white border border-gray-200 text-gray-800'
             }`}>
+            <p className="text-sm leading-relaxed">{message.content}</p>
+            <p className={`text-xs mt-2 ${isUser ? 'text-violet-100' : 'text-gray-500'
+              }`}>
               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </p>
           </div>
@@ -706,62 +699,37 @@ const PromptPage = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      {/* NeuralLeap Logo */}
-      <div className="fixed top-6 left-10 z-20">
-        <div className="flex items-center space-x-2">
-          <span className="text-3xl text-violet-600">neuraleap hire</span>
-        </div>
-      </div>
-
-      {/* User Menu */}
-      <div className="fixed top-6 right-10 z-20">
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2 bg-white/80 backdrop-blur-xl rounded-xl px-4 py-2 border border-white/20 shadow-lg">
-            <div className="w-8 h-8 bg-violet-500 rounded-full flex items-center justify-center">
-              <User className="w-4 h-4 text-white" />
-            </div>
-            <span className="text-sm font-medium text-gray-700">{user?.username}</span>
-          </div>
-          <button
-            onClick={logout}
-            className="w-10 h-10 bg-white/80 backdrop-blur-xl rounded-xl border border-white/20 shadow-lg flex items-center justify-center hover:bg-red-50 hover:border-red-200 transition-all duration-200 group"
-            title="Logout"
-          >
-            <LogOut className="w-4 h-4 text-gray-600 group-hover:text-red-600" />
-          </button>
-        </div>
-      </div>
-
+      {/* Header */}
+      <Header />
       {/* Progress Sidebar - Floating Glass Island */}
       <div className="fixed left-0 top-1/2 transform -translate-y-1/2 w-56 bg-white/20 backdrop-blur-xl border border-white/30 rounded-2xl p-4 shadow-xl z-10 transition-transform duration-300 ease-in-out hover:translate-x-6 -translate-x-48">
         <div className="space-y-4">
           <h2 className="text-base text-gray-800/90 mb-4">Progress</h2>
-          
+
           {/* Vertical Progress Line */}
           <div className="relative">
             <div className="absolute left-3 top-0 bottom-0 w-0.5 bg-gray-300/50"></div>
-            <div 
+            <div
               className="absolute left-3 top-0 w-0.5 bg-violet-500/80 transition-all duration-500 shadow-sm"
               style={{ height: `${((currentStep - 1) / (steps.length - 1)) * 100}%` }}
             ></div>
-            
+
             {/* Steps */}
             <div className="space-y-6">
               {steps.map((step, index) => {
                 const stepNumber = index + 1;
                 const isActive = currentStep === stepNumber;
                 const isCompleted = currentStep > stepNumber;
-                
+
                 return (
                   <div key={stepNumber} className="relative flex items-start">
                     {/* Step Circle */}
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium z-10 transition-all duration-300 backdrop-blur-sm ${
-                      isCompleted 
-                        ? 'bg-violet-500/90 text-white shadow-lg' 
-                        : isActive 
-                          ? 'bg-violet-500/90 text-white ring-4 ring-violet-100/50 shadow-lg' 
-                          : 'bg-gray-200/60 text-gray-600/80'
-                    }`}>
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium z-10 transition-all duration-300 backdrop-blur-sm ${isCompleted
+                      ? 'bg-violet-500/90 text-white shadow-lg'
+                      : isActive
+                        ? 'bg-violet-500/90 text-white ring-4 ring-violet-100/50 shadow-lg'
+                        : 'bg-gray-200/60 text-gray-600/80'
+                      }`}>
                       {isCompleted ? (
                         <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
@@ -770,12 +738,11 @@ const PromptPage = () => {
                         stepNumber
                       )}
                     </div>
-                    
+
                     {/* Step Text */}
                     <div className="ml-3 mt-0.5">
-                      <p className={`text-xs font-medium transition-colors ${
-                        isActive ? 'text-violet-600/90' : isCompleted ? 'text-gray-700/90' : 'text-gray-500/80'
-                      }`}>
+                      <p className={`text-xs font-medium transition-colors ${isActive ? 'text-violet-600/90' : isCompleted ? 'text-gray-700/90' : 'text-gray-500/80'
+                        }`}>
                         {step}
                       </p>
                     </div>
@@ -853,7 +820,7 @@ const PromptPage = () => {
                       <span className="text-gray-700 text-xs font-medium">{selectedModel}</span>
                       <CpuIcon className="w-4 h-4 text-gray-500" />
                     </button>
-                    
+
                     {showModelDropdown && (
                       <div className="absolute bottom-full right-0 mb-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
                         {modelOptions.map((option) => (
@@ -881,11 +848,10 @@ const PromptPage = () => {
                   <button
                     onClick={handleSubmit}
                     disabled={!inputText.trim()}
-                    className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
-                      inputText.trim()
-                        ? 'bg-violet-500 hover:bg-violet-600 text-white'
-                        : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                    }`}
+                    className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${inputText.trim()
+                      ? 'bg-violet-500 hover:bg-violet-600 text-white'
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                      }`}
                   >
                     <ArrowUp className="w-5 h-5" />
                   </button>
@@ -957,7 +923,7 @@ const PromptPage = () => {
                       onChange={(e) => setInputText(e.target.value)}
                       onKeyPress={handleKeyPress}
                       placeholder={
-                        currentFollowupQuestion 
+                        currentFollowupQuestion
                           ? `Type your answer here...`
                           : "Ask a follow-up question or refine your search..."
                       }
@@ -988,7 +954,7 @@ const PromptPage = () => {
                           <span className="text-gray-700 text-xs font-medium">{selectedModel}</span>
                           <ChevronDown className="w-4 h-4 text-gray-500" />
                         </button>
-                        
+
                         {showModelDropdown && (
                           <div className="absolute bottom-full right-0 mb-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
                             {modelOptions.map((option) => (
@@ -1016,11 +982,10 @@ const PromptPage = () => {
                       <button
                         onClick={handleSubmit}
                         disabled={!inputText.trim()}
-                        className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
-                          inputText.trim()
-                            ? 'bg-violet-500 hover:bg-violet-600 text-white'
-                            : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        }`}
+                        className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${inputText.trim()
+                          ? 'bg-violet-500 hover:bg-violet-600 text-white'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          }`}
                       >
                         <ArrowUp className="w-5 h-5" />
                       </button>
