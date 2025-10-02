@@ -1,0 +1,35 @@
+name: Deploy to EC2 on Dev Merge
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/hire-X/backend-mvp
+
+            echo "Stopping old process..."
+            pkill -f "python3 main.py" || true
+
+            echo "Activating virtual environment..."
+            source venv/bin/activate
+
+            echo "Installing requirements..."
+            pip3 install -r requirements.txt
+
+            echo "Starting new process..."
+            nohup python3 main.py > output.log 2>&1 &
