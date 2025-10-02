@@ -76,3 +76,36 @@ class HatchContactResponse(BaseModel):
     message: Optional[str] = None
     error: Optional[str] = None
     cached_at: Optional[str] = None
+    
+class PromptHistoryResponse(BaseModel):
+    """Response model for prompt history with pagination."""
+    prompts: List['PromptHistoryItem']
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+class PromptHistoryItem(BaseModel):
+    """Individual prompt history item."""
+    prompt_id: str
+    session_id: str
+    prompt: str
+    created_at: Optional[str] = None
+    status: Optional[str] = "completed"
+
+class PromptSearchResponse(BaseModel):
+    """Response model for prompt search."""
+    results: List['PromptSearchItem']
+    total: int
+    query: str
+
+class PromptSearchItem(BaseModel):
+    """Individual search result with highlighted text."""
+    prompt_id: str
+    session_id: str
+    prompt: str
+    created_at: Optional[str] = None
+    highlight: Optional[str] = None  # Text with search term markers
+    
+PromptHistoryResponse.update_forward_refs()
+PromptSearchResponse.update_forward_refs()

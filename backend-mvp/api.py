@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import uuid
+from typing import List, Optional
 
 from ai_model import AIModel, HiringPromptParser
 from auth import AuthManager
@@ -15,7 +16,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from hatch_service import HatchService
 from models import (HatchBulkContactRequest, HatchContactRequest,
                     HatchContactResponse, LoginRequest, LoginResponse,
-                    PromptRequest, SessionResponse)
+                    PromptHistoryItem, PromptHistoryResponse, PromptRequest,
+                    PromptResponse, PromptSearchItem, PromptSearchResponse,
+                    SessionResponse)
 from pymongo import MongoClient
 from redis_manager import RedisManager
 from websocket_manager import WebSocketManager
@@ -493,16 +496,24 @@ class API:
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error retrieving user prompts: {str(e)}")
         
-        @self.app.get("/user/prompt-history")
-        async def get_user_prompt_history(current_user: dict = Depends(self.get_current_user)):
+        @self.app.get("/user/prompt-history", response_model=PromptHistoryResponse)
+        async def get_user_prompt_history(
+            limit: int = Query(5, ge=1, le=20, description="Number of prompts to return"),
+            offset: int = Query(0, ge=0, description="Offset for pagination"),
+            search: Optional[str] = Query(None, description="Search query"),
+            current_user: dict = Depends(self.get_current_user)
+        ):
             """
-            Get full prompt history for the current user with prompt text.
+            Get full prompt history for the current user with pagination and optional search.
             
             Args:
+                limit: Number of prompts to return (1-20, default 5)
+                offset: Pagination offset (default 0)
+                search: Optional search query to filter prompts
                 current_user: Authenticated user information from JWT token
                 
             Returns:
-                dict: List of prompts with their text, session_id, and created_at timestamp
+                PromptHistoryResponse: List of prompts with pagination info
             """
             try:
                 username = current_user.get("sub")
@@ -510,43 +521,143 @@ class API:
                     raise HTTPException(status_code=400, detail="Invalid user information")
                 
                 # Get user's prompt_ids from users collection
-                prompts_ids = await self.auth_manager.get_user_prompts(username)
+                prompt_ids = await self.auth_manager.get_user_prompts(username)
                 
-                # Fetch prompt details from prompts collection
-                prompt_history = []
-                for prompt_id in prompts_ids:
-                    prompt_doc = self.prompts_collection.find_one(
-                        {"prompt_id": prompt_id},
-                        {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "_id": 0}
+                if not prompt_ids:
+                    return PromptHistoryResponse(
+                        prompts=[],
+                        total=0,
+                        limit=limit,
+                        offset=offset,
+                        has_more=False
                     )
-                    if prompt_doc:
-                        # Convert datetime to ISO string if it exists
-                        created_at = prompt_doc.get("created_at")
-                        if created_at and hasattr(created_at, 'isoformat'):
-                            created_at = created_at.isoformat()
-                        elif created_at:
-                            created_at = str(created_at)
-                        
-                        prompt_history.append({
-                            "prompt_id": prompt_doc.get("prompt_id"),
-                            "session_id": prompt_doc.get("session_id"),
-                            "prompt": prompt_doc.get("prompt", ""),
-                            "created_at": created_at
-                        })
                 
-                # Sort by created_at descending (most recent first)
-                prompt_history.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+                # Build query for prompts collection
+                query = {"session_id": {"$in": prompt_ids}}
                 
-                return {
-                    "username": username,
-                    "prompts": prompt_history,
-                    "total_prompts": len(prompt_history)
-                }
+                # Add search filter if provided
+                if search:
+                    query["prompt"] = {"$regex": search, "$options": "i"}
+                
+                # Get total count
+                total = self.prompts_collection.count_documents(query)
+                
+                # Get paginated prompts, sorted by created_at descending
+                cursor = self.prompts_collection.find(
+                    query,
+                    {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "status": 1, "_id": 0}
+                ).sort("created_at", -1).skip(offset).limit(limit)
+                
+                prompts_list = list(cursor)
+                
+                # Format response
+                formatted_prompts = []
+                for prompt_doc in prompts_list:
+                    created_at = prompt_doc.get("created_at")
+                    if created_at and hasattr(created_at, 'isoformat'):
+                        created_at = created_at.isoformat()
+                    elif created_at:
+                        created_at = str(created_at)
+                    
+                    formatted_prompts.append(PromptHistoryItem(
+                        prompt_id=prompt_doc.get("prompt_id", prompt_doc.get("session_id")),
+                        session_id=prompt_doc.get("session_id"),
+                        prompt=prompt_doc.get("prompt", ""),
+                        created_at=created_at,
+                        status=prompt_doc.get("status", "completed")
+                    ))
+                
+                has_more = (offset + limit) < total
+                
+                return PromptHistoryResponse(
+                    prompts=formatted_prompts,
+                    total=total,
+                    limit=limit,
+                    offset=offset,
+                    has_more=has_more
+                )
                 
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error retrieving prompt history: {str(e)}")
+    
+        @self.app.get("/user/prompt-history/search", response_model=PromptSearchResponse)
+        async def search_prompt_history(
+            q: str = Query(..., min_length=1, description="Search query"),
+            limit: int = Query(10, ge=1, le=20, description="Max results to return"),
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Search through user's prompt history.
+            
+            Args:
+                q: Search query (required, min 1 character)
+                limit: Maximum number of results (1-20, default 10)
+                current_user: Authenticated user information from JWT token
+                
+            Returns:
+                PromptSearchResponse: Search results with highlighted text
+            """
+            try:
+                username = current_user.get("sub")
+                if not username:
+                    raise HTTPException(status_code=400, detail="Invalid user information")
+                
+                # Get user's prompt_ids
+                prompt_ids = await self.auth_manager.get_user_prompts(username)
+                
+                if not prompt_ids:
+                    return PromptSearchResponse(results=[], total=0, query=q)
+                
+                # Search in user's prompts
+                query = {
+                    "session_id": {"$in": prompt_ids},
+                    "prompt": {"$regex": q, "$options": "i"}
+                }
+                
+                total = self.prompts_collection.count_documents(query)
+                
+                cursor = self.prompts_collection.find(
+                    query,
+                    {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "_id": 0}
+                ).sort("created_at", -1).limit(limit)
+                
+                prompts_list = list(cursor)
+                
+                # Format results with highlighting
+                results = []
+                for prompt_doc in prompts_list:
+                    created_at = prompt_doc.get("created_at")
+                    if created_at and hasattr(created_at, 'isoformat'):
+                        created_at = created_at.isoformat()
+                    elif created_at:
+                        created_at = str(created_at)
+                    
+                    # Add highlighting markers for frontend
+                    prompt_text = prompt_doc.get("prompt", "")
+                    highlight = self._highlight_search_term(prompt_text, q)
+                    
+                    results.append(PromptSearchItem(
+                        prompt_id=prompt_doc.get("prompt_id", prompt_doc.get("session_id")),
+                        session_id=prompt_doc.get("session_id"),
+                        prompt=prompt_text,
+                        created_at=created_at,
+                        highlight=highlight
+                    ))
+                
+                return PromptSearchResponse(
+                    results=results,
+                    total=total,
+                    query=q
+                )
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error searching prompt history: {str(e)}")
+
+
     
         @self.app.post("/hatch/contact", response_model=HatchContactResponse)
         async def get_hatch_contact(
@@ -719,3 +830,23 @@ class API:
             
         except Exception as e:
             print(f"❌ Error checking and resuming workflow for session {session_id}: {e}")
+
+    def _highlight_search_term(self, text: str, search_term: str) -> str:
+        """
+        Add markers around search term for frontend highlighting.
+        
+        Args:
+            text: Original text
+            search_term: Term to highlight
+            
+        Returns:
+            str: Text with <<term>> markers for highlighting
+        """
+        if not search_term or not text:
+            return text
+        
+        import re
+
+        # Case-insensitive replacement with markers
+        pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+        return pattern.sub(lambda m: f"<<{m.group()}>>", text)
