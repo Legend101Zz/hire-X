@@ -1,12 +1,13 @@
 """
 Main entry point for the Neuraleap API server.
 """
-import uvicorn
-import redis
 import os
-from dotenv import load_dotenv
-from api import API
+
+import redis
+import uvicorn
 from ai_model import Model
+from api import API
+from dotenv import load_dotenv
 from redis_manager import RedisManager
 
 # Load environment variables from .env file
@@ -20,7 +21,7 @@ if __name__ == "__main__":
         model = Model()
         api = API(model, redis_manager)
 
-        port = int(os.getenv("PORT", 8080))
+        port = int(os.getenv("PORT", 8000))
 
         print("Starting API server...")
         print(f"API will be available at: http://localhost:{port}")
