@@ -5,8 +5,10 @@ import Link from 'next/link';
 import Sidebar from '@/components/ui/sidebar';
 import Header from '@/components/ui/header';
 import ProfileModal from '@/components/ui/profile-modal';
-import { SparklesIcon, TrashIcon, CheckIcon, MessageCircle, Phone, FileText, DollarSign, Users, ArrowRight } from 'lucide-react';
+import ContactFetchModal from '@/components/ui/contact-fetch-modal';
+import { SparklesIcon, TrashIcon, CheckIcon, MessageCircle, Phone, Users, Zap } from 'lucide-react';
 import { Profile } from '@/types/profile';
+import { fetchSingleContact, fetchBulkContacts, HatchContactResult } from '@/utils/hatchApi';
 
 export default function ShortlistPage() {
   const [shortlistedProfiles, setShortlistedProfiles] = useState<Profile[]>([]);
@@ -15,7 +17,12 @@ export default function ShortlistPage() {
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showBulkActions, setShowBulkActions] = useState(false);
-  const [isReachOutModalOpen, setIsReachOutModalOpen] = useState(false);
+
+  // Contact fetch modal states
+  const [isContactFetchModalOpen, setIsContactFetchModalOpen] = useState(false);
+  const [contactFetchCandidates, setContactFetchCandidates] = useState<Array<{ id: string; name: string; currentRole?: string }>>([]);
+  const [contactFetchResults, setContactFetchResults] = useState<HatchContactResult[]>([]);
+  const [fetchingContacts, setFetchingContacts] = useState(false);
 
   // Load shortlisted profiles from localStorage
   useEffect(() => {
@@ -36,7 +43,7 @@ export default function ShortlistPage() {
     loadShortlistedProfiles();
   }, []);
 
-  // Listen for storage changes (when profiles are shortlisted from other pages)
+  // Listen for storage changes
   useEffect(() => {
     const handleStorageChange = () => {
       const stored = localStorage.getItem('shortlistedProfiles');
@@ -55,6 +62,11 @@ export default function ShortlistPage() {
     if (newSelected.has(index)) {
       newSelected.delete(index);
     } else {
+      // Limit to 5 selections for bulk operations
+      if (newSelected.size >= 5) {
+        alert('You can only select up to 5 candidates for bulk operations');
+        return;
+      }
       newSelected.add(index);
     }
     setSelectedProfiles(newSelected);
@@ -66,8 +78,13 @@ export default function ShortlistPage() {
       setSelectedProfiles(new Set());
       setShowBulkActions(false);
     } else {
-      setSelectedProfiles(new Set(shortlistedProfiles.map((_, index) => index)));
+      // Select up to 5 profiles
+      const profilesToSelect = shortlistedProfiles.slice(0, 5);
+      setSelectedProfiles(new Set(profilesToSelect.map((_, index) => index)));
       setShowBulkActions(true);
+      if (shortlistedProfiles.length > 5) {
+        alert('Only the first 5 candidates have been selected (bulk operations are limited to 5)');
+      }
     }
   };
 
@@ -75,8 +92,7 @@ export default function ShortlistPage() {
     const updatedProfiles = shortlistedProfiles.filter((_, i) => i !== index);
     setShortlistedProfiles(updatedProfiles);
     localStorage.setItem('shortlistedProfiles', JSON.stringify(updatedProfiles));
-    
-    // Remove from selected if it was selected
+
     const newSelected = new Set(selectedProfiles);
     newSelected.delete(index);
     setSelectedProfiles(newSelected);
@@ -101,15 +117,81 @@ export default function ShortlistPage() {
     setSelectedProfile(null);
   };
 
+  // Handle single candidate contact fetch
+  const handleSingleContactFetch = async (profile: Profile, index: number) => {
+    const profileId = profile._id || profile.sessionId || `temp_${index}`;
+    const name = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unknown';
+    const currentRole = profile.experience?.find(exp => exp.current === 1)?.title || profile.title;
+
+    setContactFetchCandidates([{ id: profileId, name, currentRole }]);
+    setContactFetchResults([]);
+    setIsContactFetchModalOpen(true);
+  };
+
+  // Handle bulk contact fetch
+  const handleBulkContactFetch = () => {
+    const selectedProfilesList = Array.from(selectedProfiles)
+      .map(index => {
+        const profile = shortlistedProfiles[index];
+        const profileId = profile._id || profile.sessionId || `temp_${index}`;
+        const name = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unknown';
+        const currentRole = profile.experience?.find(exp => exp.current === 1)?.title || profile.title;
+
+        return { id: profileId, name, currentRole };
+      });
+
+    setContactFetchCandidates(selectedProfilesList);
+    setContactFetchResults([]);
+    setIsContactFetchModalOpen(true);
+  };
+
+  // Fetch contacts from API
+  const fetchContacts = async () => {
+    setFetchingContacts(true);
+    setContactFetchResults([]);
+
+    try {
+      // Get auth token
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Please log in to fetch contact information');
+        return;
+      }
+
+      // Generate session ID
+      const sessionId = `shortlist_${Date.now()}`;
+
+      if (contactFetchCandidates.length === 1) {
+        // Single contact fetch
+        const result = await fetchSingleContact(
+          contactFetchCandidates[0].id,
+          sessionId,
+          token
+        );
+        setContactFetchResults([result]);
+      } else {
+        // Bulk contact fetch
+        const profileIds = contactFetchCandidates.map(c => c.id);
+        const response = await fetchBulkContacts(profileIds, sessionId, token);
+        setContactFetchResults(response.results);
+      }
+    } catch (error) {
+      console.error('Error fetching contacts:', error);
+      alert(`Failed to fetch contacts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setFetchingContacts(false);
+    }
+  };
+
   const highlightKeywords = (text: string) => {
     const keywords = ['over two decades of experience', 'low-latency, high-capacity trading systems', 'distributed systems', 'Go', 'financial sector', 'financial services domain'];
-    
+
     let highlightedText = text;
     keywords.forEach(keyword => {
       const regex = new RegExp(`(${keyword})`, 'gi');
       highlightedText = highlightedText.replace(regex, '<span class="bg-yellow-200 font-medium">$1</span>');
     });
-    
+
     return highlightedText;
   };
 
@@ -146,36 +228,35 @@ export default function ShortlistPage() {
                   <label className="flex items-center">
                     <input
                       type="checkbox"
-                      checked={selectedProfiles.size === shortlistedProfiles.length}
+                      checked={selectedProfiles.size === Math.min(shortlistedProfiles.length, 5)}
                       onChange={selectAll}
                       className="w-4 h-4 text-violet-600 border-gray-300 rounded focus:ring-violet-500"
                     />
-                    <span className="ml-2 text-sm text-gray-600">Select All</span>
+                    <span className="ml-2 text-sm text-gray-600">
+                      Select {shortlistedProfiles.length > 5 ? 'First 5' : 'All'}
+                    </span>
                   </label>
                 )}
               </div>
-              
+
               <div className="flex items-center space-x-3">
-                {/* Initiate Reach Outs Button */}
-                {shortlistedProfiles.length > 0 && (
+                {/* Bulk Fetch Contacts Button */}
+                {showBulkActions && (
                   <button
-                    onClick={() => setIsReachOutModalOpen(true)}
-                    className="flex items-center px-4 py-2 bg-violet-600 text-white rounded-md hover:bg-violet-700 transition-colors font-medium"
+                    onClick={handleBulkContactFetch}
+                    className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium"
                   >
-                    <MessageCircle className="w-4 h-4 mr-2" />
-                    Initiate reach outs
+                    <Zap className="w-4 h-4 mr-2" />
+                    Fetch Contacts ({selectedProfiles.size})
                   </button>
                 )}
-                
-                {/* Bulk Actions */}
+
+                {/* Bulk Remove */}
                 {showBulkActions && (
                   <div className="flex items-center space-x-2">
-                    <span className="text-sm text-gray-600">
-                      {selectedProfiles.size} selected
-                    </span>
                     <button
                       onClick={removeSelectedFromShortlist}
-                      className="flex items-center px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors"
+                      className="flex items-center px-3 py-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors"
                     >
                       <TrashIcon className="w-4 h-4 mr-1" />
                       Remove Selected
@@ -195,7 +276,7 @@ export default function ShortlistPage() {
                 </div>
                 <h3 className="text-lg font-medium text-gray-900 mb-2">No shortlisted candidates</h3>
                 <p className="text-gray-600 mb-6">
-                  Start by searching for candidates and adding them to your shortlist. 
+                  Start by searching for candidates and adding them to your shortlist.
                   You can shortlist candidates by clicking the &quot;Shortlist&quot; button on their profile cards.
                 </p>
                 <Link
@@ -215,17 +296,15 @@ export default function ShortlistPage() {
                 const isSelected = selectedProfiles.has(index);
                 const currentRole = (profile.experience?.find(exp => exp.current === 1)?.title || profile.title || 'N/A').toString();
                 const education = (profile.education?.[0]?.major || profile.education?.[0]?.campus || 'N/A').toString();
-                const summary = profile.summary && profile.summary !== 'NA' ? profile.summary : 
-                  `${profile.first_name || ''} ${profile.last_name || ''}`.trim() + 
+                const summary = profile.summary && profile.summary !== 'NA' ? profile.summary :
+                  `${profile.first_name || ''} ${profile.last_name || ''}`.trim() +
                   `'s has missing description, so no summary available for the profile`;
 
                 return (
-                  <div 
-                    key={index} 
-                    className={`border rounded-lg p-6 hover:shadow-md transition-all cursor-pointer ${
-                      isSelected ? 'border-violet-300 bg-violet-50' : 'border-gray-200'
-                    }`}
-                    onClick={() => openProfileModal(profile)}
+                  <div
+                    key={index}
+                    className={`border rounded-lg p-6 hover:shadow-md transition-all ${isSelected ? 'border-violet-300 bg-violet-50' : 'border-gray-200'
+                      }`}
                   >
                     <div className="flex items-start space-x-4">
                       {/* Checkbox */}
@@ -243,9 +322,12 @@ export default function ShortlistPage() {
                       <div className="flex-1">
                         {/* Header */}
                         <div className="flex items-start justify-between mb-3">
-                          <div>
+                          <div className="flex-1">
                             <div className="flex items-center space-x-2 mb-1">
-                              <h3 className="text-lg font-semibold text-gray-900">
+                              <h3
+                                className="text-lg font-semibold text-gray-900 cursor-pointer hover:text-violet-600"
+                                onClick={() => openProfileModal(profile)}
+                              >
                                 {`${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Profile Name'}
                               </h3>
                               <div className="flex items-center space-x-2">
@@ -256,17 +338,6 @@ export default function ShortlistPage() {
                                     </svg>
                                   </a>
                                 )}
-                                <button className="text-gray-400 hover:text-gray-600">
-                                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                    <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
-                                    <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
-                                  </svg>
-                                </button>
-                                <button className="text-gray-400 hover:text-gray-600">
-                                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-                                  </svg>
-                                </button>
                               </div>
                             </div>
                             <p className="text-sm font-medium text-gray-800">{currentRole} • <span className="text-gray-600">{profile.location?.toString() || 'N/A'}</span></p>
@@ -277,9 +348,20 @@ export default function ShortlistPage() {
                               </p>
                             )}
                           </div>
-                          
+
                           {/* Actions */}
                           <div className="flex items-center space-x-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSingleContactFetch(profile, index);
+                              }}
+                              className="flex items-center px-3 py-1 bg-green-100 text-green-700 rounded-md hover:bg-green-200 transition-colors"
+                              title="Fetch contact info"
+                            >
+                              <Phone className="w-4 h-4 mr-1" />
+                              Get Contact
+                            </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -290,25 +372,12 @@ export default function ShortlistPage() {
                               <TrashIcon className="w-4 h-4 mr-1" />
                               Remove
                             </button>
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openProfileModal(profile);
-                              }}
-                              className="p-2 text-gray-400 hover:text-gray-600"
-                              title="View full profile"
-                            >
-                              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                                <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
-                              </svg>
-                            </button>
                           </div>
                         </div>
 
                         {/* Summary */}
-                        <div className="text-sm text-violet-700 leading-relaxed flex items-center">
-                          <SparklesIcon className="w-4 h-4 mr-2" />
+                        <div className="text-sm text-violet-700 leading-relaxed flex items-start">
+                          <SparklesIcon className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" />
                           <span dangerouslySetInnerHTML={{ __html: highlightKeywords(summary) }} />
                         </div>
                       </div>
@@ -321,7 +390,7 @@ export default function ShortlistPage() {
         </div>
       </div>
       <Sidebar />
-      
+
       {/* Profile Modal */}
       <ProfileModal
         profile={selectedProfile}
@@ -329,142 +398,19 @@ export default function ShortlistPage() {
         onClose={closeProfileModal}
       />
 
-      {/* Reach Out Modal */}
-      {isReachOutModalOpen && (
-        <div className="fixed inset-0 bg-transparent bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              {/* Header */}
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">Candidate Outreach Process</h2>
-                <button
-                  onClick={() => setIsReachOutModalOpen(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              {/* Process Overview */}
-              <div className="mb-8">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">How We Reach Out to Candidates</h3>
-                
-                {/* Process Steps */}
-                <div className="space-y-6">
-                  {/* Step 1 */}
-                  <div className="flex items-start space-x-4">
-                    <div className="flex-shrink-0 w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                      <MessageCircle className="w-6 h-6 text-green-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="text-lg font-medium text-gray-900 mb-2">1. WhatsApp Initial Contact</h4>
-                      <p className="text-gray-600">
-                        We reach out to candidates through WhatsApp to introduce our opportunity and gauge their interest. 
-                        This initial contact helps us understand their current situation and availability.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Arrow */}
-                  <div className="flex justify-center">
-                    <ArrowRight className="w-6 h-6 text-gray-400" />
-                  </div>
-
-                  {/* Step 2 */}
-                  <div className="flex items-start space-x-4">
-                    <div className="flex-shrink-0 w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                      <Phone className="w-6 h-6 text-blue-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="text-lg font-medium text-gray-900 mb-2">2. Schedule Phone Call</h4>
-                      <p className="text-gray-600">
-                        We schedule a detailed phone call to understand their requirements, career goals, 
-                        and expectations. This helps us assess the best fit and gather comprehensive insights.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Arrow */}
-                  <div className="flex justify-center">
-                    <ArrowRight className="w-6 h-6 text-gray-400" />
-                  </div>
-
-                  {/* Step 3 */}
-                  <div className="flex items-start space-x-4">
-                    <div className="flex-shrink-0 w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
-                      <FileText className="w-6 h-6 text-purple-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="text-lg font-medium text-gray-900 mb-2">3. Generate Comprehensive Report</h4>
-                      <p className="text-gray-600">
-                        Once we have enough leads, we create a detailed report including phone numbers, 
-                        call insights, complete candidate descriptions, and recommendations for next steps.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Price Calculation */}
-              <div className="bg-gray-50 rounded-lg p-6 mb-6">
-                <div className="flex items-center mb-4">
-                  <DollarSign className="w-6 h-6 text-green-600 mr-2" />
-                  <h3 className="text-lg font-semibold text-gray-900">Pricing</h3>
-                </div>
-                
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <Users className="w-5 h-5 text-gray-500" />
-                      <span className="text-gray-700">Number of candidates:</span>
-                    </div>
-                    <span className="font-semibold text-gray-900">{shortlistedProfiles.length}</span>
-                  </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <DollarSign className="w-5 h-5 text-gray-500" />
-                      <span className="text-gray-700">Cost per candidate:</span>
-                    </div>
-                    <span className="font-semibold text-gray-900">$0.25</span>
-                  </div>
-                  
-                  <div className="border-t border-gray-300 pt-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-lg font-semibold text-gray-900">Total Cost:</span>
-                      <span className="text-2xl font-bold text-green-600">
-                        ${(shortlistedProfiles.length * 0.25).toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center justify-end space-x-3">
-                <button
-                  onClick={() => setIsReachOutModalOpen(false)}
-                  className="px-4 py-2 text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    // Here you would implement the actual reach out functionality
-                    alert(`Initiating reach outs for ${shortlistedProfiles.length} candidates. Total cost: $${(shortlistedProfiles.length * 0.25).toFixed(2)}`);
-                    setIsReachOutModalOpen(false);
-                  }}
-                  className="px-6 py-2 bg-violet-600 text-white rounded-md hover:bg-violet-700 transition-colors font-medium"
-                >
-                  Proceed with Reach Outs
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Contact Fetch Modal */}
+      <ContactFetchModal
+        isOpen={isContactFetchModalOpen}
+        onClose={() => {
+          setIsContactFetchModalOpen(false);
+          setContactFetchCandidates([]);
+          setContactFetchResults([]);
+        }}
+        candidates={contactFetchCandidates}
+        results={contactFetchResults}
+        loading={fetchingContacts}
+        onFetch={fetchContacts}
+      />
     </div>
   );
 }
