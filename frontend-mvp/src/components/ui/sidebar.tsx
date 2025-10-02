@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Search, Clock, ChevronDown, Loader2, X } from 'lucide-react';
 
 interface SidebarProps {
   className?: string;
@@ -15,6 +17,16 @@ interface PromptHistoryItem {
   session_id: string;
   prompt: string;
   created_at: string;
+  status?: string;
+  highlight?: string;
+}
+
+interface PromptHistoryResponse {
+  prompts: PromptHistoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 }
 
 // Support Popup Component
@@ -51,11 +63,11 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
   return (
     <>
       {/* Backdrop */}
-      <div 
+      <div
         className="fixed inset-0 bg-transparent z-50"
         onClick={onClose}
       />
-      
+
       {/* Popup */}
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
@@ -86,13 +98,12 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
             {/* Contact Cards */}
             <div className="space-y-4">
               {contacts.map((contact) => (
-                <div 
+                <div
                   key={contact.name}
-                  className={`p-4 rounded-lg border-2 transition-all hover:shadow-md ${
-                    contact.primary 
-                      ? 'border-violet-200 bg-violet-50' 
-                      : 'border-gray-200 bg-gray-50'
-                  }`}
+                  className={`p-4 rounded-lg border-2 transition-all hover:shadow-md ${contact.primary
+                    ? 'border-violet-200 bg-violet-50'
+                    : 'border-gray-200 bg-gray-50'
+                    }`}
                 >
                   <div className="flex items-start justify-between mb-3">
                     <div>
@@ -105,10 +116,10 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
                       </span>
                     )}
                   </div>
-                  
+
                   <div className="space-y-2">
                     {/* Phone */}
-                    <a 
+                    <a
                       href={`tel:${contact.phone}`}
                       className="flex items-center text-sm text-gray-700 hover:text-violet-600 transition-colors"
                     >
@@ -117,9 +128,9 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
                       </svg>
                       {contact.phone}
                     </a>
-                    
+
                     {/* Email */}
-                    <a 
+                    <a
                       href={`mailto:${contact.email}`}
                       className="flex items-center text-sm text-gray-700 hover:text-violet-600 transition-colors"
                     >
@@ -154,10 +165,18 @@ export default function Sidebar({ className = '' }: SidebarProps) {
   const [isSupportPopupOpen, setIsSupportPopupOpen] = useState(false);
   const [promptHistory, setPromptHistory] = useState<PromptHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [mostRecentSessionId, setMostRecentSessionId] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<PromptHistoryItem[]>([]);
   const { user } = useAuth();
 
-  // Load shortlist count from localStorage
+  const ITEMS_PER_PAGE = 5;
+
+  // Load shortlist count from localStorage (keep existing)
   useEffect(() => {
     const loadShortlistCount = () => {
       try {
@@ -173,7 +192,6 @@ export default function Sidebar({ className = '' }: SidebarProps) {
 
     loadShortlistCount();
 
-    // Listen for shortlist updates
     const handleShortlistUpdate = (event: CustomEvent) => {
       setShortlistCount(event.detail.count);
     };
@@ -182,60 +200,143 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     return () => window.removeEventListener('shortlistUpdated', handleShortlistUpdate as EventListener);
   }, []);
 
-  // Load prompt history
-  useEffect(() => {
-    const loadPromptHistory = async () => {
-      if (!user) return;
-      
-      setIsLoadingHistory(true);
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) return;
+  // Load prompt history with pagination
+  const loadPromptHistory = useCallback(async (loadOffset = 0, append = false) => {
+    if (!user) return;
 
-        const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-        const response = await fetch(`${apiBaseUrl}/user/prompt-history`, {
+    if (append) {
+      setIsLoadingMore(true);
+    } else {
+      setIsLoadingHistory(true);
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(
+        `${apiBaseUrl}/user/prompt-history?limit=${ITEMS_PER_PAGE}&offset=${loadOffset}`,
+        {
           headers: {
             'Authorization': `Bearer ${token}`,
           },
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          console.log('Full API response:', data);
-          const prompts = data.prompts || [];
-          console.log('Loaded prompts:', prompts);
-          console.log('First prompt:', prompts[0]);
-          setPromptHistory(prompts);
-          
-          // Set the most recent session ID for the Profiles link
-          if (prompts.length > 0 && prompts[0].session_id) {
-            console.log('Setting most recent session ID to:', prompts[0].session_id);
-            setMostRecentSessionId(prompts[0].session_id);
-          } else {
-            console.log('No prompts found or no session_id in first prompt');
-          }
-        } else {
-          const errorText = await response.text();
-          console.error('Failed to load prompt history:', response.status, errorText);
         }
-      } catch (error) {
-        console.error('Error loading prompt history:', error);
-      } finally {
-        setIsLoadingHistory(false);
-      }
-    };
+      );
 
-    loadPromptHistory();
+      if (response.ok) {
+        const data: PromptHistoryResponse = await response.json();
+
+        if (append) {
+          setPromptHistory(prev => [...prev, ...data.prompts]);
+        } else {
+          setPromptHistory(data.prompts);
+
+          // Set the most recent session ID
+          if (data.prompts.length > 0 && data.prompts[0].session_id) {
+            setMostRecentSessionId(data.prompts[0].session_id);
+          }
+        }
+
+        setHasMore(data.has_more);
+        setOffset(loadOffset + data.prompts.length);
+      }
+    } catch (error) {
+      console.error('Error loading prompt history:', error);
+    } finally {
+      setIsLoadingHistory(false);
+      setIsLoadingMore(false);
+    }
   }, [user]);
 
-  // Debug log
-  console.log('Current mostRecentSessionId:', mostRecentSessionId);
-  console.log('Profiles href will be:', mostRecentSessionId ? `/results/${mostRecentSessionId}` : '/');
+  // Search prompt history
+  const searchPromptHistory = useCallback(async (query: string) => {
+    if (!user || !query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(
+        `${apiBaseUrl}/user/prompt-history/search?q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setSearchResults(data.results || []);
+      }
+    } catch (error) {
+      console.error('Error searching prompt history:', error);
+    } finally {
+      setIsSearching(false);
+    }
+  }, [user]);
+
+  // Debounced search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchQuery) {
+        searchPromptHistory(searchQuery);
+      } else {
+        setSearchResults([]);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, searchPromptHistory]);
+
+  // Initial load
+  useEffect(() => {
+    loadPromptHistory(0, false);
+  }, [loadPromptHistory]);
+
+  const loadMore = () => {
+    loadPromptHistory(offset, true);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchResults([]);
+  };
+
+  const handlePromptClick = (sessionId: string) => {
+    router.push(`/results/${sessionId}`);
+  };
+
+  const renderHighlightedText = (text: string, highlight?: string) => {
+    if (!highlight) return text;
+
+    const parts = highlight.split(/<<|>>/);
+    return (
+      <span>
+        {parts.map((part, i) =>
+          i % 2 === 1 ? (
+            <span key={i} className="bg-yellow-200 text-gray-900 font-semibold">
+              {part}
+            </span>
+          ) : (
+            <span key={i}>{part}</span>
+          )
+        )}
+      </span>
+    );
+  };
+
 
   const navigationItems = [
     {
       name: 'Profiles',
-      href: mostRecentSessionId ? `/results/${mostRecentSessionId}` : '/',
+      href: mostRecentSessionId ? `/results/${mostRecentSessionId}` : '/profiles',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
@@ -259,7 +360,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     },
     {
       name: 'Contacts',
-      href: '/',
+      href: '/contacts',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
@@ -271,7 +372,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     },
     {
       name: 'Sequences',
-      href: '#',
+      href: '/sequences',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm0 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V8zm0 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2z" clipRule="evenodd" />
@@ -283,7 +384,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
     },
     {
       name: 'Usage',
-      href: '#',
+      href: '/usage',
       icon: (
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
           <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
@@ -306,6 +407,8 @@ export default function Sidebar({ className = '' }: SidebarProps) {
       editIcon: false,
     },
   ];
+
+  const displayedHistory = searchQuery ? searchResults : promptHistory;
 
   return (
     <div className={`fixed left-0 top-0 bg-white border-r border-gray-200 w-64 flex-shrink-0 flex flex-col h-screen z-30 ${className}`}>
@@ -332,11 +435,10 @@ export default function Sidebar({ className = '' }: SidebarProps) {
             <Link
               key={item.name}
               href={item.href}
-              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                item.isActive
-                  ? 'bg-violet-50 text-violet-700'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-              }`}
+              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${item.isActive
+                ? 'bg-violet-50 text-violet-700'
+                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                }`}
             >
               <div className="flex items-center">
                 <span className={`mr-3 ${item.isActive ? 'text-violet-600' : 'text-gray-400'}`}>
@@ -392,6 +494,130 @@ export default function Sidebar({ className = '' }: SidebarProps) {
         </div>
       </div>
 
+      {/* Separator Line */}
+      <div className="mx-4 border-t border-gray-200"></div>
+      {/* History Section - Enhanced */}
+      <div className="flex-1 overflow-hidden flex flex-col p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5" />
+            History
+          </h3>
+        </div>
+
+        {/* Search Input */}
+        <div className="mb-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search history..."
+              className="w-full pl-9 pr-8 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+            />
+            {searchQuery && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {isSearching && (
+              <div className="absolute right-2 top-1/2 transform -translate-y-1/2">
+                <Loader2 className="w-3.5 h-3.5 text-violet-500 animate-spin" />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* History List */}
+        <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
+          {isLoadingHistory ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-5 h-5 text-violet-500 animate-spin" />
+            </div>
+          ) : displayedHistory.length === 0 ? (
+            <div className="text-center py-8">
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-gray-400"
+              >
+                <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p className="text-xs">
+                  {searchQuery ? 'No results found' : 'No search history yet'}
+                </p>
+              </motion.div>
+            </div>
+          ) : (
+            <AnimatePresence mode="popLayout">
+              {displayedHistory.map((item, index) => (
+                <motion.button
+                  key={item.prompt_id}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ delay: index * 0.05 }}
+                  onClick={() => handlePromptClick(item.session_id)}
+                  className="w-full text-left px-3 py-2.5 rounded-lg text-xs text-gray-600 hover:bg-violet-50 hover:text-violet-700 transition-all duration-200 group border border-transparent hover:border-violet-200"
+                  title={item.prompt}
+                >
+                  <div className="flex items-start gap-2">
+                    <div className="flex-shrink-0 mt-0.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-violet-400 group-hover:bg-violet-600 transition-colors" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate font-medium mb-1">
+                        {item.highlight ? (
+                          renderHighlightedText(item.prompt, item.highlight)
+                        ) : (
+                          item.prompt.length > 45 ? `${item.prompt.substring(0, 45)}...` : item.prompt
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                        <Clock className="w-3 h-3" />
+                        <span>
+                          {item.created_at ? new Date(item.created_at).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          }) : 'Recent'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </motion.button>
+              ))}
+            </AnimatePresence>
+          )}
+
+          {/* Load More Button */}
+          {!searchQuery && hasMore && (
+            <motion.button
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              onClick={loadMore}
+              disabled={isLoadingMore}
+              className="w-full py-2 text-xs text-violet-600 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {isLoadingMore ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Loading...
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  Load More
+                </>
+              )}
+            </motion.button>
+          )}
+        </div>
+      </div>
       {/* Settings & Support */}
       <div className="p-4 border-t border-gray-200">
         <div className="flex items-center space-x-4 text-sm">
@@ -401,7 +627,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
             </svg>
             Settings
           </Link>
-          <button 
+          <button
             onClick={() => setIsSupportPopupOpen(true)}
             className="flex items-center text-gray-600 hover:text-gray-900 transition-colors"
           >
@@ -429,9 +655,9 @@ export default function Sidebar({ className = '' }: SidebarProps) {
       </div>
 
       {/* Support Popup */}
-      <SupportPopup 
-        isOpen={isSupportPopupOpen} 
-        onClose={() => setIsSupportPopupOpen(false)} 
+      <SupportPopup
+        isOpen={isSupportPopupOpen}
+        onClose={() => setIsSupportPopupOpen(false)}
       />
     </div>
   );
