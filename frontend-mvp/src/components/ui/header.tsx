@@ -19,16 +19,20 @@ export default function Header() {
   };
 
   const navItems = [
+    { name: 'Search', href: '/', icon: Search },
     { name: 'Dashboard', href: '/shortlist', icon: Search },
-    { name: 'Integrations', href: '/integrations', icon: Sparkles },
   ];
+
+  // Check if we're on the home/prompt page (no sidebar)
+  const isPromptPage = pathname === '/';
+  const headerLeftClass = isPromptPage ? 'left-0' : 'left-64';
 
   return (
     <motion.div
       initial={{ y: -100, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.5, ease: 'easeOut' }}
-      className="fixed top-0 left-64 right-0 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 z-30 shadow-sm"
+      className={`fixed top-0 ${headerLeftClass} right-0 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 z-30 shadow-sm`}
     >
       <div className="px-8 py-4">
         <div className="flex items-center justify-between">
@@ -39,24 +43,10 @@ export default function Header() {
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
-              <motion.div
-                animate={{
-                  background: [
-                    'linear-gradient(135deg, #7c3aed 0%, #a855f7 100%)',
-                    'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)',
-                    'linear-gradient(135deg, #7c3aed 0%, #a855f7 100%)',
-                  ],
-                }}
-                transition={{ duration: 3, repeat: Infinity }}
-                className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg"
-              >
-                <Sparkles className="w-5 h-5 text-white" />
-              </motion.div>
               <div>
-                <span className="text-2xl font-bold bg-gradient-to-r from-violet-600 to-purple-600 bg-clip-text text-transparent">
-                  neuraleap
+                <span className="text-2xl bg-gradient-to-r from-violet-600 to-purple-600 bg-clip-text text-transparent">
+                  neuraleap hire
                 </span>
-                <span className="text-sm text-gray-500 ml-2 font-medium">hire</span>
               </div>
             </motion.div>
           </Link>
