@@ -59,8 +59,10 @@ class API:
                 "https://dev.damnuiwdbbvte.amplifyapp.com/",  # With trailing slash
             ],
             allow_credentials=True,
-            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
             allow_headers=["*"],
+            expose_headers=["*"],
+            max_age=3600,  # Cache preflight requests for 1 hour
         )
     
     async def get_current_user(self, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
@@ -428,6 +430,16 @@ class API:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error retrieving session results: {str(e)}")
+        
+        @self.app.options("/login")
+        async def login_options():
+            """Handle OPTIONS preflight request for login endpoint."""
+            return {}
+        
+        @self.app.options("/parse-prompt")
+        async def parse_prompt_options():
+            """Handle OPTIONS preflight request for parse-prompt endpoint."""
+            return {}
         
         @self.app.get("/health")
         async def health_check():
