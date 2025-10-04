@@ -1,14 +1,15 @@
 """
 Authentication utilities for JWT tokens, password hashing, and MongoDB operations.
 """
-import os
+import asyncio
 import datetime
+import os
 from typing import Optional
+
 from jose import JWTError, jwt
+from models import IncidentLog, User
 from passlib.context import CryptContext
 from pymongo import MongoClient
-from models import User, IncidentLog
-import asyncio
 
 
 class AuthManager:
@@ -18,7 +19,7 @@ class AuthManager:
         # JWT Configuration
         self.secret_key = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
         self.algorithm = "HS256"
-        self.access_token_expire_minutes = 30
+        self.access_token_expire_minutes = 100
         
         # Password hashing
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12, bcrypt__min_rounds=10)
