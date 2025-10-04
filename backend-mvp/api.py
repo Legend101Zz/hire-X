@@ -16,6 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from hatch_service import HatchService
 from models import (HatchBulkContactRequest, HatchContactRequest,
                     HatchContactResponse, LoginRequest, LoginResponse,
+                    PaginatedResultsResponse, ProfileReference,
                     PromptHistoryItem, PromptHistoryResponse, PromptRequest,
                     PromptResponse, PromptSearchItem, PromptSearchResponse,
                     SessionResponse)
@@ -380,24 +381,31 @@ class API:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error submitting answer: {str(e)}")
-        
-        @self.app.get("/session/{session_id}/results")
-        async def get_session_results(session_id: str, current_user: dict = Depends(self.get_current_user)):
+
+        @self.app.get("/session/{session_id}/results", response_model=PaginatedResultsResponse)
+        async def get_session_results(
+            session_id: str,
+            page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+            page_size: int = Query(10, ge=1, le=50, description="Number of profiles per page"),
+            current_user: dict = Depends(self.get_current_user)
+        ):
             """
-            Get the final results/profiles for a session from MongoDB.
+            Get paginated session results with profile data fetched from mydatabase/profiles.
             
             Args:
                 session_id: The session ID to get results for
+                page: Page number (1-indexed, default 1)
+                page_size: Number of profiles per page (default 10, max 50)
                 current_user: Authenticated user information from JWT token
                 
             Returns:
-                dict: Session results including profiles and summary (same schema as before)
+                PaginatedResultsResponse: Paginated session results with profile data
             """
             try:
                 # Verify user owns this session
                 await self._verify_session_ownership(session_id, current_user)
                 
-                # Get final results from MongoDB
+                # Get prompt document from MongoDB
                 mongo_result = self.prompts_collection.find_one({"session_id": session_id})
                 
                 if not mongo_result:
@@ -409,28 +417,95 @@ class API:
                         return {
                             "session_id": session_id,
                             "status": "processing",
-                            "message": "Results are still being processed",
                             "profiles": [],
-                            "summary": {}
+                            "summary": {},
+                            "total_profiles_found": 0,
+                            "page": page,
+                            "page_size": page_size,
+                            "total_pages": 0,
+                            "has_next": False,
+                            "has_prev": False
                         }
                     else:
                         raise HTTPException(status_code=404, detail="No results available for this session")
                 
-                # Return same schema as before (frontend compatible)
+                # Get profile references
+                profile_references = mongo_result.get("profile_references", [])
+                total_profiles = len(profile_references)
+                
+                if total_profiles == 0:
+                    return {
+                        "session_id": session_id,
+                        "status": "completed",
+                        "profiles": [],
+                        "summary": mongo_result.get("summary", {}),
+                        "total_profiles_found": 0,
+                        "page": page,
+                        "page_size": page_size,
+                        "total_pages": 0,
+                        "has_next": False,
+                        "has_prev": False
+                    }
+                
+                # Calculate pagination
+                total_pages = (total_profiles + page_size - 1) // page_size  # Ceiling division
+                if page > total_pages:
+                    page = total_pages
+                
+                start_idx = (page - 1) * page_size
+                end_idx = min(start_idx + page_size, total_profiles)
+                
+                # Get profile references for current page
+                page_profile_refs = profile_references[start_idx:end_idx]
+                
+                # Extract profile IDs (convert to ObjectId for MongoDB query)
+                from bson import ObjectId
+                profile_ids = []
+                for ref in page_profile_refs:
+                    try:
+                        profile_ids.append(ObjectId(ref["profile_id"]))
+                    except Exception as e:
+                        print(f"⚠️  Invalid profile_id: {ref.get('profile_id')} - {e}")
+                        continue
+                
+                # Fetch actual profile data from mydatabase/profiles
+                profiles_cursor = self.profiles.find({"_id": {"$in": profile_ids}})
+                profiles_dict = {str(p["_id"]): p for p in profiles_cursor}
+                
+                # Combine profile data with match scores in the correct order
+                profiles_with_scores = []
+                for ref in page_profile_refs:
+                    profile_id = ref["profile_id"]
+                    if profile_id in profiles_dict:
+                        profile = profiles_dict[profile_id]
+                        # Convert ObjectId to string for JSON serialization
+                        profile["_id"] = str(profile["_id"])
+                        # Add match score and reasons
+                        profile["followup_match_score"] = ref.get("match_score", 0)
+                        profile["match_reasons"] = ref.get("match_reasons", [])
+                        profiles_with_scores.append(profile)
+                
+                # Return paginated response
                 return {
                     "session_id": session_id,
                     "status": "completed",
-                    "profiles": mongo_result.get("profiles", []),
+                    "profiles": profiles_with_scores,
                     "summary": mongo_result.get("summary", {}),
-                    "total_profiles_found": mongo_result.get("total_profiles_found", 0),
-                    "profiles_returned": mongo_result.get("profiles_returned", 0)
+                    "total_profiles_found": total_profiles,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_pages": total_pages,
+                    "has_next": page < total_pages,
+                    "has_prev": page > 1
                 }
                 
             except HTTPException:
                 raise
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Error retrieving session results: {str(e)}")
-        
+            
         @self.app.options("/login")
         async def login_options():
             """Handle OPTIONS preflight request for login endpoint."""
