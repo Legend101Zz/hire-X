@@ -67,25 +67,37 @@ class Workflow:
             bool: True if successful, False otherwise
         """
         try:
-            # Use $addToSet to avoid duplicates and ensure prompts array exists
+            # First check if user exists and has prompts field
+            user = self.users_collection.find_one({"username": username})
+            
+            if not user:
+                print(f"  ⚠️  User {username} not found when trying to add prompt_id")
+                return False
+            
+            # Initialize prompts array if it doesn't exist
+            if "prompts" not in user:
+                self.users_collection.update_one(
+                    {"username": username},
+                    {"$set": {"prompts": []}}
+                )
+            
+            # Now add the prompt_id using $addToSet
             result = self.users_collection.update_one(
                 {"username": username},
-                {
-                    "$addToSet": {"prompts": prompt_id},
-                    "$setOnInsert": {"prompts": []}  # Initialize if doesn't exist
-                },
-                upsert=False  # Don't create user if doesn't exist
+                {"$addToSet": {"prompts": prompt_id}}
             )
             
-            if result.matched_count > 0:
+            if result.modified_count > 0 or result.matched_count > 0:
                 print(f"  ✅ Added prompt_id {prompt_id} to user {username}'s profile")
                 return True
             else:
-                print(f"  ⚠️  User {username} not found when trying to add prompt_id")
+                print(f"  ⚠️  Could not add prompt_id to user {username}'s profile")
                 return False
                 
         except Exception as e:
+            import traceback
             print(f"  ❌ Error adding prompt_id to user profile: {e}")
+            print(traceback.format_exc())
             return False
     
     async def log_user_session_data(self, session_id: str) -> bool:
@@ -594,26 +606,35 @@ class Workflow:
     async def scorecard_profiles_with_followup(self, session_id: str, profiles: List[Dict[str, Any]], analysis_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Score and rank profiles based on how well they match words in follow-up question answers.
-        
-        Args:
-            session_id: Unique session identifier
-            profiles: List of profiles to score
-            analysis_result: Analysis result with metadata
-            
-        Returns:
-            list: List of scored and ranked profiles
         """
         try:
             print(f"  📊 Scorecarding {len(profiles)} profiles based on follow-up answers for session {session_id}")
             
-            # Get follow-up answers
-            followup_answers_data = self._get_data(session_id, "followup_answers") or {}
-            followup_answers = followup_answers_data.get("answers", [])
+            # Get follow-up answers - handle different data formats
+            followup_answers_data = self._get_data(session_id, "followup_answers")
+            
+            # Debug: Check what we got
+            print(f"  🔍 followup_answers_data type: {type(followup_answers_data)}")
+            print(f"  🔍 followup_answers_data content: {followup_answers_data}")
+            
+            # Handle different formats
+            if not followup_answers_data:
+                print(f"  ⚠️ No follow-up answers found for session {session_id}")
+                followup_answers = []
+            elif isinstance(followup_answers_data, dict):
+                followup_answers = followup_answers_data.get("answers", [])
+            elif isinstance(followup_answers_data, list):
+                # If it's already a list, use it directly
+                followup_answers = followup_answers_data
+            else:
+                print(f"  ⚠️ Unexpected followup_answers format: {type(followup_answers_data)}")
+                followup_answers = []
             
             if not followup_answers:
-                print(f"  ⚠️ No follow-up answers found for session {session_id}, returning profiles as-is")
+                print(f"  ⚠️ No follow-up answers to process, returning profiles as-is")
                 return profiles
             
+            # Rest of the method stays the same...
             scored_profiles = []
             
             for profile in profiles:
@@ -634,22 +655,25 @@ class Workflow:
                 
                 scored_profiles.append(scored_profile)
             
-            # Sort profiles by description availability (profiles with descriptions first) and then by follow-up match score
+            # Sort profiles by match score
             ranked_profiles = sorted(scored_profiles, key=lambda x: (
-                x.get("description", "") != "No summary available for the profile",  # Profiles with descriptions first
-                x.get("followup_match_score", 0)  # Then by match score
+                x.get("description", "") != "No summary available for the profile",
+                x.get("followup_match_score", 0)
             ), reverse=True)
             
             # Store scorecard results
             await self._store_data(session_id, "scorecard_results", ranked_profiles)
             
             print(f"  ✅ Scorecarding completed for session {session_id}")
-            print(f"  🏆 Top match: {ranked_profiles[0].get('followup_match_percentage', 0)}% - {ranked_profiles[0].get('first_name', 'Unknown')} {ranked_profiles[0].get('last_name', '')}")
+            if ranked_profiles:
+                print(f"  🏆 Top match: {ranked_profiles[0].get('followup_match_percentage', 0)}% - {ranked_profiles[0].get('first_name', 'Unknown')} {ranked_profiles[0].get('last_name', '')}")
             
             return ranked_profiles
             
         except Exception as e:
+            import traceback
             print(f"  ❌ Scorecarding failed for session {session_id}: {e}")
+            print(traceback.format_exc())
             await self._store_data(session_id, "workflow_status", f"error: {str(e)}")
             return profiles  # Return original profiles if scoring fails
     

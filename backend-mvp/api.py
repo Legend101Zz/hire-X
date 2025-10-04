@@ -44,6 +44,13 @@ class API:
         self.db = self.mongo_client.get_database(os.getenv("DATABASE_NAME", "neuraleap"))
         self.prompts_collection = self.db["prompts"]
         
+        #MongoDB connection for profiles database
+        profiles_db_url = os.getenv("PROFILES_DB_URL", "mongodb://localhost:27017")
+        profiles_db_name = os.getenv("PROFILES_DB_NAME", "mydatabase")
+        self.profiles_client = MongoClient(profiles_db_url)
+        self.profiles_db = self.profiles_client[profiles_db_name]
+        self.profiles = self.profiles_db["profiles"]  
+        
         self._setup_cors()
         self._setup_routes()
     
