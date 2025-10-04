@@ -733,6 +733,7 @@ class API:
     async def _verify_session_ownership(self, session_id: str, current_user: dict):
         """
         Verify that the current user owns the specified session.
+        Checks Redis first (for active sessions), then MongoDB (for older sessions).
         
         Args:
             session_id: Session ID to verify
@@ -742,24 +743,50 @@ class API:
             HTTPException: If user doesn't own the session or session doesn't exist
         """
         try:
-            # Get user context for this session
+            # Get current username from JWT token
+            current_username = current_user.get("sub")
+            if not current_username:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid user information in token"
+                )
+            
+            # First, try to get user context from Redis (for active sessions)
             user_context = self.redis_manager.get_data(session_id, "user_context")
             
-            if not user_context:
+            if user_context:
+                # Session is active in Redis - verify ownership
+                session_username = user_context.get("username")
+                if session_username != current_username:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Access denied: You don't have permission to access this session"
+                    )
+                return  # Ownership verified
+            
+            # If not in Redis, check MongoDB (for older/completed sessions)
+            mongo_result = self.prompts_collection.find_one(
+                {"session_id": session_id},
+                {"username": 1, "_id": 0}  # Only fetch username field
+            )
+            
+            if not mongo_result:
+                # Session doesn't exist in Redis or MongoDB
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Session not found"
                 )
             
-            # Check if the current user owns this session
-            session_username = user_context.get("username")
-            current_username = current_user.get("sub")
-            
+            # Verify ownership from MongoDB data
+            session_username = mongo_result.get("username")
             if session_username != current_username:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied: You don't have permission to access this session"
                 )
+            
+            # Ownership verified from MongoDB
+            return
                 
         except HTTPException:
             raise
@@ -768,7 +795,7 @@ class API:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error verifying session ownership: {str(e)}"
             )
-    
+            
     async def _store_followup_answer(self, session_id: str, question: str, answer: str):
         """
         Store a follow-up question answer.
