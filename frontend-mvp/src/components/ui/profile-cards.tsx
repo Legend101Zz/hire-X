@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -6,12 +7,17 @@ import { SparklesIcon } from 'lucide-react';
 import { Profile } from '@/types/profile';
 
 interface ProfileCardsProps {
-  profiles: Profile[];
+  profiles: any[];
+  selectedProfiles?: Set<string>;
+  onSelectProfile?: (profileId: string) => void;
 }
 
-export default function ProfileCards({ profiles }: ProfileCardsProps) {
-  const [selectedProfiles, setSelectedProfiles] = useState<Set<number>>(new Set());
-  const [shortlistedProfiles, setShortlistedProfiles] = useState<Set<number>>(new Set());
+export default function ProfileCards({
+  profiles,
+  selectedProfiles = new Set(),
+  onSelectProfile
+}: ProfileCardsProps) {
+  const [shortlistedProfiles, setShortlistedProfiles] = useState<Set<string>>(new Set());
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -22,16 +28,10 @@ export default function ProfileCards({ profiles }: ProfileCardsProps) {
         const stored = localStorage.getItem('shortlistedProfiles');
         if (stored) {
           const shortlistedProfilesList = JSON.parse(stored);
-          const shortlistedIds = new Set(shortlistedProfilesList.map((p: Profile) => p.organization_id));
-          
-          const shortlistedIndices = new Set<number>();
-          profiles.forEach((profile, index) => {
-            if (shortlistedIds.has(profile.organization_id)) {
-              shortlistedIndices.add(index);
-            }
-          });
-          
-          setShortlistedProfiles(shortlistedIndices);
+          const shortlistedIds = new Set(
+            shortlistedProfilesList.map((p: Profile) => p._id || p.organization_id)
+          );
+          setShortlistedProfiles(shortlistedIds);
         }
       } catch (error) {
         console.error('Error checking shortlisted profiles:', error);
@@ -41,61 +41,42 @@ export default function ProfileCards({ profiles }: ProfileCardsProps) {
     checkShortlistedProfiles();
   }, [profiles]);
 
-  const toggleSelect = (index: number) => {
-    const newSelected = new Set(selectedProfiles);
-    if (newSelected.has(index)) {
-      newSelected.delete(index);
-    } else {
-      newSelected.add(index);
-    }
-    setSelectedProfiles(newSelected);
-  };
-
-  const toggleShortlist = (index: number) => {
+  const toggleShortlist = (profile: any) => {
+    const profileId = profile._id || profile.organization_id;
     const newShortlisted = new Set(shortlistedProfiles);
-    if (newShortlisted.has(index)) {
-      newShortlisted.delete(index);
+
+    if (newShortlisted.has(profileId)) {
+      newShortlisted.delete(profileId);
     } else {
-      newShortlisted.add(index);
+      newShortlisted.add(profileId);
     }
     setShortlistedProfiles(newShortlisted);
-    
-    // Update localStorage with shortlisted profiles
-    const profile = profiles[index];
-    if (profile) {
-      const stored = localStorage.getItem('shortlistedProfiles');
-      let shortlistedProfilesList: Profile[] = stored ? JSON.parse(stored) : [];
-      
-      if (newShortlisted.has(index)) {
-        // Add to shortlist
-        const profileWithMetadata = {
-          ...profile,
-          shortlistedAt: new Date().toISOString(),
-          sessionId: window.location.pathname.split('/').pop() // Get session ID from URL
-        };
-        shortlistedProfilesList.push(profileWithMetadata);
-      } else {
-        // Remove from shortlist
-        shortlistedProfilesList = shortlistedProfilesList.filter(
-          p => p.organization_id !== profile.organization_id
-        );
-      }
-      
-      localStorage.setItem('shortlistedProfiles', JSON.stringify(shortlistedProfilesList));
-      
-      // Dispatch custom event to notify other components
-      window.dispatchEvent(new CustomEvent('shortlistUpdated', {
-        detail: { count: shortlistedProfilesList.length }
-      }));
-    }
-  };
 
-  const selectAll = () => {
-    if (selectedProfiles.size === profiles.length) {
-      setSelectedProfiles(new Set());
+    // Update localStorage with shortlisted profiles
+    const stored = localStorage.getItem('shortlistedProfiles');
+    let shortlistedProfilesList: Profile[] = stored ? JSON.parse(stored) : [];
+
+    if (newShortlisted.has(profileId)) {
+      // Add to shortlist
+      const profileWithMetadata = {
+        ...profile,
+        shortlistedAt: new Date().toISOString(),
+        sessionId: window.location.pathname.split('/').pop()
+      };
+      shortlistedProfilesList.push(profileWithMetadata);
     } else {
-      setSelectedProfiles(new Set(profiles.map((_, index) => index)));
+      // Remove from shortlist
+      shortlistedProfilesList = shortlistedProfilesList.filter(
+        p => (p._id || p.organization_id) !== profileId
+      );
     }
+
+    localStorage.setItem('shortlistedProfiles', JSON.stringify(shortlistedProfilesList));
+
+    // Dispatch custom event to notify other components
+    window.dispatchEvent(new CustomEvent('shortlistUpdated', {
+      detail: { count: shortlistedProfilesList.length }
+    }));
   };
 
   const openProfileModal = (profile: Profile) => {
@@ -109,151 +90,206 @@ export default function ProfileCards({ profiles }: ProfileCardsProps) {
   };
 
   const highlightKeywords = (text: string) => {
-    const keywords = ['over two decades of experience', 'low-latency, high-capacity trading systems', 'distributed systems', 'Go', 'financial sector', 'financial services domain'];
-    
+    const keywords = [
+      'over two decades of experience',
+      'low-latency, high-capacity trading systems',
+      'distributed systems',
+      'Go',
+      'financial sector',
+      'financial services domain'
+    ];
+
     let highlightedText = text;
     keywords.forEach(keyword => {
       const regex = new RegExp(`(${keyword})`, 'gi');
-      highlightedText = highlightedText.replace(regex, '<span class="bg-yellow-200 font-medium">$1</span>');
+      highlightedText = highlightedText.replace(
+        regex,
+        '<span class="bg-yellow-200 font-semibold">$1</span>'
+      );
     });
-    
+
     return highlightedText;
   };
 
-  return (
-    <div className="flex-1 bg-white">
-
-      {/* Header with count and select all */}
-      <div className="border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <h2 className="text-lg font-semibold text-gray-900">All Profiles ({profiles.length})</h2>
-            <label className="flex items-center">
-              <input
-                type="checkbox"
-                checked={selectedProfiles.size === profiles.length && profiles.length > 0}
-                onChange={selectAll}
-                className="w-4 h-4 text-violet-600 border-gray-300 rounded focus:ring-violet-500"
-              />
-              <span className="ml-2 text-sm text-gray-600">Select All</span>
-            </label>
-          </div>
-          
-          {/* Pagination */}
-          <div className="flex items-center space-x-2">
-            <button className="p-2 text-gray-400 hover:text-gray-600">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
-              </svg>
-            </button>
-            <span className="text-sm text-gray-600">16 - 30 of {profiles.length}</span>
-            <button className="p-2 text-gray-400 hover:text-gray-600">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </div>
+  if (profiles.length === 0) {
+    return (
+      <div className="flex-1 bg-gray-50 flex items-center justify-center p-12">
+        <div className="text-center">
+          <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+          </svg>
+          <h3 className="text-lg font-medium text-gray-900 mb-1">No profiles found</h3>
+          <p className="text-sm text-gray-500">Try adjusting your filters to see more results</p>
         </div>
       </div>
+    );
+  }
 
+  return (
+    <div className="flex-1 bg-gray-50">
       {/* Profile Cards */}
-      <div className="p-6 space-y-6">
-        {profiles.map((profile, index) => {
-          const isSelected = selectedProfiles.has(index);
-          const isShortlisted = shortlistedProfiles.has(index);
-          const currentRole = (profile.experience?.find(exp => exp.current === 1)?.title || profile.title || 'N/A').toString();
-          const education = (profile.education?.[0]?.major || profile.education?.[0]?.campus || 'N/A').toString();
-          const summary = profile.summary && profile.summary !== 'NA' ? profile.summary : 
-            `${profile.first_name || ''} ${profile.last_name || ''}`.trim() + 
-            `'s has missing description, so no summary available for the profile`;
+      <div className="p-6 space-y-4">
+        {profiles.map((profile) => {
+          const profileId = profile._id || profile.organization_id;
+          const isSelected = selectedProfiles.has(profileId);
+          const isShortlisted = shortlistedProfiles.has(profileId);
+
+          // Get current role
+          const currentRole = profile.experience?.find((exp: any) => exp.current === 1)?.title ||
+            profile.title ||
+            'No current role';
+
+          // Get education
+          const education = profile.education?.[0]?.major ||
+            profile.education?.[0]?.campus ||
+            'Education not available';
+
+          // Get summary
+          const summary = profile.summary && profile.summary !== 'NA'
+            ? profile.summary
+            : `${profile.first_name || ''} ${profile.last_name || ''}`.trim() +
+            ' has a missing description, so no summary is available for this profile';
+
+          // Get match score
+          const matchScore = profile.followup_match_score
+            ? Math.round(profile.followup_match_score * 100)
+            : null;
 
           return (
-            <div 
-              key={index} 
-              className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow cursor-pointer"
-              onClick={() => openProfileModal(profile)}
+            <div
+              key={profileId}
+              className={`
+                relative border rounded-xl p-6 transition-all
+                ${isSelected
+                  ? 'border-violet-300 bg-violet-50 shadow-md ring-2 ring-violet-200'
+                  : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+                }
+              `}
             >
-              <div className="flex items-start space-x-4">
+              <div className="flex items-start gap-4">
                 {/* Checkbox */}
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={(e) => {
-                    e.stopPropagation();
-                    toggleSelect(index);
-                  }}
-                  className="mt-1 w-4 h-4 text-violet-600 border-gray-300 rounded focus:ring-violet-500"
-                />
+                {onSelectProfile && (
+                  <div className="flex items-start pt-1">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        onSelectProfile(profileId);
+                      }}
+                      className="w-5 h-5 text-violet-600 border-gray-300 rounded focus:ring-violet-500 cursor-pointer"
+                    />
+                  </div>
+                )}
 
                 {/* Profile Content */}
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   {/* Header */}
                   <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center space-x-2 mb-1">
-                        <h3 className="text-lg font-semibold text-gray-900">
-                          {`${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Profile Name'}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="text-lg font-semibold text-gray-900 truncate">
+                          {`${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'No Name'}
                         </h3>
-                        <div className="flex items-center space-x-2">
-                          {profile.linkedin_url && (
-                            <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-blue-600">
-                              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.338 16.338H13.67V12.16c0-.995-.017-2.277-1.387-2.277-1.39 0-1.601 1.086-1.601 2.207v4.248H8.014v-8.59h2.559v1.174h.037c.356-.675 1.227-1.387 2.526-1.387 2.703 0 3.203 1.778 3.203 4.092v4.711zM5.005 6.575a1.548 1.548 0 11-.003-3.096 1.548 1.548 0 01.003 3.096zm-1.337 9.763H6.34v-8.59H3.667v8.59zM17.668 1H2.328C1.595 1 1 1.581 1 2.298v15.403C1 18.418 1.595 19 2.328 19h15.34c.734 0 1.332-.582 1.332-1.299V2.298C19 1.581 18.402 1 17.668 1z" clipRule="evenodd" />
+
+                        {/* Match Score Badge */}
+                        {matchScore !== null && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-800">
+                            {matchScore}% Match
+                          </span>
+                        )}
+
+                        {/* Action Icons */}
+                        <div className="flex items-center gap-2 ml-auto">
+                          {profile.linkedin_url && profile.linkedin_url !== 'NA' && (
+                            <a
+                              href={`https://linkedin.com${profile.linkedin_url}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-gray-400 hover:text-blue-600 transition-colors"
+                              title="View LinkedIn Profile"
+                            >
+                              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                <path
+                                  fillRule="evenodd"
+                                  d="M16.338 16.338H13.67V12.16c0-.995-.017-2.277-1.387-2.277-1.39 0-1.601 1.086-1.601 2.207v4.248H8.014v-8.59h2.559v1.174h.037c.356-.675 1.227-1.387 2.526-1.387 2.703 0 3.203 1.778 3.203 4.092v4.711zM5.005 6.575a1.548 1.548 0 11-.003-3.096 1.548 1.548 0 01.003 3.096zm-1.337 9.763H6.34v-8.59H3.667v8.59zM17.668 1H2.328C1.595 1 1 1.581 1 2.298v15.403C1 18.418 1.595 19 2.328 19h15.34c.734 0 1.332-.582 1.332-1.299V2.298C19 1.581 18.402 1 17.668 1z"
+                                  clipRule="evenodd"
+                                />
                               </svg>
                             </a>
                           )}
-                          <button className="text-gray-400 hover:text-gray-600">
-                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                              <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
-                              <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
-                            </svg>
-                          </button>
-                          <button className="text-gray-400 hover:text-gray-600">
-                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                              <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-                            </svg>
-                          </button>
+
                         </div>
                       </div>
-                      <p className="text-sm font-medium text-gray-800">{currentRole} • <span className="text-gray-600">{profile.location?.toString() || 'N/A'}</span></p>
-                      <p className="text-sm text-gray-900">{education}</p>
+
+                      <div className="space-y-1 text-sm">
+                        <p className="text-gray-900 font-medium">{currentRole}</p>
+                        <p className="text-gray-600">
+                          {profile.location && profile.location !== 'NA' ? profile.location : 'Location not available'}
+                        </p>
+                        <p className="text-gray-600">{education}</p>
+                      </div>
                     </div>
-                    
-                    {/* Actions */}
-                    <div className="flex items-center space-x-2">
+
+                    {/* Action Buttons */}
+                    <div className="flex items-start gap-2 ml-4">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleShortlist(index);
+                          toggleShortlist(profile);
                         }}
-                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                          isShortlisted
-                            ? 'bg-violet-100 text-violet-700'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
+                        className={`
+                          px-4 py-2 rounded-lg text-sm font-medium transition-all
+                          ${isShortlisted
+                            ? 'bg-violet-600 text-white hover:bg-violet-700'
+                            : 'bg-white border border-gray-300 text-gray-700 hover:border-violet-300 hover:bg-violet-50'
+                          }
+                        `}
                       >
-                        {isShortlisted ? 'Shortlisted' : 'Shortlist'}
+                        {isShortlisted ? '✓ Shortlisted' : 'Shortlist'}
                       </button>
-                      <button 
+
+                      <button
                         onClick={(e) => {
                           e.stopPropagation();
                           openProfileModal(profile);
                         }}
-                        className="p-2 text-gray-400 hover:text-gray-600"
-                        title="View full profile"
+                        className="px-4 py-2 rounded-lg text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50 transition-all"
                       >
-                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                          <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
-                        </svg>
+                        View Profile
                       </button>
                     </div>
                   </div>
 
-                  {/* Summary */}
-                  <div className="text-sm text-violet-700 leading-relaxed flex items-center">
-                    <SparklesIcon className="w-4 h-4 mr-2" />
-                    <span dangerouslySetInnerHTML={{ __html: highlightKeywords(summary) }} />
+                  {/* Summary with AI Highlights */}
+                  <div className="mt-4 p-4 bg-violet-50 rounded-lg border border-violet-100">
+                    <div className="flex items-start gap-2">
+                      <SparklesIcon className="w-5 h-5 text-violet-600 flex-shrink-0 mt-0.5" />
+                      <p
+                        className="text-sm text-gray-700 leading-relaxed"
+                        dangerouslySetInnerHTML={{ __html: highlightKeywords(summary) }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick Info Pills */}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {profile.current_industry && profile.current_industry !== 'NA' && (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                        {profile.current_industry}
+                      </span>
+                    )}
+                    {profile.seniority_level && profile.seniority_level !== 'NA' && (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                        {profile.seniority_level}
+                      </span>
+                    )}
+                    {profile.functional_area && profile.functional_area !== 'NA' && (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                        {profile.functional_area}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -262,13 +298,12 @@ export default function ProfileCards({ profiles }: ProfileCardsProps) {
         })}
       </div>
 
-
       {/* Profile Modal */}
       <ProfileModal
         profile={selectedProfile}
         isOpen={isModalOpen}
         onClose={closeProfileModal}
       />
-    </div>
+    </div >
   );
 }

@@ -1,16 +1,17 @@
 """
 Workflow processing logic for session management.
 """
+import asyncio
+import datetime
 import json
 import os
 import re
-import asyncio
-import datetime
 import uuid
-from typing import Dict, Any, List, Optional
-from redis_manager import RedisManager
+from typing import Any, Dict, List, Optional
+
 from ai_model import HiringPromptParser, Model
 from pymongo import MongoClient
+from redis_manager import RedisManager
 
 
 class Workflow:
@@ -66,25 +67,37 @@ class Workflow:
             bool: True if successful, False otherwise
         """
         try:
-            # Use $addToSet to avoid duplicates and ensure prompts array exists
+            # First check if user exists and has prompts field
+            user = self.users_collection.find_one({"username": username})
+            
+            if not user:
+                print(f"  ⚠️  User {username} not found when trying to add prompt_id")
+                return False
+            
+            # Initialize prompts array if it doesn't exist
+            if "prompts" not in user:
+                self.users_collection.update_one(
+                    {"username": username},
+                    {"$set": {"prompts": []}}
+                )
+            
+            # Now add the prompt_id using $addToSet
             result = self.users_collection.update_one(
                 {"username": username},
-                {
-                    "$addToSet": {"prompts": prompt_id},
-                    "$setOnInsert": {"prompts": []}  # Initialize if doesn't exist
-                },
-                upsert=False  # Don't create user if doesn't exist
+                {"$addToSet": {"prompts": prompt_id}}
             )
             
-            if result.matched_count > 0:
+            if result.modified_count > 0 or result.matched_count > 0:
                 print(f"  ✅ Added prompt_id {prompt_id} to user {username}'s profile")
                 return True
             else:
-                print(f"  ⚠️  User {username} not found when trying to add prompt_id")
+                print(f"  ⚠️  Could not add prompt_id to user {username}'s profile")
                 return False
                 
         except Exception as e:
+            import traceback
             print(f"  ❌ Error adding prompt_id to user profile: {e}")
+            print(traceback.format_exc())
             return False
     
     async def log_user_session_data(self, session_id: str) -> bool:
@@ -516,57 +529,74 @@ class Workflow:
     
     async def _serve_profiles_directly(self, session_id: str, profiles: List[Dict[str, Any]], analysis_result: Dict[str, Any]) -> None:
         """
-        Serve profiles directly to the user via websocket without scorecarding.
-        
-        Args:
-            session_id: Unique session identifier
-            profiles: List of profiles to serve
-            analysis_result: Analysis result for metadata
+        Serve profiles directly without scoring - stores only profile IDs.
         """
         try:
             print(f"  📤 Serving {len(profiles)} profiles directly for session {session_id}")
             
-            # Create a simple summary without scores
+            # Extract profile references (ID only, no scores for direct serving)
+            profile_references = []
+            for profile in profiles:
+                profile_ref = {
+                    "profile_id": str(profile.get("_id")),
+                    "match_score": 0.5,  # Neutral score for direct serving
+                    "match_reasons": []
+                }
+                profile_references.append(profile_ref)
+            
+            # Create summary
             summary = {
                 "total_profiles_found": len(profiles),
                 "profiles_returned": len(profiles),
-                "average_score": 0.5,  # Neutral since we're not scoring
+                "average_score": 0.5,
                 "top_score": 0.5,
                 "score_distribution": {"excellent": 0, "good": 0, "fair": 0, "poor": 0}
             }
             
-            # Add descriptions to profiles
-            profiles_with_descriptions = []
-            for profile in profiles:
-                profile_with_desc = {
-                    **profile,
-                    "description": self._get_profile_description(profile)
-                }
-                profiles_with_descriptions.append(profile_with_desc)
+            # Get user context and prompt
+            user_context = self._get_data(session_id, "user_context")
+            prompt = self.redis_manager.get_prompt(session_id)
+            prompt_id = str(uuid.uuid4())
             
-            # Sort profiles by description availability (profiles with descriptions first)
-            sorted_profiles = sorted(profiles_with_descriptions, key=lambda x: (
-                x.get("description", "") != "No summary available for the profile",  # Profiles with descriptions first
-                x.get("first_name", ""),  # Then by name for consistent ordering
-                x.get("last_name", "")
-            ), reverse=True)
-            
-            # Create results structure similar to final_results but without scoring
-            direct_results = {
-                "profiles": sorted_profiles,
-                "summary": summary,
+            # Store in MongoDB with profile references
+            mongo_document = {
+                "prompt_id": prompt_id,
                 "session_id": session_id,
+                "username": user_context.get("username", "unknown") if user_context else "unknown",
+                "prompt": prompt or "",
+                "profile_references": profile_references,  # Store references only
+                "summary": summary,
                 "analysis_metadata": {
                     "original_prompt": analysis_result.get("original_prompt", ""),
                     "extracted_keywords": analysis_result.get("extracted_keywords", []),
                     "search_criteria": analysis_result.get("search_criteria", {})
-                }
+                },
+                "created_at": datetime.datetime.utcnow(),
+                "total_profiles_found": len(profiles),
+                "profiles_returned": len(profiles)
             }
             
-            # Store direct results in Redis (this will trigger websocket broadcast)
+            self.prompts_collection.update_one(
+                {"session_id": session_id},
+                {"$set": mongo_document},
+                upsert=True
+            )
+            
+            # Add to user profile
+            username = user_context.get("username") if user_context else None
+            if username:
+                await self._add_prompt_to_user_profile(username, prompt_id)
+            
+            # Send first 10 to Redis for WebSocket
+            direct_results = {
+                "profiles": profiles[:10],
+                "summary": summary,
+                "session_id": session_id,
+                "analysis_metadata": mongo_document["analysis_metadata"]
+            }
             await self._store_data(session_id, "direct_profiles", direct_results)
             
-            print(f"  ✅ Served {len(profiles)} profiles directly for session {session_id}")
+            print(f"  ✅ Served {len(profiles)} profile references directly for session {session_id}")
             
         except Exception as e:
             print(f"  ❌ Error serving profiles directly for session {session_id}: {e}")
@@ -576,26 +606,35 @@ class Workflow:
     async def scorecard_profiles_with_followup(self, session_id: str, profiles: List[Dict[str, Any]], analysis_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Score and rank profiles based on how well they match words in follow-up question answers.
-        
-        Args:
-            session_id: Unique session identifier
-            profiles: List of profiles to score
-            analysis_result: Analysis result with metadata
-            
-        Returns:
-            list: List of scored and ranked profiles
         """
         try:
             print(f"  📊 Scorecarding {len(profiles)} profiles based on follow-up answers for session {session_id}")
             
-            # Get follow-up answers
-            followup_answers_data = self._get_data(session_id, "followup_answers") or {}
-            followup_answers = followup_answers_data.get("answers", [])
+            # Get follow-up answers - handle different data formats
+            followup_answers_data = self._get_data(session_id, "followup_answers")
+            
+            # Debug: Check what we got
+            print(f"  🔍 followup_answers_data type: {type(followup_answers_data)}")
+            print(f"  🔍 followup_answers_data content: {followup_answers_data}")
+            
+            # Handle different formats
+            if not followup_answers_data:
+                print(f"  ⚠️ No follow-up answers found for session {session_id}")
+                followup_answers = []
+            elif isinstance(followup_answers_data, dict):
+                followup_answers = followup_answers_data.get("answers", [])
+            elif isinstance(followup_answers_data, list):
+                # If it's already a list, use it directly
+                followup_answers = followup_answers_data
+            else:
+                print(f"  ⚠️ Unexpected followup_answers format: {type(followup_answers_data)}")
+                followup_answers = []
             
             if not followup_answers:
-                print(f"  ⚠️ No follow-up answers found for session {session_id}, returning profiles as-is")
+                print(f"  ⚠️ No follow-up answers to process, returning profiles as-is")
                 return profiles
             
+            # Rest of the method stays the same...
             scored_profiles = []
             
             for profile in profiles:
@@ -616,22 +655,25 @@ class Workflow:
                 
                 scored_profiles.append(scored_profile)
             
-            # Sort profiles by description availability (profiles with descriptions first) and then by follow-up match score
+            # Sort profiles by match score
             ranked_profiles = sorted(scored_profiles, key=lambda x: (
-                x.get("description", "") != "No summary available for the profile",  # Profiles with descriptions first
-                x.get("followup_match_score", 0)  # Then by match score
+                x.get("description", "") != "No summary available for the profile",
+                x.get("followup_match_score", 0)
             ), reverse=True)
             
             # Store scorecard results
             await self._store_data(session_id, "scorecard_results", ranked_profiles)
             
             print(f"  ✅ Scorecarding completed for session {session_id}")
-            print(f"  🏆 Top match: {ranked_profiles[0].get('followup_match_percentage', 0)}% - {ranked_profiles[0].get('first_name', 'Unknown')} {ranked_profiles[0].get('last_name', '')}")
+            if ranked_profiles:
+                print(f"  🏆 Top match: {ranked_profiles[0].get('followup_match_percentage', 0)}% - {ranked_profiles[0].get('first_name', 'Unknown')} {ranked_profiles[0].get('last_name', '')}")
             
             return ranked_profiles
             
         except Exception as e:
+            import traceback
             print(f"  ❌ Scorecarding failed for session {session_id}: {e}")
+            print(traceback.format_exc())
             await self._store_data(session_id, "workflow_status", f"error: {str(e)}")
             return profiles  # Return original profiles if scoring fails
     
@@ -855,7 +897,7 @@ class Workflow:
     
     async def _serve_scored_profiles(self, session_id: str, scored_profiles: List[Dict[str, Any]], analysis_result: Dict[str, Any]) -> None:
         """
-        Serve scored and ranked profiles to the user via websocket and store in MongoDB.
+        Serve scored and ranked profiles - stores only profile IDs in MongoDB.
         
         Args:
             session_id: Unique session identifier
@@ -864,6 +906,16 @@ class Workflow:
         """
         try:
             print(f"  📤 Serving {len(scored_profiles)} scored profiles for session {session_id}")
+            
+            # Extract profile references (ID + score only)
+            profile_references = []
+            for profile in scored_profiles:
+                profile_ref = {
+                    "profile_id": str(profile.get("_id")),  # MongoDB ObjectId to string
+                    "match_score": profile.get("followup_match_score", 0),
+                    "match_reasons": profile.get("match_reasons", [])
+                }
+                profile_references.append(profile_ref)
             
             # Create summary with scoring statistics
             if scored_profiles:
@@ -896,20 +948,6 @@ class Workflow:
                 "scoring_method": "followup_word_matching"
             }
             
-            # Create results structure with scored profiles
-            scored_results = {
-                "profiles": scored_profiles,
-                "summary": summary,
-                "session_id": session_id,
-                "analysis_metadata": {
-                    "original_prompt": analysis_result.get("original_prompt", ""),
-                    "extracted_keywords": analysis_result.get("extracted_keywords", []),
-                    "search_criteria": analysis_result.get("search_criteria", {}),
-                    "scoring_applied": True,
-                    "scoring_timestamp": str(asyncio.get_event_loop().time())
-                }
-            }
-            
             # Get user context and prompt from Redis
             user_context = self._get_data(session_id, "user_context")
             prompt = self.redis_manager.get_prompt(session_id)
@@ -917,15 +955,21 @@ class Workflow:
             # Generate unique prompt_id
             prompt_id = str(uuid.uuid4())
             
-            # Create MongoDB document with all required fields
+            # Create MongoDB document with profile REFERENCES only (not full profiles)
             mongo_document = {
                 "prompt_id": prompt_id,
                 "session_id": session_id,
                 "username": user_context.get("username", "unknown") if user_context else "unknown",
                 "prompt": prompt or "",
-                "profiles": scored_profiles,
+                "profile_references": profile_references,  # Store references instead of full profiles
                 "summary": summary,
-                "analysis_metadata": scored_results["analysis_metadata"],
+                "analysis_metadata": {
+                    "original_prompt": analysis_result.get("original_prompt", ""),
+                    "extracted_keywords": analysis_result.get("extracted_keywords", []),
+                    "search_criteria": analysis_result.get("search_criteria", {}),
+                    "scoring_applied": True,
+                    "scoring_timestamp": str(asyncio.get_event_loop().time())
+                },
                 "created_at": datetime.datetime.utcnow(),
                 "total_profiles_found": len(scored_profiles),
                 "profiles_returned": len(scored_profiles)
@@ -937,7 +981,7 @@ class Workflow:
                 {"$set": mongo_document},
                 upsert=True
             )
-            print(f"  💾 Stored results in MongoDB for session {session_id} with prompt_id {prompt_id}")
+            print(f"  💾 Stored {len(profile_references)} profile references in MongoDB for session {session_id}")
             
             # Add prompt_id to user's profile
             username = user_context.get("username") if user_context else None
@@ -946,17 +990,23 @@ class Workflow:
             else:
                 print(f"  ⚠️  Could not add prompt_id to user profile: username not found")
             
-            # Also store in Redis for WebSocket broadcast (temporary, for real-time updates)
+            # For WebSocket real-time updates, still send full profiles to Redis (temporary)
+            scored_results = {
+                "profiles": scored_profiles[:10],  # Send first 10 for initial display
+                "summary": summary,
+                "session_id": session_id,
+                "analysis_metadata": mongo_document["analysis_metadata"]
+            }
             await self._store_data(session_id, "final_results", scored_results)
             
-            print(f"  ✅ Served {len(scored_profiles)} scored profiles for session {session_id}")
+            print(f"  ✅ Served {len(scored_profiles)} scored profile references for session {session_id}")
             print(f"  📊 Average match score: {avg_score:.1%}, Top score: {top_score:.1%}")
             
         except Exception as e:
             print(f"  ❌ Error serving scored profiles for session {session_id}: {e}")
             await self._store_data(session_id, "workflow_status", f"error: {str(e)}")
             raise
-    
+
     def followup_questions(self, session_id: str, analysis_result: Dict[str, Any], profiles: List[Dict[str, Any]]) -> List[str]:
         """
         Generate contextual follow-up questions by asking the model about finding candidates in the data.

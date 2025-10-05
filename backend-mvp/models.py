@@ -1,7 +1,7 @@
 """
 Pydantic models for API requests and responses.
 """
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -106,6 +106,26 @@ class PromptSearchItem(BaseModel):
     prompt: str
     created_at: Optional[str] = None
     highlight: Optional[str] = None  # Text with search term markers
+    
+class ProfileReference(BaseModel):
+    """Reference to a profile in mydatabase/profiles"""
+    profile_id: str = Field(..., description="MongoDB _id from mydatabase/profiles")
+    match_score: Optional[float] = Field(None, description="Match score for this profile")
+    match_reasons: Optional[List[str]] = Field(None, description="Reasons for the match")
+
+class PaginatedResultsResponse(BaseModel):
+    """Response model for paginated results."""
+    session_id: str
+    status: str
+    profiles: List[Dict[str, Any]]  # Actual profile data
+    summary: Dict[str, Any]
+    total_profiles_found: int
+    page: int = Field(..., description="Current page number (1-indexed)")
+    page_size: int = Field(..., description="Number of profiles per page")
+    total_pages: int = Field(..., description="Total number of pages")
+    has_next: bool = Field(..., description="Whether there's a next page")
+    has_prev: bool = Field(..., description="Whether there's a previous page")    
+    
     
 PromptHistoryResponse.update_forward_refs()
 PromptSearchResponse.update_forward_refs()
