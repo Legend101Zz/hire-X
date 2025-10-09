@@ -5,13 +5,14 @@ import asyncio
 import json
 import os
 import uuid
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ai_model import AIModel, HiringPromptParser
 from auth import AuthManager
-from fastapi import (Depends, FastAPI, HTTPException, Query, Request,
-                     WebSocket, WebSocketDisconnect, status)
+from fastapi import (BackgroundTasks, Depends, FastAPI, HTTPException, Query,
+                     Request, WebSocket, WebSocketDisconnect, status)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from hatch_service import HatchService
 from models import (HatchBulkContactRequest, HatchContactRequest,
@@ -24,6 +25,7 @@ from pymongo import MongoClient
 from redis_manager import RedisManager
 from websocket_manager import WebSocketManager
 from workflow import Workflow
+from workflow_v2 import WorkflowV2
 
 
 class API:
@@ -35,6 +37,7 @@ class API:
         self.redis_manager = redis_manager
         self.hatch_service = HatchService(redis_manager)
         self.workflow = Workflow(redis_manager)
+        self.workflow_v2 = WorkflowV2(self.redis_manager)
         self.websocket_manager = WebSocketManager(redis_manager)
         self.auth_manager = AuthManager()
         self.security = HTTPBearer()
@@ -751,8 +754,302 @@ class API:
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error searching prompt history: {str(e)}")
 
-
+        @self.app.post("/api/v2/parse-prompt")
+        async def parse_prompt_v2(
+            request: PromptRequest,
+            background_tasks: BackgroundTasks,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Enhanced prompt parsing with preflight check.
+            Returns session_id immediately and runs workflow in background.
+            """
+            session_id = str(uuid.uuid4())
+            username = current_user.get("sub")
+            
+            # Store in Redis
+            self.redis_manager.store_prompt(session_id, request.prompt)
+            self.redis_manager.store_data(session_id, "user_context", {
+                "username": username,
+                "user_id": current_user.get("user_id")
+            })
+            
+            # Start workflow in background
+            background_tasks.add_task(
+                self.workflow_v2.execute_search_workflow,
+                session_id
+            )
+            
+            return {
+                "session_id": session_id,
+                "message": "Search started",
+                "status": "processing"
+            }
+        
+        @self.app.get("/api/v2/session/{session_id}/status")
+        async def get_session_status_v2(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get real-time status of search workflow.
+            Frontend polls this endpoint for progress updates.
+            """
+            # Verify ownership
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get progress from Redis
+            progress = self.redis_manager.get_data(session_id, "progress_update")
+            
+            if not progress:
+                return {"status": "not_found"}
+            
+            return progress
+        
+        @self.app.get("/api/v2/session/{session_id}/results")
+        async def get_session_results_v2(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get search results with top 10 AI-summarized profiles.
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get from MongoDB
+            prompt_doc = self.workflow_v2.prompts_collection.find_one({"session_id": session_id})
+            
+            if not prompt_doc:
+                raise HTTPException(status_code=404, detail="Results not found")
+            
+            # Get top 10 with AI summaries
+            matched_profiles = prompt_doc["matched_profiles"]
+            ai_summaries = prompt_doc.get("ai_summaries", {})
+            
+            # Merge summaries with profile data
+            results = []
+            for profile in matched_profiles[:10]:
+                profile_id = profile["profile_id"]
+                profile_data = profile.copy()
+                
+                if profile_id in ai_summaries:
+                    profile_data.update(ai_summaries[profile_id])
+                
+                results.append(profile_data)
+            
+            return {
+                "session_id": session_id,
+                "prompt": prompt_doc["prompt"],
+                "total_matches": len(matched_profiles),
+                "results": results,
+                "summary_generation": prompt_doc.get("summary_generation", {}),
+                "preflight_check": prompt_doc.get("preflight_check", {})
+            }
+        
+        @self.app.post("/api/v2/session/{session_id}/load-more")
+        async def load_more_results(
+            session_id: str,
+            batch_size: int = 10,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Generate AI summaries for next batch of profiles.
+            Called when user clicks "Load More".
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            result = await self.workflow_v2.generate_more_summaries(session_id, batch_size)
+            
+            return result
+        
+        @self.app.post("/api/v2/session/{session_id}/refine")
+        async def refine_query(
+            session_id: str,
+            refinements: Dict[str, str],
+            background_tasks: BackgroundTasks,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            User provides refinements after preflight check fails.
+            Restarts workflow with updated filters.
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get original parsed data
+            parsed_data = self.redis_manager.get_data(session_id, "parsed_data")
+            
+            # Apply refinements
+            for filter_name, new_value in refinements.items():
+                parsed_data["strict_params"][filter_name] = [new_value]
+            
+            # Store updated data
+            self.redis_manager.store_data(session_id, "parsed_data", parsed_data)
+            
+            # Restart workflow
+            background_tasks.add_task(
+                self.workflow_v2.execute_search_workflow,
+                session_id
+            )
+            
+            return {"message": "Search restarted with refinements"}
+        
+        @self.app.get("/api/v2/profile/{profile_id}")
+        async def get_full_profile(
+            profile_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get full profile details including CV.
+            """
+            from bson import ObjectId
+            
+            profile = self.workflow_v2.profiles_collection.find_one({
+                "_id": ObjectId(profile_id)
+            })
+            
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+            
+            # Convert ObjectId to string
+            profile["_id"] = str(profile["_id"])
+            
+            return profile
     
+        @self.app.post("/api/v2/test-alternative")
+        async def test_alternative_filter(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Test an alternative filter value.
+            Used during query refinement.
+            """
+            filter_name = request.get("filter_name")
+            value = request.get("value")
+            
+            if not filter_name or not value:
+                raise HTTPException(status_code=400, detail="filter_name and value required")
+            
+            # Use preflight checker to test
+            count = self.workflow_v2.preflight.test_alternative(filter_name, value)
+            
+            return {
+                "filter_name": filter_name,
+                "value": value,
+                "count": count,
+                "viable": count > 0
+            }
+
+        @self.app.get("/api/v2/session/{session_id}/download")
+        async def download_results(
+            session_id: str,
+            format: str = Query("csv", regex="^(csv|pdf|json)$"),
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Download search results in various formats.
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get results
+            prompt_doc = self.workflow_v2.prompts_collection.find_one({"session_id": session_id})
+            
+            if not prompt_doc:
+                raise HTTPException(status_code=404, detail="Results not found")
+            
+            if format == "json":
+                return JSONResponse(content=prompt_doc, default=str)
+            
+            elif format == "csv":
+                # Generate CSV
+                import csv
+                from io import StringIO
+                
+                output = StringIO()
+                writer = csv.writer(output)
+                
+                # Headers
+                writer.writerow([
+                    'Rank', 'Name', 'Title', 'Location', 'Industry', 
+                    'Score', 'Summary', 'Skills', 'LinkedIn'
+                ])
+                
+                # Data
+                for idx, profile in enumerate(prompt_doc['matched_profiles'], 1):
+                    profile_summary = profile.get('profile_summary', {})
+                    ai_summary = prompt_doc.get('ai_summaries', {}).get(profile['profile_id'], {})
+                    
+                    writer.writerow([
+                        idx,
+                        profile_summary.get('name', 'N/A'),
+                        profile_summary.get('title', 'N/A'),
+                        profile_summary.get('location', 'N/A'),
+                        profile_summary.get('industry', 'N/A'),
+                        ai_summary.get('final_score', profile.get('pre_score', 0)),
+                        ai_summary.get('summary', ''),
+                        '',  # Skills - would need to fetch from full profile
+                        ''   # LinkedIn - would need to fetch from full profile
+                    ])
+                
+                output.seek(0)
+                
+                return StreamingResponse(
+                    iter([output.getvalue()]),
+                    media_type="text/csv",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=search_results_{session_id}.csv"
+                    }
+                )
+            
+            else:
+                raise HTTPException(status_code=400, detail=f"Format {format} not supported yet")
+
+        @self.app.post("/api/v2/session/{session_id}/save-candidate")
+        async def save_candidate(
+            session_id: str,
+            profile_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Save a candidate to user's saved list.
+            """
+            username = current_user.get("sub")
+            
+            # Add to user's saved candidates
+            self.workflow_v2.users_collection.update_one(
+                {"username": username},
+                {"$addToSet": {"saved_candidates": profile_id}}
+            )
+            
+            return {"message": "Candidate saved successfully"}
+
+        @self.app.get("/api/v2/user/saved-candidates")
+        async def get_saved_candidates(
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get user's saved candidates.
+            """
+            username = current_user.get("sub")
+            
+            user = self.workflow_v2.users_collection.find_one({"username": username})
+            
+            if not user:
+                return {"candidates": []}
+            
+            saved_ids = user.get("saved_candidates", [])
+            
+            # Fetch full profiles
+            from bson import ObjectId
+            profiles = list(self.workflow_v2.profiles_collection.find({
+                "_id": {"$in": [ObjectId(pid) for pid in saved_ids]}
+            }))
+            
+            # Convert ObjectId to string
+            for profile in profiles:
+                profile["_id"] = str(profile["_id"])
+            
+            return {"candidates": profiles}
         @self.app.post("/hatch/contact", response_model=HatchContactResponse)
         async def get_hatch_contact(
             request: HatchContactRequest,

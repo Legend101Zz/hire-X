@@ -1,6 +1,7 @@
 """
 Pydantic models for API requests and responses.
 """
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
@@ -13,7 +14,7 @@ class PromptRequest(BaseModel):
 class SessionResponse(BaseModel):
     session_id: str
     message: str
-
+    status: str = "processing"
 
 class PromptResponse(BaseModel):
     location: List[str]
@@ -127,5 +128,86 @@ class PaginatedResultsResponse(BaseModel):
     has_prev: bool = Field(..., description="Whether there's a previous page")    
     
     
+# ===== V2 API Models =====
+
+class PreflightCheckResult(BaseModel):
+    """Preflight check results."""
+    viable: bool
+    results_count: int
+    failed_filters: Dict[str, Any] = {}
+    filter_details: Dict[str, Any] = {}
+
+
+class QueryRefinementRequest(BaseModel):
+    """User refinements for failed filters."""
+    refinements: Dict[str, str]  # {"Industry": "Financial Services", "Location": "Mumbai"}
+
+
+class ProgressUpdate(BaseModel):
+    """Real-time progress update."""
+    status: str  # "parsing", "preflight", "searching", "scoring", "ai_ranking", "completed", "error"
+    message: str
+    progress: int  # 0-100
+    data: Optional[Any] = None
+    timestamp: str
+
+
+class ProfileSummary(BaseModel):
+    """Lightweight profile summary."""
+    profile_id: str
+    pre_score: float
+    name: str
+    title: str
+    location: str
+    industry: str
+
+
+class AISummary(BaseModel):
+    """AI-generated summary for a profile."""
+    final_score: int
+    summary: str
+    generated_at: datetime
+
+
+class SearchResultsV2(BaseModel):
+    """V2 search results with lazy summaries."""
+    session_id: str
+    prompt: str
+    total_matches: int
+    results: List[Dict[str, Any]]  # Profiles with AI summaries
+    summary_generation: Dict[str, Any]
+    preflight_check: PreflightCheckResult
+
+
+class LoadMoreResponse(BaseModel):
+    """Response for load-more request."""
+    summaries: Dict[str, AISummary]
+    total_generated: int
+    total_profiles: int
+    has_more: bool
+
+
+class FullProfile(BaseModel):
+    """Full profile with all details."""
+    profile_id: str
+    first_name: str
+    last_name: str
+    title: str
+    location: str
+    city: Optional[str]
+    state: Optional[str]
+    country: str
+    current_industry: str
+    expertise: str
+    education: List[Dict[str, Any]]
+    experience: List[Dict[str, Any]]
+    certifications: Optional[List[Dict[str, Any]]] = []
+    awards: Optional[List[str]] = []
+    publications: Optional[List[Dict[str, Any]]] = []
+    linkedin_url: Optional[str]
+    
+    
 PromptHistoryResponse.update_forward_refs()
 PromptSearchResponse.update_forward_refs()
+
+

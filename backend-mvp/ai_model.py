@@ -3,8 +3,12 @@ AI model operations and prompt parsing logic.
 """
 import json
 import os
+from typing import Any, Dict, List, Protocol
+
 import requests
-from typing import List, Dict, Any, Protocol
+from dotenv import load_dotenv
+
+load_dotenv()  
 
 
 class AIModel(Protocol):
@@ -18,7 +22,7 @@ class Model:
     
     def __init__(self, model_name: str = None):
         self.url = "https://openrouter.ai/api/v1/chat/completions"
-        api_key = os.getenv("OPENROUTER_API_KEY")
+        api_key = os.getenv("OPENROUTER_API_KEY") 
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY environment variable is required")
         self.headers = {
