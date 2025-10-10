@@ -9,7 +9,7 @@ import {
 
 } from 'lucide-react';
 import ProfileCard from './ProfileCard';
-import ProfileModal from './ProfileModal';
+import ProfileModal from './ProfileDetailModal';
 import LoadMoreButton from './LoadMoreButton';
 
 interface ResultsListProps {

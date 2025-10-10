@@ -69,7 +69,7 @@ class WorkflowV2:
             await self._update_status(session_id, "parsing", "Analyzing your requirements...", 10)
             
             parsed_data = self.parser.parse_with_tiers(prompt)
-            await self.redis_manager.store_data(session_id, "parsed_data", parsed_data)
+            self.redis_manager.store_data(session_id, "parsed_data", parsed_data)  # Synchronous - no await
             
             # Step 2: Preflight check
             await self._update_status(session_id, "preflight", "Checking data availability...", 20)
@@ -78,7 +78,7 @@ class WorkflowV2:
                 parsed_data["strict_params"]
             )
             
-            await self.redis_manager.store_data(session_id, "preflight_results", preflight_results)
+            self.redis_manager.store_data(session_id, "preflight_results", preflight_results)  # Synchronous
             
             # If not viable, pause for user input
             if not preflight_results["viable"]:
@@ -193,9 +193,9 @@ class WorkflowV2:
                 {"$push": {"prompts": prompt_id}}
             )
             
-            # Store in Redis for quick access
-            await self.redis_manager.store_data(session_id, "prompt_id", prompt_id)
-            await self.redis_manager.store_data(session_id, "top_results", top_10[:10])
+            # Store in Redis for quick access (synchronous)
+            self.redis_manager.store_data(session_id, "prompt_id", prompt_id)
+            self.redis_manager.store_data(session_id, "top_results", top_10[:10])
             
             # Step 7: Complete
             await self._update_status(session_id, "completed", "Search completed!", 100)
@@ -204,7 +204,9 @@ class WorkflowV2:
             return True
             
         except Exception as e:
+            import traceback
             print(f"❌ Workflow error: {e}")
+            traceback.print_exc()
             await self._update_status(session_id, "error", str(e), 0)
             return False
     
@@ -278,12 +280,59 @@ class WorkflowV2:
             return {"error": str(e)}
     
     async def _update_status(self, session_id: str, status: str, message: str, progress: int, data: Any = None):
-        """Update workflow status in Redis for real-time UI updates."""
-        await self.redis_manager.store_data(session_id, "workflow_status", status)
-        await self.redis_manager.store_data(session_id, "progress_update", {
-            "status": status,
-            "message": message,
-            "progress": progress,
-            "data": data,
-            "timestamp": datetime.datetime.utcnow().isoformat()
-        })
+        """Update workflow status in Redis and publish to WebSocket for real-time UI updates."""
+        try:
+            # Store workflow status (synchronous)
+            self.redis_manager.store_data(session_id, "workflow_status", status)
+            
+            # Create progress update
+            progress_data = {
+                "status": status,
+                "message": message,
+                "progress": progress,
+                "data": data,
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }
+            
+            # Store progress update (synchronous)
+            self.redis_manager.store_data(session_id, "progress_update", progress_data)
+            
+            # Publish to WebSocket (async)
+            await self.redis_manager.publish_session_update(
+                session_id, 
+                "progress_update", 
+                progress_data
+            )
+            
+            print(f"  📡 Published progress update: {status} ({progress}%)")
+            
+        except Exception as e:
+            print(f"  ❌ Error updating status: {e}")
+            """Update workflow status in Redis and publish to WebSocket for real-time UI updates."""
+            try:
+                # Store workflow status
+                self.redis_manager.store_data(session_id, "workflow_status", status)
+                
+                # Create progress update
+                progress_data = {
+                    "status": status,
+                    "message": message,
+                    "progress": progress,
+                    "data": data,
+                    "timestamp": datetime.datetime.utcnow().isoformat()
+                }
+                
+                # Store progress update
+                self.redis_manager.store_data(session_id, "progress_update", progress_data)
+                
+                # Publish to WebSocket
+                await self.redis_manager.publish_session_update(
+                    session_id, 
+                    "progress_update", 
+                    progress_data
+                )
+                
+                print(f"  📡 Published progress update: {status} ({progress}%)")
+                
+            except Exception as e:
+                print(f"  ❌ Error updating status: {e}")

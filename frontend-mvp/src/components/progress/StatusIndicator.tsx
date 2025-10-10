@@ -23,7 +23,6 @@ const statusConfig = {
     },
     processing: {
         icon: Loader2,
-        color: 'text-blue-600',
         bgColor: 'bg-blue-100',
         borderColor: 'border-blue-300',
         animate: true,

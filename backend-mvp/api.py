@@ -940,6 +940,190 @@ class API:
                 "viable": count > 0
             }
 
+        @self.app.post("/api/v2/extract-filters")
+        async def extract_filters(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Extract filters from natural language query in real-time.
+            """
+            try:
+                query = request.get("query", "")
+                
+                if not query or len(query) < 10:
+                    return {"filters": {}}
+                
+                # Use the parser to extract filters
+                parsed = self.workflow_v2.parser.parse_with_tiers(query)
+                
+                # Extract key filters for UI display
+                filters = {}
+                strict_params = parsed.get("strict_params", {})
+                
+                # Map backend filter names to user-friendly names
+                filter_mapping = {
+                    "location": "Location",
+                    "current_industry": "Industry",
+                    "title": "Role",
+                    "years_of_experience": "Experience",
+                    "seniority_level": "Seniority",
+                    "skills": "Skills"
+                }
+                
+                for key, values in strict_params.items():
+                    if values and len(values) > 0:
+                        friendly_key = filter_mapping.get(key, key.replace("_", " ").title())
+                        # Take first value or join multiple
+                        if isinstance(values, list):
+                            filters[friendly_key] = values[0] if len(values) == 1 else ", ".join(values[:3])
+                        else:
+                            filters[friendly_key] = values
+                
+                return {"filters": filters}
+                
+            except Exception as e:
+                print(f"Error extracting filters: {e}")
+                return {"filters": {}}
+            
+        @self.app.post("/api/v2/extract-filters-quick")
+        async def extract_filters_quick(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Quickly extract basic filters using regex (instant).
+            Then enhance with AI in background.
+            """
+            try:
+                query = request.get("query", "").lower()
+                
+                if not query or len(query) < 3:
+                    return {"filters": {}}
+                
+                # Quick extraction using regex patterns
+                filters = {}
+                
+                # Location patterns
+                indian_cities = ['mumbai', 'delhi', 'bangalore', 'hyderabad', 'chennai', 'kolkata', 'pune', 'ahmedabad', 'jaipur', 'lucknow']
+                countries = ['india', 'usa', 'uk', 'canada', 'singapore', 'australia']
+                
+                for city in indian_cities:
+                    if city in query:
+                        filters['location'] = filters.get('location', [])
+                        if city.title() not in filters['location']:
+                            filters['location'].append(city.title())
+                
+                for country in countries:
+                    if country in query:
+                        filters['country'] = filters.get('country', [])
+                        if country.title() not in filters['country']:
+                            filters['country'].append(country.title())
+                
+                # Industry patterns
+                industries = {
+                    'fintech': 'Financial Services',
+                    'finance': 'Financial Services',
+                    'banking': 'Banking',
+                    'healthcare': 'Healthcare',
+                    'pharma': 'Pharmaceuticals',
+                    'it': 'Information Technology',
+                    'software': 'Information Technology',
+                    'tech': 'Technology',
+                    'retail': 'Retail',
+                    'ecommerce': 'E-commerce',
+                    'marketing': 'Marketing & Advertising',
+                    'consulting': 'Management Consulting',
+                    'manufacturing': 'Manufacturing',
+                    'education': 'Education'
+                }
+                
+                for keyword, industry in industries.items():
+                    if keyword in query:
+                        filters['industry'] = filters.get('industry', [])
+                        if industry not in filters['industry']:
+                            filters['industry'].append(industry)
+                
+                # Experience patterns
+                import re
+                exp_patterns = [
+                    r'(\d+)\+?\s*(?:years?|yrs?)',
+                    r'(\d+)-(\d+)\s*(?:years?|yrs?)'
+                ]
+                
+                for pattern in exp_patterns:
+                    matches = re.findall(pattern, query)
+                    if matches:
+                        if isinstance(matches[0], tuple):
+                            filters['experience'] = f"{matches[0][0]}-{matches[0][1]} years"
+                        else:
+                            filters['experience'] = f"{matches[0]}+ years"
+                        break
+                
+                # Seniority patterns
+                seniority_keywords = {
+                    'senior': 'Senior',
+                    'lead': 'Lead',
+                    'principal': 'Principal',
+                    'junior': 'Junior',
+                    'mid': 'Mid-Level',
+                    'entry': 'Entry Level',
+                    'director': 'Director',
+                    'manager': 'Manager',
+                    'head': 'Head',
+                    'vp': 'Vice President',
+                    'cto': 'C-Level',
+                    'ceo': 'C-Level',
+                    'cfo': 'C-Level'
+                }
+                
+                for keyword, level in seniority_keywords.items():
+                    if keyword in query:
+                        filters['seniority'] = level
+                        break
+                
+                # Job title extraction (common roles)
+                common_roles = [
+                    'engineer', 'developer', 'architect', 'designer', 'analyst',
+                    'manager', 'director', 'consultant', 'specialist', 'lead',
+                    'scientist', 'researcher', 'coordinator', 'administrator'
+                ]
+                
+                for role in common_roles:
+                    if role in query:
+                        # Extract surrounding words for context
+                        words = query.split()
+                        for i, word in enumerate(words):
+                            if role in word:
+                                # Get 1-2 words before
+                                start = max(0, i-2)
+                                title_words = words[start:i+1]
+                                filters['title'] = ' '.join(title_words).title()
+                                break
+                        break
+                
+                # Skills extraction (common tech skills)
+                skills = [
+                    'python', 'java', 'javascript', 'react', 'node', 'angular', 'vue',
+                    'sql', 'nosql', 'mongodb', 'postgresql', 'aws', 'azure', 'gcp',
+                    'docker', 'kubernetes', 'ml', 'ai', 'data science', 'machine learning',
+                    'devops', 'agile', 'scrum', 'salesforce', 'sap'
+                ]
+                
+                found_skills = []
+                for skill in skills:
+                    if skill in query:
+                        found_skills.append(skill.upper() if len(skill) <= 3 else skill.title())
+                
+                if found_skills:
+                    filters['skills'] = found_skills[:5]  # Limit to 5
+                
+                return {"filters": filters, "source": "quick"}
+                
+            except Exception as e:
+                print(f"Error in quick filter extraction: {e}")
+                return {"filters": {}}
+            
         @self.app.get("/api/v2/session/{session_id}/download")
         async def download_results(
             session_id: str,

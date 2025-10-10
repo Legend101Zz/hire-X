@@ -3,16 +3,18 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
-import { X, MapPin, Briefcase, Building2, Award } from 'lucide-react';
+import { X, MapPin, Briefcase, Building2, Award, Sparkles } from 'lucide-react';
 
 interface SearchFiltersProps {
     filters: any;
+    extractedFilters: any;
     onChange: (filters: any) => void;
     onClose: () => void;
 }
 
 export default function SearchFilters({
     filters,
+    extractedFilters,
     onChange,
     onClose
 }: SearchFiltersProps) {
@@ -28,7 +30,7 @@ export default function SearchFilters({
         <motion.div
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-2xl border-2 border-gray-200 shadow-xl p-6"
+            className="mt-6 bg-white rounded-2xl border-2 border-gray-200 shadow-xl p-6"
         >
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
@@ -44,37 +46,38 @@ export default function SearchFilters({
                 </button>
             </div>
 
+            {/* Auto-extracted notice */}
+            {Object.keys(extractedFilters).length > 0 && (
+                <div className="mb-6 p-3 bg-purple-50 border border-purple-200 rounded-lg flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 text-purple-600 mt-0.5" />
+                    <div className="text-sm">
+                        <span className="font-medium text-purple-900">AI extracted filters from your query.</span>
+                        <span className="text-purple-700"> You can modify or add more below.</span>
+                    </div>
+                </div>
+            )}
+
             {/* Filters Grid */}
             <div className="grid md:grid-cols-2 gap-6">
                 {/* Location */}
-                <div>
-                    <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
-                        <MapPin className="w-4 h-4 text-blue-600" />
-                        Location
-                    </label>
-                    <input
-                        type="text"
-                        value={filters.location || ''}
-                        onChange={(e) => updateFilter('location', e.target.value)}
-                        placeholder="e.g., Mumbai, Bangalore"
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                </div>
+                <FilterInput
+                    icon={<MapPin className="w-4 h-4 text-blue-600" />}
+                    label="Location"
+                    value={filters.location || ''}
+                    onChange={(val) => updateFilter('location', val)}
+                    placeholder="e.g., Mumbai, Bangalore"
+                    isExtracted={'Location' in extractedFilters}
+                />
 
                 {/* Industry */}
-                <div>
-                    <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
-                        <Building2 className="w-4 h-4 text-blue-600" />
-                        Industry
-                    </label>
-                    <input
-                        type="text"
-                        value={filters.industry || ''}
-                        onChange={(e) => updateFilter('industry', e.target.value)}
-                        placeholder="e.g., Fintech, Healthcare"
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                </div>
+                <FilterInput
+                    icon={<Building2 className="w-4 h-4 text-blue-600" />}
+                    label="Industry"
+                    value={filters.industry || ''}
+                    onChange={(val) => updateFilter('industry', val)}
+                    placeholder="e.g., Fintech, Healthcare"
+                    isExtracted={'Industry' in extractedFilters}
+                />
 
                 {/* Experience */}
                 <div>
@@ -132,5 +135,30 @@ export default function SearchFilters({
                 </button>
             </div>
         </motion.div>
+    );
+}
+
+function FilterInput({ icon, label, value, onChange, placeholder, isExtracted }: any) {
+    return (
+        <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                {icon}
+                {label}
+                {isExtracted && (
+                    <span className="ml-auto flex items-center gap-1 text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded">
+                        <Sparkles className="w-3 h-3" />
+                        AI detected
+                    </span>
+                )}
+            </label>
+            <input
+                type="text"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder={placeholder}
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${isExtracted ? 'border-purple-300 bg-purple-50/30' : 'border-gray-300'
+                    }`}
+            />
+        </div>
     );
 }
