@@ -6,7 +6,21 @@ import Sidebar from '@/components/ui/sidebar';
 import Header from '@/components/ui/header';
 import ProfileModal from '@/components/ui/profile-modal';
 import ContactFetchModal from '@/components/ui/contact-fetch-modal';
-import { SparklesIcon, TrashIcon, CheckIcon, MessageCircle, Phone, Users, Zap } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  SparklesIcon,
+  TrashIcon,
+  CheckIcon,
+  Phone,
+  Zap,
+  Star,
+  Award,
+  MapPin,
+  Building2,
+  ChevronRight,
+  Heart,
+  Loader2
+} from 'lucide-react';
 import { Profile } from '@/types/profile';
 import { fetchSingleContact, fetchBulkContacts, HatchContactResult } from '@/utils/hatchApi';
 
@@ -43,9 +57,9 @@ export default function ShortlistPage() {
     loadShortlistedProfiles();
   }, []);
 
-  // Listen for storage changes
+  // Listen for shortlist updates
   useEffect(() => {
-    const handleStorageChange = () => {
+    const handleShortlistUpdate = () => {
       const stored = localStorage.getItem('shortlistedProfiles');
       if (stored) {
         const profiles = JSON.parse(stored);
@@ -53,8 +67,8 @@ export default function ShortlistPage() {
       }
     };
 
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    window.addEventListener('shortlistUpdated', handleShortlistUpdate);
+    return () => window.removeEventListener('shortlistUpdated', handleShortlistUpdate);
   }, []);
 
   const toggleSelect = (index: number) => {
@@ -62,7 +76,6 @@ export default function ShortlistPage() {
     if (newSelected.has(index)) {
       newSelected.delete(index);
     } else {
-      // Limit to 5 selections for bulk operations
       if (newSelected.size >= 5) {
         alert('You can only select up to 5 candidates for bulk operations');
         return;
@@ -74,11 +87,10 @@ export default function ShortlistPage() {
   };
 
   const selectAll = () => {
-    if (selectedProfiles.size === shortlistedProfiles.length) {
+    if (selectedProfiles.size === Math.min(shortlistedProfiles.length, 5)) {
       setSelectedProfiles(new Set());
       setShowBulkActions(false);
     } else {
-      // Select up to 5 profiles
       const profilesToSelect = shortlistedProfiles.slice(0, 5);
       setSelectedProfiles(new Set(profilesToSelect.map((_, index) => index)));
       setShowBulkActions(true);
@@ -93,6 +105,10 @@ export default function ShortlistPage() {
     setShortlistedProfiles(updatedProfiles);
     localStorage.setItem('shortlistedProfiles', JSON.stringify(updatedProfiles));
 
+    window.dispatchEvent(new CustomEvent('shortlistUpdated', {
+      detail: { count: updatedProfiles.length }
+    }));
+
     const newSelected = new Set(selectedProfiles);
     newSelected.delete(index);
     setSelectedProfiles(newSelected);
@@ -103,6 +119,11 @@ export default function ShortlistPage() {
     const updatedProfiles = shortlistedProfiles.filter((_, index) => !selectedProfiles.has(index));
     setShortlistedProfiles(updatedProfiles);
     localStorage.setItem('shortlistedProfiles', JSON.stringify(updatedProfiles));
+
+    window.dispatchEvent(new CustomEvent('shortlistUpdated', {
+      detail: { count: updatedProfiles.length }
+    }));
+
     setSelectedProfiles(new Set());
     setShowBulkActions(false);
   };
@@ -117,25 +138,23 @@ export default function ShortlistPage() {
     setSelectedProfile(null);
   };
 
-  // Handle single candidate contact fetch
   const handleSingleContactFetch = async (profile: Profile, index: number) => {
-    const profileId = profile._id || profile.sessionId || `temp_${index}`;
-    const name = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unknown';
-    const currentRole = profile.experience?.find(exp => exp.current === 1)?.title || profile.title;
+    const profileId = profile._id || profile.profile_id || `temp_${index}`;
+    const name = profile.name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unknown';
+    const currentRole = profile.title || profile.experience?.find((exp: any) => exp.current === 1)?.title;
 
     setContactFetchCandidates([{ id: profileId, name, currentRole }]);
     setContactFetchResults([]);
     setIsContactFetchModalOpen(true);
   };
 
-  // Handle bulk contact fetch
   const handleBulkContactFetch = () => {
     const selectedProfilesList = Array.from(selectedProfiles)
       .map(index => {
         const profile = shortlistedProfiles[index];
-        const profileId = profile._id || profile.sessionId || `temp_${index}`;
-        const name = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unknown';
-        const currentRole = profile.experience?.find(exp => exp.current === 1)?.title || profile.title;
+        const profileId = profile._id || profile.profile_id || `temp_${index}`;
+        const name = profile.name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unknown';
+        const currentRole = profile.title || profile.experience?.find((exp: any) => exp.current === 1)?.title;
 
         return { id: profileId, name, currentRole };
       });
@@ -145,24 +164,20 @@ export default function ShortlistPage() {
     setIsContactFetchModalOpen(true);
   };
 
-  // Fetch contacts from API
   const fetchContacts = async () => {
     setFetchingContacts(true);
     setContactFetchResults([]);
 
     try {
-      // Get auth token
       const token = localStorage.getItem('token');
       if (!token) {
         alert('Please log in to fetch contact information');
         return;
       }
 
-      // Generate session ID
       const sessionId = `shortlist_${Date.now()}`;
 
       if (contactFetchCandidates.length === 1) {
-        // Single contact fetch
         const result = await fetchSingleContact(
           contactFetchCandidates[0].id,
           sessionId,
@@ -170,7 +185,6 @@ export default function ShortlistPage() {
         );
         setContactFetchResults([result]);
       } else {
-        // Bulk contact fetch
         const profileIds = contactFetchCandidates.map(c => c.id);
         const response = await fetchBulkContacts(profileIds, sessionId, token);
         setContactFetchResults(response.results);
@@ -183,16 +197,12 @@ export default function ShortlistPage() {
     }
   };
 
-  const highlightKeywords = (text: string) => {
-    const keywords = ['over two decades of experience', 'low-latency, high-capacity trading systems', 'distributed systems', 'Go', 'financial sector', 'financial services domain'];
-
-    let highlightedText = text;
-    keywords.forEach(keyword => {
-      const regex = new RegExp(`(${keyword})`, 'gi');
-      highlightedText = highlightedText.replace(regex, '<span class="bg-yellow-200 font-medium">$1</span>');
-    });
-
-    return highlightedText;
+  // Get score color
+  const getScoreColor = (score: number) => {
+    if (score >= 80) return 'from-green-500 to-emerald-500';
+    if (score >= 60) return 'from-blue-500 to-cyan-500';
+    if (score >= 40) return 'from-yellow-500 to-orange-500';
+    return 'from-gray-500 to-gray-600';
   };
 
   if (loading) {
@@ -202,8 +212,8 @@ export default function ShortlistPage() {
           <Header />
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-violet-600 mx-auto mb-4"></div>
-              <p className="text-violet-700 font-medium">Loading shortlist...</p>
+              <Loader2 className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
+              <p className="text-gray-600 font-medium">Loading shortlist...</p>
             </div>
           </div>
         </div>
@@ -214,181 +224,223 @@ export default function ShortlistPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="flex flex-col overflow-hidden pl-64">
-        <div className="flex-1 bg-white">
-          {/* Header with count and actions */}
-          <div className="border-b border-gray-200 px-6 py-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
-                <h2 className="text-lg font-semibold text-gray-900">
-                  Shortlisted Candidates ({shortlistedProfiles.length})
-                </h2>
-                {shortlistedProfiles.length > 0 && (
-                  <label className="flex items-center">
-                    <input
-                      type="checkbox"
-                      checked={selectedProfiles.size === Math.min(shortlistedProfiles.length, 5)}
-                      onChange={selectAll}
-                      className="w-4 h-4 text-violet-600 border-gray-300 rounded focus:ring-violet-500"
-                    />
-                    <span className="ml-2 text-sm text-gray-600">
-                      Select {shortlistedProfiles.length > 5 ? 'First 5' : 'All'}
-                    </span>
-                  </label>
-                )}
-              </div>
+      <div className="flex">
+        <Sidebar />
+        <div className="flex-1 ml-64">
 
-              <div className="flex items-center space-x-3">
-                {/* Bulk Fetch Contacts Button */}
-                {showBulkActions && (
-                  <button
-                    onClick={handleBulkContactFetch}
-                    className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium"
-                  >
-                    <Zap className="w-4 h-4 mr-2" />
-                    Fetch Contacts ({selectedProfiles.size})
-                  </button>
-                )}
 
-                {/* Bulk Remove */}
-                {showBulkActions && (
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={removeSelectedFromShortlist}
-                      className="flex items-center px-3 py-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors"
-                    >
-                      <TrashIcon className="w-4 h-4 mr-1" />
-                      Remove Selected
-                    </button>
+          <div className="max-w-7xl mx-auto px-4 py-8">
+            {/* Header */}
+            <div className="mb-8">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white rounded-2xl shadow-lg p-6 border-2 border-gray-100"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-3xl font-bold text-gray-900 mb-2">
+                      Shortlisted Candidates
+                    </h1>
+                    <p className="text-gray-600">
+                      {shortlistedProfiles.length} candidate{shortlistedProfiles.length !== 1 ? 's' : ''} in your shortlist
+                    </p>
                   </div>
-                )}
-              </div>
-            </div>
-          </div>
 
-          {/* Content */}
-          {shortlistedProfiles.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center max-w-md mx-auto">
-                <div className="w-16 h-16 bg-violet-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <CheckIcon className="w-8 h-8 text-violet-600" />
+                  {shortlistedProfiles.length > 0 && (
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={selectAll}
+                        className="flex items-center gap-2 px-4 py-2 border-2 border-gray-300 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-all text-sm font-medium"
+                      >
+                        <CheckIcon className="w-4 h-4" />
+                        Select {shortlistedProfiles.length > 5 ? 'First 5' : 'All'}
+                      </button>
+
+                      {showBulkActions && (
+                        <>
+                          <button
+                            onClick={handleBulkContactFetch}
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
+                          >
+                            <Zap className="w-4 h-4" />
+                            Fetch Contacts ({selectedProfiles.size})
+                          </button>
+
+                          <button
+                            onClick={removeSelectedFromShortlist}
+                            className="flex items-center gap-2 px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors font-medium"
+                          >
+                            <TrashIcon className="w-4 h-4" />
+                            Remove Selected
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <h3 className="text-lg font-medium text-gray-900 mb-2">No shortlisted candidates</h3>
-                <p className="text-gray-600 mb-6">
-                  Start by searching for candidates and adding them to your shortlist.
-                  You can shortlist candidates by clicking the &quot;Shortlist&quot; button on their profile cards.
-                </p>
-                <Link
-                  href="/"
-                  className="inline-flex items-center px-4 py-2 bg-violet-600 text-white rounded-md hover:bg-violet-700 transition-colors"
-                >
-                  <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
-                  </svg>
-                  Start Searching
-                </Link>
-              </div>
+              </motion.div>
             </div>
-          ) : (
-            <div className="p-6 space-y-6">
-              {shortlistedProfiles.map((profile, index) => {
-                const isSelected = selectedProfiles.has(index);
-                const currentRole = (profile.experience?.find(exp => exp.current === 1)?.title || profile.title || 'N/A').toString();
-                const education = (profile.education?.[0]?.major || profile.education?.[0]?.campus || 'N/A').toString();
-                const summary = profile.summary && profile.summary !== 'NA' ? profile.summary :
-                  `${profile.first_name || ''} ${profile.last_name || ''}`.trim() +
-                  `'s has missing description, so no summary available for the profile`;
 
-                return (
-                  <div
-                    key={index}
-                    className={`border rounded-lg p-6 hover:shadow-md transition-all ${isSelected ? 'border-violet-300 bg-violet-50' : 'border-gray-200'
-                      }`}
+            {/* Content */}
+            {shortlistedProfiles.length === 0 ? (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-white rounded-2xl shadow-lg p-12 text-center border-2 border-gray-100"
+              >
+                <div className="max-w-md mx-auto">
+                  <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <Heart className="w-10 h-10 text-blue-600" />
+                  </div>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-3">No shortlisted candidates</h3>
+                  <p className="text-gray-600 mb-8">
+                    Start by searching for candidates and adding them to your shortlist.
+                    Click the heart icon on any candidate card to add them here.
+                  </p>
+                  <Link
+                    href="/"
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg"
                   >
-                    <div className="flex items-start space-x-4">
-                      {/* Checkbox */}
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          toggleSelect(index);
-                        }}
-                        className="mt-1 w-4 h-4 text-violet-600 border-gray-300 rounded focus:ring-violet-500"
-                      />
+                    <SparklesIcon className="w-5 h-5" />
+                    Start Searching
+                  </Link>
+                </div>
+              </motion.div>
+            ) : (
+              <div className="space-y-4">
+                {shortlistedProfiles.map((profile, index) => {
+                  const isSelected = selectedProfiles.has(index);
+                  const score = profile.final_score || profile.pre_score || 0;
+                  const isAIRanked = profile.final_score !== undefined && profile.summary;
+                  const name = profile.name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unknown';
+                  const title = profile.title || 'N/A';
+                  const location = profile.location || 'N/A';
+                  const industry = profile.industry || profile.current_industry || 'N/A';
 
-                      {/* Profile Content */}
-                      <div className="flex-1">
-                        {/* Header */}
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-2 mb-1">
-                              <h3
-                                className="text-lg font-semibold text-gray-900 cursor-pointer hover:text-violet-600"
-                                onClick={() => openProfileModal(profile)}
-                              >
-                                {`${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Profile Name'}
-                              </h3>
-                              <div className="flex items-center space-x-2">
-                                {profile.linkedin_url && (
-                                  <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-blue-600">
-                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                      <path fillRule="evenodd" d="M16.338 16.338H13.67V12.16c0-.995-.017-2.277-1.387-2.277-1.39 0-1.601 1.086-1.601 2.207v4.248H8.014v-8.59h2.559v1.174h.037c.356-.675 1.227-1.387 2.526-1.387 2.703 0 3.203 1.778 3.203 4.092v4.711zM5.005 6.575a1.548 1.548 0 11-.003-3.096 1.548 1.548 0 01.003 3.096zm-1.337 9.763H6.34v-8.59H3.667v8.59zM17.668 1H2.328C1.595 1 1 1.581 1 2.298v15.403C1 18.418 1.595 19 2.328 19h15.34c.734 0 1.332-.582 1.332-1.299V2.298C19 1.581 18.402 1 17.668 1z" clipRule="evenodd" />
-                                    </svg>
-                                  </a>
+                  return (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.05 }}
+                      className={`bg-white rounded-2xl border-2 p-6 transition-all ${isSelected ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                    >
+                      <div className="flex items-start gap-4">
+                        {/* Checkbox */}
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(index)}
+                          className="mt-1 w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                        />
+
+                        {/* Profile Content */}
+                        <div className="flex-1">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3 mb-2">
+                                <h3
+                                  onClick={() => openProfileModal(profile)}
+                                  className="text-xl font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors"
+                                >
+                                  {name}
+                                </h3>
+
+                                {/* AI Ranked Badge */}
+                                {isAIRanked && (
+                                  <div className="flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold">
+                                    <Star className="w-3 h-3" />
+                                    AI ANALYZED
+                                  </div>
                                 )}
                               </div>
+
+                              <p className="text-gray-700 font-medium mb-2">{title}</p>
+
+                              <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500">
+                                <div className="flex items-center gap-1">
+                                  <MapPin className="w-4 h-4" />
+                                  {location}
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <Building2 className="w-4 h-4" />
+                                  {industry}
+                                </div>
+                              </div>
+
+                              {profile.shortlistedAt && (
+                                <p className="text-xs text-gray-500 mt-2">
+                                  Shortlisted on {new Date(profile.shortlistedAt).toLocaleDateString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    year: 'numeric'
+                                  })}
+                                </p>
+                              )}
                             </div>
-                            <p className="text-sm font-medium text-gray-800">{currentRole} • <span className="text-gray-600">{profile.location?.toString() || 'N/A'}</span></p>
-                            <p className="text-sm text-gray-900">{education}</p>
-                            {profile.shortlistedAt && (
-                              <p className="text-xs text-violet-600 mt-1">
-                                Shortlisted on {new Date(profile.shortlistedAt).toLocaleDateString()}
-                              </p>
-                            )}
+
+                            {/* Score Badge */}
+                            <div className={`ml-4 flex-shrink-0 px-4 py-2 rounded-xl bg-gradient-to-r ${getScoreColor(score)} text-white shadow-lg`}>
+                              <div className="text-center">
+                                <div className="text-2xl font-bold">{score}</div>
+                                <div className="text-xs opacity-90">
+                                  {isAIRanked ? 'AI Score' : 'Score'}
+                                </div>
+                              </div>
+                            </div>
                           </div>
+
+                          {/* AI Summary */}
+                          {isAIRanked && profile.summary && profile.summary !== 'NA' && (
+                            <div className="mt-4 p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl border border-purple-200">
+                              <div className="flex items-start gap-2">
+                                <SparklesIcon className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" />
+                                <p className="text-sm text-gray-700 leading-relaxed">
+                                  {profile.summary}
+                                </p>
+                              </div>
+                            </div>
+                          )}
 
                           {/* Actions */}
-                          <div className="flex items-center space-x-2">
+                          <div className="mt-4 flex items-center justify-between">
                             <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleSingleContactFetch(profile, index);
-                              }}
-                              className="flex items-center px-3 py-1 bg-green-100 text-green-700 rounded-md hover:bg-green-200 transition-colors"
-                              title="Fetch contact info"
+                              onClick={() => openProfileModal(profile)}
+                              className="flex items-center gap-2 text-blue-600 font-medium text-sm hover:gap-3 transition-all"
                             >
-                              <Phone className="w-4 h-4 mr-1" />
-                              Get Contact
+                              View Full Profile
+                              <ChevronRight className="w-4 h-4" />
                             </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeFromShortlist(index);
-                              }}
-                              className="flex items-center px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors"
-                            >
-                              <TrashIcon className="w-4 h-4 mr-1" />
-                              Remove
-                            </button>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleSingleContactFetch(profile, index)}
+                                className="flex items-center gap-2 px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors text-sm font-medium"
+                              >
+                                <Phone className="w-4 h-4" />
+                                Get Contact
+                              </button>
+                              <button
+                                onClick={() => removeFromShortlist(index)}
+                                className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium"
+                              >
+                                <TrashIcon className="w-4 h-4" />
+                                Remove
+                              </button>
+                            </div>
                           </div>
                         </div>
-
-                        {/* Summary */}
-                        <div className="text-sm text-violet-700 leading-relaxed flex items-start">
-                          <SparklesIcon className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" />
-                          <span dangerouslySetInnerHTML={{ __html: highlightKeywords(summary) }} />
-                        </div>
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-      <Sidebar />
 
       {/* Profile Modal */}
       <ProfileModal

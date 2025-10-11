@@ -226,7 +226,6 @@ export default function Sidebar({ className = '' }: SidebarProps) {
 
       if (response.ok) {
         const data: PromptHistoryResponse = await response.json();
-
         if (append) {
           setPromptHistory(prev => [...prev, ...data.prompts]);
         } else {
@@ -310,7 +309,7 @@ export default function Sidebar({ className = '' }: SidebarProps) {
   };
 
   const handlePromptClick = (sessionId: string) => {
-    router.push(`/results/${sessionId}`);
+    router.push(`/results?session=${sessionId}`);
   };
 
   const renderHighlightedText = (text: string, highlight?: string) => {

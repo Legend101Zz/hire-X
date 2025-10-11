@@ -27,7 +27,7 @@ function ResultsPageContent() {
             <div className="flex">
                 <Sidebar />
                 <div className="flex-1 ml-64">
-                    <Header />
+
                     <ResultsContent sessionId={sessionId} />
                 </div>
             </div>

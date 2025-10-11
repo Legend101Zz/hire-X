@@ -602,15 +602,6 @@ class API:
         ):
             """
             Get full prompt history for the current user with pagination and optional search.
-            
-            Args:
-                limit: Number of prompts to return (1-20, default 5)
-                offset: Pagination offset (default 0)
-                search: Optional search query to filter prompts
-                current_user: Authenticated user information from JWT token
-                
-            Returns:
-                PromptHistoryResponse: List of prompts with pagination info
             """
             try:
                 username = current_user.get("sub")
@@ -629,8 +620,8 @@ class API:
                         has_more=False
                     )
                 
-                # Build query for prompts collection
-                query = {"session_id": {"$in": prompt_ids}}
+                # Build query for prompts collection - USE prompt_id, not session_id
+                query = {"prompt_id": {"$in": prompt_ids}}
                 
                 # Add search filter if provided
                 if search:
@@ -642,7 +633,15 @@ class API:
                 # Get paginated prompts, sorted by created_at descending
                 cursor = self.prompts_collection.find(
                     query,
-                    {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "status": 1, "_id": 0}
+                    {
+                        "prompt": 1, 
+                        "session_id": 1, 
+                        "created_at": 1, 
+                        "prompt_id": 1, 
+                        "query_status": 1,
+                        "summary_generation": 1,
+                        "_id": 0
+                    }
                 ).sort("created_at", -1).skip(offset).limit(limit)
                 
                 prompts_list = list(cursor)
@@ -656,12 +655,15 @@ class API:
                     elif created_at:
                         created_at = str(created_at)
                     
+                    # Get status from query_status field
+                    status = prompt_doc.get("query_status", "completed")
+                    
                     formatted_prompts.append(PromptHistoryItem(
-                        prompt_id=prompt_doc.get("prompt_id", prompt_doc.get("session_id")),
+                        prompt_id=prompt_doc.get("prompt_id"),
                         session_id=prompt_doc.get("session_id"),
                         prompt=prompt_doc.get("prompt", ""),
                         created_at=created_at,
-                        status=prompt_doc.get("status", "completed")
+                        status=status
                     ))
                 
                 has_more = (offset + limit) < total
@@ -677,8 +679,11 @@ class API:
             except HTTPException:
                 raise
             except Exception as e:
+                print(f"❌ Error retrieving prompt history: {e}")
+                import traceback
+                traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Error retrieving prompt history: {str(e)}")
-    
+
         @self.app.get("/user/prompt-history/search", response_model=PromptSearchResponse)
         async def search_prompt_history(
             q: str = Query(..., min_length=1, description="Search query"),
@@ -687,14 +692,6 @@ class API:
         ):
             """
             Search through user's prompt history.
-            
-            Args:
-                q: Search query (required, min 1 character)
-                limit: Maximum number of results (1-20, default 10)
-                current_user: Authenticated user information from JWT token
-                
-            Returns:
-                PromptSearchResponse: Search results with highlighted text
             """
             try:
                 username = current_user.get("sub")
@@ -707,9 +704,9 @@ class API:
                 if not prompt_ids:
                     return PromptSearchResponse(results=[], total=0, query=q)
                 
-                # Search in user's prompts
+                # Search in user's prompts - USE prompt_id, not session_id
                 query = {
-                    "session_id": {"$in": prompt_ids},
+                    "prompt_id": {"$in": prompt_ids},
                     "prompt": {"$regex": q, "$options": "i"}
                 }
                 
@@ -717,7 +714,13 @@ class API:
                 
                 cursor = self.prompts_collection.find(
                     query,
-                    {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "_id": 0}
+                    {
+                        "prompt": 1, 
+                        "session_id": 1, 
+                        "created_at": 1, 
+                        "prompt_id": 1, 
+                        "_id": 0
+                    }
                 ).sort("created_at", -1).limit(limit)
                 
                 prompts_list = list(cursor)
@@ -736,7 +739,7 @@ class API:
                     highlight = self._highlight_search_term(prompt_text, q)
                     
                     results.append(PromptSearchItem(
-                        prompt_id=prompt_doc.get("prompt_id", prompt_doc.get("session_id")),
+                        prompt_id=prompt_doc.get("prompt_id"),
                         session_id=prompt_doc.get("session_id"),
                         prompt=prompt_text,
                         created_at=created_at,
@@ -752,8 +755,10 @@ class API:
             except HTTPException:
                 raise
             except Exception as e:
+                print(f"❌ Error searching prompt history: {e}")
+                import traceback
+                traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Error searching prompt history: {str(e)}")
-
         @self.app.post("/api/v2/parse-prompt")
         async def parse_prompt_v2(
             request: PromptRequest,

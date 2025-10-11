@@ -6,22 +6,81 @@ import {
     MapPin,
     Building2,
     Sparkles,
-    TrendingUp,
     ChevronRight,
     Star,
-    Award
+    Heart,
+    Check
 } from 'lucide-react';
+import { useState, useEffect } from 'react';
 
 interface CandidateCardProps {
     profile: any;
     rank: number;
     isAIRanked: boolean;
     onClick: () => void;
+    onShortlist?: (profile: any) => void;
 }
 
-export default function CandidateCard({ profile, rank, isAIRanked, onClick }: CandidateCardProps) {
+export default function CandidateCard({ profile, rank, isAIRanked, onClick, onShortlist }: CandidateCardProps) {
+    const [isShortlisted, setIsShortlisted] = useState(false);
     const score = isAIRanked ? profile.final_score : profile.pre_score;
     const summary = profile.profile_summary;
+
+    // Check if already shortlisted
+    useEffect(() => {
+        const checkShortlisted = () => {
+            try {
+                const existingShortlist = JSON.parse(localStorage.getItem('shortlistedProfiles') || '[]');
+                const isInShortlist = existingShortlist.some((p: any) => p.profile_id === profile.profile_id);
+                setIsShortlisted(isInShortlist);
+            } catch (error) {
+                console.error('Error checking shortlist:', error);
+            }
+        };
+
+        checkShortlisted();
+
+        // Listen for shortlist updates
+        const handleShortlistUpdate = () => checkShortlisted();
+        window.addEventListener('shortlistUpdated', handleShortlistUpdate);
+        return () => window.removeEventListener('shortlistUpdated', handleShortlistUpdate);
+    }, [profile.profile_id]);
+
+    const handleShortlist = (e: React.MouseEvent) => {
+        e.stopPropagation();
+
+        try {
+            const existingShortlist = JSON.parse(localStorage.getItem('shortlistedProfiles') || '[]');
+
+            if (isShortlisted) {
+                // Remove from shortlist
+                const updatedShortlist = existingShortlist.filter((p: any) => p.profile_id !== profile.profile_id);
+                localStorage.setItem('shortlistedProfiles', JSON.stringify(updatedShortlist));
+                setIsShortlisted(false);
+            } else {
+                // Add to shortlist
+                const profileToAdd = {
+                    ...profile,
+                    ...summary,
+                    shortlistedAt: new Date().toISOString()
+                };
+                existingShortlist.push(profileToAdd);
+                localStorage.setItem('shortlistedProfiles', JSON.stringify(existingShortlist));
+                setIsShortlisted(true);
+            }
+
+            // Dispatch event
+            window.dispatchEvent(new CustomEvent('shortlistUpdated', {
+                detail: { count: isShortlisted ? existingShortlist.length - 1 : existingShortlist.length + 1 }
+            }));
+
+            if (onShortlist) {
+                onShortlist(profile);
+            }
+        } catch (error) {
+            console.error('Error updating shortlist:', error);
+        }
+    };
 
     // Score color
     const getScoreColor = (score: number) => {
@@ -36,8 +95,7 @@ export default function CandidateCard({ profile, rank, isAIRanked, onClick }: Ca
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             whileHover={{ y: -4, shadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
-            onClick={onClick}
-            className="bg-white rounded-2xl border-2 border-gray-200 hover:border-blue-300 p-6 cursor-pointer transition-all group"
+            className="bg-white rounded-2xl border-2 border-gray-200 hover:border-blue-300 p-6 transition-all group relative"
         >
             <div className="flex items-start gap-4">
                 {/* Rank Badge */}
@@ -55,9 +113,31 @@ export default function CandidateCard({ profile, rank, isAIRanked, onClick }: Ca
                 <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between mb-3">
                         <div className="flex-1 min-w-0">
-                            <h3 className="text-xl font-bold text-gray-900 mb-1 group-hover:text-blue-600 transition-colors">
-                                {summary.name}
-                            </h3>
+                            <div className="flex items-center gap-2 mb-2">
+                                <h3
+                                    onClick={onClick}
+                                    className="text-xl font-bold text-gray-900 group-hover:text-blue-600 transition-colors cursor-pointer"
+                                >
+                                    {summary.name}
+                                </h3>
+
+                                {/* Shortlist Button */}
+                                <button
+                                    onClick={handleShortlist}
+                                    className={`p-2 rounded-lg transition-all ${isShortlisted
+                                            ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                                            : 'bg-gray-100 text-gray-400 hover:bg-blue-100 hover:text-blue-600'
+                                        }`}
+                                    title={isShortlisted ? 'Remove from shortlist' : 'Add to shortlist'}
+                                >
+                                    {isShortlisted ? (
+                                        <Check className="w-5 h-5" />
+                                    ) : (
+                                        <Heart className="w-5 h-5" />
+                                    )}
+                                </button>
+                            </div>
+
                             <p className="text-gray-600 mb-2">{summary.title}</p>
 
                             <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500">
@@ -99,10 +179,13 @@ export default function CandidateCard({ profile, rank, isAIRanked, onClick }: Ca
 
                     {/* View Details Button */}
                     <div className="mt-4 flex items-center justify-end">
-                        <div className="flex items-center gap-2 text-blue-600 font-medium text-sm group-hover:gap-3 transition-all">
+                        <button
+                            onClick={onClick}
+                            className="flex items-center gap-2 text-blue-600 font-medium text-sm group-hover:gap-3 transition-all"
+                        >
                             View Full Profile
                             <ChevronRight className="w-4 h-4" />
-                        </div>
+                        </button>
                     </div>
                 </div>
             </div>

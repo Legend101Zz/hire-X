@@ -111,7 +111,7 @@ export default function PromptPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
       <Header />
-      <div className="max-w-5xl mx-auto px-4 py-25">
+      <div className="max-w-5xl mx-auto px-4 py-30">
         {/* Hero Text with Typewriter Effect */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -178,44 +178,7 @@ export default function PromptPage() {
           </div>
         </motion.div>
 
-        {/* Feature Highlights */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.8 }}
-          className="mt-20 grid grid-cols-1 md:grid-cols-3 gap-6 text-center"
-        >
-          <div className="group">
-            <motion.div
-              whileHover={{ scale: 1.1, rotate: 5 }}
-              className="text-4xl mb-3 inline-block"
-            >
-              ⚡
-            </motion.div>
-            <h3 className="font-semibold text-gray-800 mb-1">Instant Results</h3>
-            <p className="text-sm text-gray-600">Get matched candidates in seconds</p>
-          </div>
-          <div className="group">
-            <motion.div
-              whileHover={{ scale: 1.1, rotate: -5 }}
-              className="text-4xl mb-3 inline-block"
-            >
-              🎯
-            </motion.div>
-            <h3 className="font-semibold text-gray-800 mb-1">Smart Matching</h3>
-            <p className="text-sm text-gray-600">AI-powered relevance scoring</p>
-          </div>
-          <div className="group">
-            <motion.div
-              whileHover={{ scale: 1.1, rotate: 5 }}
-              className="text-4xl mb-3 inline-block"
-            >
-              ✨
-            </motion.div>
-            <h3 className="font-semibold text-gray-800 mb-1">Auto Filters</h3>
-            <p className="text-sm text-gray-600">Intelligent filter extraction</p>
-          </div>
-        </motion.div>
+
       </div>
 
       {/* Modals */}
