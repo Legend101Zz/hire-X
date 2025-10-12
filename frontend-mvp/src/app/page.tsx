@@ -1,4 +1,4 @@
-import PromptPage from "@/components/ui/prompt";
+import PromptPage from "@/components/PromptPage";
 import ProtectedRoute from "@/components/ProtectedRoute";
 
 export default function Home() {

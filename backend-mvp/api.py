@@ -5,13 +5,14 @@ import asyncio
 import json
 import os
 import uuid
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ai_model import AIModel, HiringPromptParser
 from auth import AuthManager
-from fastapi import (Depends, FastAPI, HTTPException, Query, Request,
-                     WebSocket, WebSocketDisconnect, status)
+from fastapi import (BackgroundTasks, Depends, FastAPI, HTTPException, Query,
+                     Request, WebSocket, WebSocketDisconnect, status)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from hatch_service import HatchService
 from models import (HatchBulkContactRequest, HatchContactRequest,
@@ -24,6 +25,7 @@ from pymongo import MongoClient
 from redis_manager import RedisManager
 from websocket_manager import WebSocketManager
 from workflow import Workflow
+from workflow_v2 import WorkflowV2
 
 
 class API:
@@ -35,6 +37,7 @@ class API:
         self.redis_manager = redis_manager
         self.hatch_service = HatchService(redis_manager)
         self.workflow = Workflow(redis_manager)
+        self.workflow_v2 = WorkflowV2(self.redis_manager)
         self.websocket_manager = WebSocketManager(redis_manager)
         self.auth_manager = AuthManager()
         self.security = HTTPBearer()
@@ -599,15 +602,6 @@ class API:
         ):
             """
             Get full prompt history for the current user with pagination and optional search.
-            
-            Args:
-                limit: Number of prompts to return (1-20, default 5)
-                offset: Pagination offset (default 0)
-                search: Optional search query to filter prompts
-                current_user: Authenticated user information from JWT token
-                
-            Returns:
-                PromptHistoryResponse: List of prompts with pagination info
             """
             try:
                 username = current_user.get("sub")
@@ -626,8 +620,8 @@ class API:
                         has_more=False
                     )
                 
-                # Build query for prompts collection
-                query = {"session_id": {"$in": prompt_ids}}
+                # Build query for prompts collection - USE prompt_id, not session_id
+                query = {"prompt_id": {"$in": prompt_ids}}
                 
                 # Add search filter if provided
                 if search:
@@ -639,7 +633,15 @@ class API:
                 # Get paginated prompts, sorted by created_at descending
                 cursor = self.prompts_collection.find(
                     query,
-                    {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "status": 1, "_id": 0}
+                    {
+                        "prompt": 1, 
+                        "session_id": 1, 
+                        "created_at": 1, 
+                        "prompt_id": 1, 
+                        "query_status": 1,
+                        "summary_generation": 1,
+                        "_id": 0
+                    }
                 ).sort("created_at", -1).skip(offset).limit(limit)
                 
                 prompts_list = list(cursor)
@@ -653,12 +655,15 @@ class API:
                     elif created_at:
                         created_at = str(created_at)
                     
+                    # Get status from query_status field
+                    status = prompt_doc.get("query_status", "completed")
+                    
                     formatted_prompts.append(PromptHistoryItem(
-                        prompt_id=prompt_doc.get("prompt_id", prompt_doc.get("session_id")),
+                        prompt_id=prompt_doc.get("prompt_id"),
                         session_id=prompt_doc.get("session_id"),
                         prompt=prompt_doc.get("prompt", ""),
                         created_at=created_at,
-                        status=prompt_doc.get("status", "completed")
+                        status=status
                     ))
                 
                 has_more = (offset + limit) < total
@@ -674,8 +679,11 @@ class API:
             except HTTPException:
                 raise
             except Exception as e:
+                print(f"❌ Error retrieving prompt history: {e}")
+                import traceback
+                traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Error retrieving prompt history: {str(e)}")
-    
+
         @self.app.get("/user/prompt-history/search", response_model=PromptSearchResponse)
         async def search_prompt_history(
             q: str = Query(..., min_length=1, description="Search query"),
@@ -684,14 +692,6 @@ class API:
         ):
             """
             Search through user's prompt history.
-            
-            Args:
-                q: Search query (required, min 1 character)
-                limit: Maximum number of results (1-20, default 10)
-                current_user: Authenticated user information from JWT token
-                
-            Returns:
-                PromptSearchResponse: Search results with highlighted text
             """
             try:
                 username = current_user.get("sub")
@@ -704,9 +704,9 @@ class API:
                 if not prompt_ids:
                     return PromptSearchResponse(results=[], total=0, query=q)
                 
-                # Search in user's prompts
+                # Search in user's prompts - USE prompt_id, not session_id
                 query = {
-                    "session_id": {"$in": prompt_ids},
+                    "prompt_id": {"$in": prompt_ids},
                     "prompt": {"$regex": q, "$options": "i"}
                 }
                 
@@ -714,7 +714,13 @@ class API:
                 
                 cursor = self.prompts_collection.find(
                     query,
-                    {"prompt": 1, "session_id": 1, "created_at": 1, "prompt_id": 1, "_id": 0}
+                    {
+                        "prompt": 1, 
+                        "session_id": 1, 
+                        "created_at": 1, 
+                        "prompt_id": 1, 
+                        "_id": 0
+                    }
                 ).sort("created_at", -1).limit(limit)
                 
                 prompts_list = list(cursor)
@@ -733,7 +739,7 @@ class API:
                     highlight = self._highlight_search_term(prompt_text, q)
                     
                     results.append(PromptSearchItem(
-                        prompt_id=prompt_doc.get("prompt_id", prompt_doc.get("session_id")),
+                        prompt_id=prompt_doc.get("prompt_id"),
                         session_id=prompt_doc.get("session_id"),
                         prompt=prompt_text,
                         created_at=created_at,
@@ -749,10 +755,490 @@ class API:
             except HTTPException:
                 raise
             except Exception as e:
+                print(f"❌ Error searching prompt history: {e}")
+                import traceback
+                traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Error searching prompt history: {str(e)}")
-
-
+        @self.app.post("/api/v2/parse-prompt")
+        async def parse_prompt_v2(
+            request: PromptRequest,
+            background_tasks: BackgroundTasks,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Enhanced prompt parsing with preflight check.
+            Returns session_id immediately and runs workflow in background.
+            """
+            session_id = str(uuid.uuid4())
+            username = current_user.get("sub")
+            
+            # Store in Redis
+            self.redis_manager.store_prompt(session_id, request.prompt)
+            self.redis_manager.store_data(session_id, "user_context", {
+                "username": username,
+                "user_id": current_user.get("user_id")
+            })
+            
+            # Start workflow in background
+            background_tasks.add_task(
+                self.workflow_v2.execute_search_workflow,
+                session_id
+            )
+            
+            return {
+                "session_id": session_id,
+                "message": "Search started",
+                "status": "processing"
+            }
+        
+        @self.app.get("/api/v2/session/{session_id}/status")
+        async def get_session_status_v2(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get real-time status of search workflow.
+            Frontend polls this endpoint for progress updates.
+            """
+            # Verify ownership
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get progress from Redis
+            progress = self.redis_manager.get_data(session_id, "progress_update")
+            
+            if not progress:
+                return {"status": "not_found"}
+            
+            return progress
+        
+        @self.app.get("/api/v2/session/{session_id}/results")
+        async def get_session_results_v2(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get search results with top 10 AI-summarized profiles.
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get from MongoDB
+            prompt_doc = self.workflow_v2.prompts_collection.find_one({"session_id": session_id})
+            
+            if not prompt_doc:
+                raise HTTPException(status_code=404, detail="Results not found")
+            
+            # Get top 10 with AI summaries
+            matched_profiles = prompt_doc["matched_profiles"]
+            ai_summaries = prompt_doc.get("ai_summaries", {})
+            
+            # Merge summaries with profile data
+            results = []
+            for profile in matched_profiles[:10]:
+                profile_id = profile["profile_id"]
+                profile_data = profile.copy()
+                
+                if profile_id in ai_summaries:
+                    profile_data.update(ai_summaries[profile_id])
+                
+                results.append(profile_data)
+            
+            return {
+                "session_id": session_id,
+                "prompt": prompt_doc["prompt"],
+                "total_matches": len(matched_profiles),
+                "results": results,
+                "summary_generation": prompt_doc.get("summary_generation", {}),
+                "preflight_check": prompt_doc.get("preflight_check", {})
+            }
+        
+        @self.app.post("/api/v2/session/{session_id}/load-more")
+        async def load_more_results(
+            session_id: str,
+            batch_size: int = 10,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Generate AI summaries for next batch of profiles.
+            Called when user clicks "Load More".
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            result = await self.workflow_v2.generate_more_summaries(session_id, batch_size)
+            
+            return result
+        
+        @self.app.post("/api/v2/session/{session_id}/refine")
+        async def refine_query(
+            session_id: str,
+            refinements: Dict[str, str],
+            background_tasks: BackgroundTasks,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            User provides refinements after preflight check fails.
+            Restarts workflow with updated filters.
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get original parsed data
+            parsed_data = self.redis_manager.get_data(session_id, "parsed_data")
+            
+            # Apply refinements
+            for filter_name, new_value in refinements.items():
+                parsed_data["strict_params"][filter_name] = [new_value]
+            
+            # Store updated data
+            self.redis_manager.store_data(session_id, "parsed_data", parsed_data)
+            
+            # Restart workflow
+            background_tasks.add_task(
+                self.workflow_v2.execute_search_workflow,
+                session_id
+            )
+            
+            return {"message": "Search restarted with refinements"}
+        
+        @self.app.get("/api/v2/profile/{profile_id}")
+        async def get_full_profile(
+            profile_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get full profile details including CV.
+            """
+            from bson import ObjectId
+            
+            profile = self.workflow_v2.profiles_collection.find_one({
+                "_id": ObjectId(profile_id)
+            })
+            
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+            
+            # Convert ObjectId to string
+            profile["_id"] = str(profile["_id"])
+            
+            return profile
     
+        @self.app.post("/api/v2/test-alternative")
+        async def test_alternative_filter(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Test an alternative filter value.
+            Used during query refinement.
+            """
+            filter_name = request.get("filter_name")
+            value = request.get("value")
+            
+            if not filter_name or not value:
+                raise HTTPException(status_code=400, detail="filter_name and value required")
+            
+            # Use preflight checker to test
+            count = self.workflow_v2.preflight.test_alternative(filter_name, value)
+            
+            return {
+                "filter_name": filter_name,
+                "value": value,
+                "count": count,
+                "viable": count > 0
+            }
+
+        @self.app.post("/api/v2/extract-filters")
+        async def extract_filters(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Extract filters from natural language query in real-time.
+            """
+            try:
+                query = request.get("query", "")
+                
+                if not query or len(query) < 10:
+                    return {"filters": {}}
+                
+                # Use the parser to extract filters
+                parsed = self.workflow_v2.parser.parse_with_tiers(query)
+                
+                # Extract key filters for UI display
+                filters = {}
+                strict_params = parsed.get("strict_params", {})
+                
+                # Map backend filter names to user-friendly names
+                filter_mapping = {
+                    "location": "Location",
+                    "current_industry": "Industry",
+                    "title": "Role",
+                    "years_of_experience": "Experience",
+                    "seniority_level": "Seniority",
+                    "skills": "Skills"
+                }
+                
+                for key, values in strict_params.items():
+                    if values and len(values) > 0:
+                        friendly_key = filter_mapping.get(key, key.replace("_", " ").title())
+                        # Take first value or join multiple
+                        if isinstance(values, list):
+                            filters[friendly_key] = values[0] if len(values) == 1 else ", ".join(values[:3])
+                        else:
+                            filters[friendly_key] = values
+                
+                return {"filters": filters}
+                
+            except Exception as e:
+                print(f"Error extracting filters: {e}")
+                return {"filters": {}}
+            
+        @self.app.post("/api/v2/extract-filters-quick")
+        async def extract_filters_quick(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Quickly extract basic filters using regex (instant).
+            Then enhance with AI in background.
+            """
+            try:
+                query = request.get("query", "").lower()
+                
+                if not query or len(query) < 3:
+                    return {"filters": {}}
+                
+                # Quick extraction using regex patterns
+                filters = {}
+                
+                # Location patterns
+                indian_cities = ['mumbai', 'delhi', 'bangalore', 'hyderabad', 'chennai', 'kolkata', 'pune', 'ahmedabad', 'jaipur', 'lucknow']
+                countries = ['india', 'usa', 'uk', 'canada', 'singapore', 'australia']
+                
+                for city in indian_cities:
+                    if city in query:
+                        filters['location'] = filters.get('location', [])
+                        if city.title() not in filters['location']:
+                            filters['location'].append(city.title())
+                
+                for country in countries:
+                    if country in query:
+                        filters['country'] = filters.get('country', [])
+                        if country.title() not in filters['country']:
+                            filters['country'].append(country.title())
+                
+                # Industry patterns
+                industries = {
+                    'fintech': 'Financial Services',
+                    'finance': 'Financial Services',
+                    'banking': 'Banking',
+                    'healthcare': 'Healthcare',
+                    'pharma': 'Pharmaceuticals',
+                    'it': 'Information Technology',
+                    'software': 'Information Technology',
+                    'tech': 'Technology',
+                    'retail': 'Retail',
+                    'ecommerce': 'E-commerce',
+                    'marketing': 'Marketing & Advertising',
+                    'consulting': 'Management Consulting',
+                    'manufacturing': 'Manufacturing',
+                    'education': 'Education'
+                }
+                
+                for keyword, industry in industries.items():
+                    if keyword in query:
+                        filters['industry'] = filters.get('industry', [])
+                        if industry not in filters['industry']:
+                            filters['industry'].append(industry)
+                
+                # Experience patterns
+                import re
+                exp_patterns = [
+                    r'(\d+)\+?\s*(?:years?|yrs?)',
+                    r'(\d+)-(\d+)\s*(?:years?|yrs?)'
+                ]
+                
+                for pattern in exp_patterns:
+                    matches = re.findall(pattern, query)
+                    if matches:
+                        if isinstance(matches[0], tuple):
+                            filters['experience'] = f"{matches[0][0]}-{matches[0][1]} years"
+                        else:
+                            filters['experience'] = f"{matches[0]}+ years"
+                        break
+                
+                # Seniority patterns
+                seniority_keywords = {
+                    'senior': 'Senior',
+                    'lead': 'Lead',
+                    'principal': 'Principal',
+                    'junior': 'Junior',
+                    'mid': 'Mid-Level',
+                    'entry': 'Entry Level',
+                    'director': 'Director',
+                    'manager': 'Manager',
+                    'head': 'Head',
+                    'vp': 'Vice President',
+                    'cto': 'C-Level',
+                    'ceo': 'C-Level',
+                    'cfo': 'C-Level'
+                }
+                
+                for keyword, level in seniority_keywords.items():
+                    if keyword in query:
+                        filters['seniority'] = level
+                        break
+                
+                # Job title extraction (common roles)
+                common_roles = [
+                    'engineer', 'developer', 'architect', 'designer', 'analyst',
+                    'manager', 'director', 'consultant', 'specialist', 'lead',
+                    'scientist', 'researcher', 'coordinator', 'administrator'
+                ]
+                
+                for role in common_roles:
+                    if role in query:
+                        # Extract surrounding words for context
+                        words = query.split()
+                        for i, word in enumerate(words):
+                            if role in word:
+                                # Get 1-2 words before
+                                start = max(0, i-2)
+                                title_words = words[start:i+1]
+                                filters['title'] = ' '.join(title_words).title()
+                                break
+                        break
+                
+                # Skills extraction (common tech skills)
+                skills = [
+                    'python', 'java', 'javascript', 'react', 'node', 'angular', 'vue',
+                    'sql', 'nosql', 'mongodb', 'postgresql', 'aws', 'azure', 'gcp',
+                    'docker', 'kubernetes', 'ml', 'ai', 'data science', 'machine learning',
+                    'devops', 'agile', 'scrum', 'salesforce', 'sap'
+                ]
+                
+                found_skills = []
+                for skill in skills:
+                    if skill in query:
+                        found_skills.append(skill.upper() if len(skill) <= 3 else skill.title())
+                
+                if found_skills:
+                    filters['skills'] = found_skills[:5]  # Limit to 5
+                
+                return {"filters": filters, "source": "quick"}
+                
+            except Exception as e:
+                print(f"Error in quick filter extraction: {e}")
+                return {"filters": {}}
+            
+        @self.app.get("/api/v2/session/{session_id}/download")
+        async def download_results(
+            session_id: str,
+            format: str = Query("csv", regex="^(csv|pdf|json)$"),
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Download search results in various formats.
+            """
+            await self._verify_session_ownership(session_id, current_user)
+            
+            # Get results
+            prompt_doc = self.workflow_v2.prompts_collection.find_one({"session_id": session_id})
+            
+            if not prompt_doc:
+                raise HTTPException(status_code=404, detail="Results not found")
+            
+            if format == "json":
+                return JSONResponse(content=prompt_doc, default=str)
+            
+            elif format == "csv":
+                # Generate CSV
+                import csv
+                from io import StringIO
+                
+                output = StringIO()
+                writer = csv.writer(output)
+                
+                # Headers
+                writer.writerow([
+                    'Rank', 'Name', 'Title', 'Location', 'Industry', 
+                    'Score', 'Summary', 'Skills', 'LinkedIn'
+                ])
+                
+                # Data
+                for idx, profile in enumerate(prompt_doc['matched_profiles'], 1):
+                    profile_summary = profile.get('profile_summary', {})
+                    ai_summary = prompt_doc.get('ai_summaries', {}).get(profile['profile_id'], {})
+                    
+                    writer.writerow([
+                        idx,
+                        profile_summary.get('name', 'N/A'),
+                        profile_summary.get('title', 'N/A'),
+                        profile_summary.get('location', 'N/A'),
+                        profile_summary.get('industry', 'N/A'),
+                        ai_summary.get('final_score', profile.get('pre_score', 0)),
+                        ai_summary.get('summary', ''),
+                        '',  # Skills - would need to fetch from full profile
+                        ''   # LinkedIn - would need to fetch from full profile
+                    ])
+                
+                output.seek(0)
+                
+                return StreamingResponse(
+                    iter([output.getvalue()]),
+                    media_type="text/csv",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=search_results_{session_id}.csv"
+                    }
+                )
+            
+            else:
+                raise HTTPException(status_code=400, detail=f"Format {format} not supported yet")
+
+        @self.app.post("/api/v2/session/{session_id}/save-candidate")
+        async def save_candidate(
+            session_id: str,
+            profile_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Save a candidate to user's saved list.
+            """
+            username = current_user.get("sub")
+            
+            # Add to user's saved candidates
+            self.workflow_v2.users_collection.update_one(
+                {"username": username},
+                {"$addToSet": {"saved_candidates": profile_id}}
+            )
+            
+            return {"message": "Candidate saved successfully"}
+
+        @self.app.get("/api/v2/user/saved-candidates")
+        async def get_saved_candidates(
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get user's saved candidates.
+            """
+            username = current_user.get("sub")
+            
+            user = self.workflow_v2.users_collection.find_one({"username": username})
+            
+            if not user:
+                return {"candidates": []}
+            
+            saved_ids = user.get("saved_candidates", [])
+            
+            # Fetch full profiles
+            from bson import ObjectId
+            profiles = list(self.workflow_v2.profiles_collection.find({
+                "_id": {"$in": [ObjectId(pid) for pid in saved_ids]}
+            }))
+            
+            # Convert ObjectId to string
+            for profile in profiles:
+                profile["_id"] = str(profile["_id"])
+            
+            return {"candidates": profiles}
         @self.app.post("/hatch/contact", response_model=HatchContactResponse)
         async def get_hatch_contact(
             request: HatchContactRequest,

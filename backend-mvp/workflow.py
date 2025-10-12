@@ -10,8 +10,11 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from ai_model import HiringPromptParser, Model
+from enhanced_parser import EnhancedPromptParser
+from enhanced_search import EnhancedSearcher
 from pymongo import MongoClient
 from redis_manager import RedisManager
+from scoring import CandidateScorer
 
 
 class Workflow:
@@ -25,6 +28,7 @@ class Workflow:
         self.redis_manager = redis_manager
         self.model = Model()
         self.hiring_parser = HiringPromptParser(self.model)
+
         
         # Profiles database connection (use env vars with fallback)
         profiles_db_url = os.getenv("PROFILES_DB_URL", "mongodb://localhost:27017")
@@ -41,6 +45,10 @@ class Workflow:
         self.user_logs = self.neuraleap_db["user_logs"]
         self.prompts_collection = self.neuraleap_db["prompts"]
         self.users_collection = self.neuraleap_db["users"]
+        
+        self.enhanced_parser = EnhancedPromptParser(self.model)
+        self.enhanced_searcher = EnhancedSearcher(self.profiles, min_results_threshold=10)
+        self.scorer = CandidateScorer(self.model)
         
         # Create indexes for prompts collection
         self._create_prompts_indexes()
@@ -418,32 +426,59 @@ class Workflow:
             dict: Analysis result with extracted requirements, or None if failed
         """
         try:
-            print(f"  📊 Analyzing prompt for session {session_id}")
-            
-            # Use HiringPromptParser to extract structured data
-            structured_data = self.hiring_parser.parse(prompt)
+            # Use enhanced parser
+            parsed_data = self.enhanced_parser.parse_with_tiers(prompt)
             
             analysis_result = {
                 "original_prompt": prompt,
-                "structured_data": structured_data,
-                "location": structured_data.get("Location", []),
-                "role": structured_data.get("Role", []),
-                "experience": structured_data.get("Experience", []),
-                "industry": structured_data.get("Industry", []),
-                "skills": structured_data.get("Skills", []),
-                "analysis_confidence": 1.0  # High confidence since we're using AI parsing
+                "strict_params": parsed_data["strict_params"],
+                "broad_params": parsed_data["broad_params"],
+                "scoring_rules": parsed_data["scoring_rules"]
             }
             
-            # Store analysis result in Redis
-            await self._store_data(session_id, "prompt_analysis", analysis_result)
+            # Store in Redis
+            await self._store_data(session_id, "prompt_analysis_enhanced", analysis_result)
             
-            print(f"  ✅ Prompt analysis completed for session {session_id}")
-            print(f"  📋 Extracted: {structured_data}")
+            print(f"  ✅ Enhanced analysis completed")
+            print(f"  📋 Strict params: {len([v for v in parsed_data['strict_params'].values() if v])}")
+            print(f"  📋 Broad params: {len([v for v in parsed_data['broad_params'].values() if v])}")
+            print(f"  📋 Scoring rules: {len(parsed_data['scoring_rules'])} categories")
+            
             return analysis_result
             
         except Exception as e:
-            print(f"  ❌ Prompt analysis failed for session {session_id}: {e}")
+            print(f"  ❌ Enhanced analysis failed: {e}")
             return None
+        
+    async def score_and_rank_profiles(self, session_id: str, profiles: List[Dict[str, Any]], 
+                                    analysis_result: Dict[str, Any], top_n: int = 20) -> List[Dict[str, Any]]:
+        """
+        Two-tiered scoring: pre-score all, then AI rank top N.
+        """
+        try:
+            scoring_rules = analysis_result.get("scoring_rules", {})
+            original_prompt = analysis_result.get("original_prompt", "")
+            
+            # Tier 1: Pre-score ALL candidates
+            print(f"  📊 Tier 1: Pre-scoring {len(profiles)} candidates...")
+            for profile in profiles:
+                pre_score = self.scorer.calculate_pre_score(profile, scoring_rules)
+                profile["pre_score"] = pre_score
+            
+            # Sort by pre_score
+            profiles.sort(key=lambda x: x.get("pre_score", 0), reverse=True)
+            print(f"  ✅ Pre-scoring complete. Top score: {profiles[0].get('pre_score', 0)}")
+            
+            # Tier 2: AI rank top N
+            print(f"  🤖 Tier 2: AI ranking top {top_n} candidates...")
+            final_ranked = self.scorer.get_final_rankings(profiles, original_prompt, top_n)
+            print(f"  ✅ Final ranking complete")
+            
+            return final_ranked
+            
+        except Exception as e:
+            print(f"  ❌ Scoring failed: {e}")
+            return profiles[:top_n]  # Fallback: return top N by pre_score
     
     async def lookup_database(self, session_id: str, analysis_result: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         """
@@ -457,74 +492,21 @@ class Workflow:
             list: List of relevant profiles matching the schema, or None if failed
         """
         try:
-            print(f"  🔍 Looking up database for session {session_id}")
+            strict_params = analysis_result.get("strict_params", {})
+            broad_params = analysis_result.get("broad_params", {})
             
-            # Extract structured data from analysis result for logging purposes
-            structured_data = analysis_result.get("structured_data", {})
-
-            location_criteria = structured_data.get("location", [])
-            role_criteria = structured_data.get("Role", [])
-            industry_criteria = structured_data.get("industry", [])
-            skills_criteria = structured_data.get("skills", [])
-            education_criteria = structured_data.get("education", [])
-            certifications_criteria = structured_data.get("certifications", [])
-            publications_criteria = structured_data.get("publications", [])
-            patents_criteria = structured_data.get("patents", [])
-            awards_criteria = structured_data.get("awards", [])
-            memberships_criteria = structured_data.get("memberships", [])
-            prior_industries_criteria = structured_data.get("prior_industries", [])
-            organization_id_criteria = structured_data.get("organization_id", [])
-            profile_picture_criteria = structured_data.get("profile_picture", [])
-            state_criteria = structured_data.get("state", [])
-            city_criteria = structured_data.get("city", [])
-            country_criteria = structured_data.get("country", [])
-            seniority_level_criteria = structured_data.get("seniority_level", [])
-            functional_area_criteria = structured_data.get("functional_area", [])
-
-            # experience_criteria = structured_data.get("experience", [])
-            # experience is something never mentioned in the linkedin profile directly. 
-            # we have to get add the total experiences candidates had through their companies joined
-
-            matches = self.search_profile(
-                location=location_criteria,
-                country=country_criteria,
-                role=role_criteria,
-                industry=industry_criteria,
-                expertise=skills_criteria,
-                education=education_criteria,
-                certifications=certifications_criteria,
-                publications=publications_criteria,
-                patents=patents_criteria,
-                awards=awards_criteria,
-                memberships=memberships_criteria,
-                prior_industries=prior_industries_criteria,
-                organization_id=organization_id_criteria,
-                profile_picture=profile_picture_criteria,
-                state=state_criteria,
-                city=city_criteria,
-                seniority_level=seniority_level_criteria,
-                functional_area=functional_area_criteria,
-            )
+            # Search with fallback
+            profiles = self.enhanced_searcher.search_with_fallback(strict_params, broad_params)
             
-            # Check if any matches found
-            if not matches:
-                error_msg = "No matching profiles found in database"
-                print(f"  ❌ {error_msg} for session {session_id}")
-                await self._store_data(session_id, "workflow_status", f"error: {error_msg}")
+            if not profiles:
+                print(f"  ❌ No profiles found")
                 return None
             
-            print(f"  ✅ Database lookup completed for session {session_id}: {len(matches)} profiles found")
-            
-            # Store lookup results in Redis
-            await self._store_data(session_id, "database_lookup", matches)
-            
-            # returns only 30 people in the list -> might end up being limited
-            return matches[:30]
+            print(f"  ✅ Found {len(profiles)} profiles for scoring")
+            return profiles
             
         except Exception as e:
-            error_msg = f"Database lookup failed: {str(e)}"
-            print(f"  ❌ {error_msg} for session {session_id}")
-            await self._store_data(session_id, "workflow_status", f"error: {error_msg}")
+            print(f"  ❌ Database lookup failed: {e}")
             return None
     
     async def _serve_profiles_directly(self, session_id: str, profiles: List[Dict[str, Any]], analysis_result: Dict[str, Any]) -> None:

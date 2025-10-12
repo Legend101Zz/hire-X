@@ -1,10 +1,11 @@
 """
 Redis connection and session management.
 """
+import asyncio
 import json
 import os
-import asyncio
-from typing import Dict, Any, Optional, Callable
+from typing import Any, Callable, Dict, Optional
+
 import redis
 import redis.asyncio as aioredis
 
@@ -129,6 +130,26 @@ class RedisManager:
             print(f"Error retrieving data for {session_id}:{action_tag}: {e}")
             return None
     
+    def store_data(self, session_id: str, action_tag: str, data: Any) -> bool:
+        """
+        Store data in Redis using the sessionID:action_tag structure.
+        
+        Args:
+            session_id: Unique session identifier
+            action_tag: Tag identifying the type of data
+            data: Data to store (will be JSON serialized)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            key = f"{session_id}:{action_tag}"
+            self.redis_client.set(key, json.dumps(data, default=str))
+            return True
+        except Exception as e:
+            print(f"Error storing data for {session_id}:{action_tag}: {e}")
+            return False
+        
     def store_workflow_status(self, session_id: str, status: str) -> bool:
         """
         Store workflow status for a session.
