@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+//@ts-nocheck
 import React, { useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import {

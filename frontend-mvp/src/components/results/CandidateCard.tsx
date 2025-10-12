@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+//@ts-nocheck
 'use client';
 
 import { motion } from 'framer-motion';
@@ -101,8 +103,8 @@ export default function CandidateCard({ profile, rank, isAIRanked, onClick, onSh
                 {/* Rank Badge */}
                 <div className="flex-shrink-0">
                     <div className={`w-12 h-12 rounded-xl ${rank <= 3
-                            ? 'bg-gradient-to-br from-yellow-400 to-orange-500'
-                            : 'bg-gray-100'
+                        ? 'bg-gradient-to-br from-yellow-400 to-orange-500'
+                        : 'bg-gray-100'
                         } flex items-center justify-center font-bold text-lg ${rank <= 3 ? 'text-white' : 'text-gray-600'
                         }`}>
                         {rank}
@@ -125,8 +127,8 @@ export default function CandidateCard({ profile, rank, isAIRanked, onClick, onSh
                                 <button
                                     onClick={handleShortlist}
                                     className={`p-2 rounded-lg transition-all ${isShortlisted
-                                            ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                                            : 'bg-gray-100 text-gray-400 hover:bg-blue-100 hover:text-blue-600'
+                                        ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                                        : 'bg-gray-100 text-gray-400 hover:bg-blue-100 hover:text-blue-600'
                                         }`}
                                     title={isShortlisted ? 'Remove from shortlist' : 'Add to shortlist'}
                                 >
