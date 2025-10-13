@@ -165,7 +165,7 @@ export default function SearchProgress({
 
     useEffect(() => {
         const token = localStorage.getItem('token');
-        const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'}/session/${sessionId}?token=${token}`;
+        const wsUrl = `${process.env.NEXT_PUBLIC_WS_BASE_URL || 'ws://localhost:8000'}/session/${sessionId}?token=${token}`;
 
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
@@ -294,10 +294,10 @@ export default function SearchProgress({
                             ease: "easeInOut",
                         }}
                         className={`relative p-6 rounded-full ${progress.status === 'completed'
-                                ? 'bg-gradient-to-br from-green-400 to-emerald-500'
-                                : progress.status === 'error'
-                                    ? 'bg-gradient-to-br from-red-400 to-rose-500'
-                                    : 'bg-gradient-to-br from-blue-500 to-purple-600'
+                            ? 'bg-gradient-to-br from-green-400 to-emerald-500'
+                            : progress.status === 'error'
+                                ? 'bg-gradient-to-br from-red-400 to-rose-500'
+                                : 'bg-gradient-to-br from-blue-500 to-purple-600'
                             } shadow-lg`}
                     >
                         <Icon className="w-14 h-14 text-white" />
@@ -365,10 +365,10 @@ export default function SearchProgress({
                                 ease: "easeOut"
                             }}
                             className={`h-full rounded-full relative ${progress.status === 'completed'
-                                    ? 'bg-gradient-to-r from-green-400 to-emerald-500'
-                                    : progress.status === 'error'
-                                        ? 'bg-gradient-to-r from-red-400 to-rose-500'
-                                        : 'bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500'
+                                ? 'bg-gradient-to-r from-green-400 to-emerald-500'
+                                : progress.status === 'error'
+                                    ? 'bg-gradient-to-r from-red-400 to-rose-500'
+                                    : 'bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500'
                                 }`}
                         >
                             {/* Shimmer effect */}
@@ -418,10 +418,10 @@ export default function SearchProgress({
                                     animate={isActive ? { scale: [1, 1.2, 1] } : {}}
                                     transition={{ duration: 1, repeat: Infinity }}
                                     className={`w-3 h-3 rounded-full mb-2 ${isActive
-                                            ? 'bg-blue-600 ring-4 ring-blue-200'
-                                            : isCompleted
-                                                ? 'bg-green-500'
-                                                : 'bg-gray-300'
+                                        ? 'bg-blue-600 ring-4 ring-blue-200'
+                                        : isCompleted
+                                            ? 'bg-green-500'
+                                            : 'bg-gray-300'
                                         }`}
                                 />
                                 <span className={`text-xs font-medium capitalize hidden sm:block ${isActive ? 'text-blue-600' : isCompleted ? 'text-green-600' : 'text-gray-400'
