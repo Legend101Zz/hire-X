@@ -38,6 +38,10 @@ class RedisManager:
         # WebSocket callback registry
         self.websocket_callbacks: Dict[str, Callable] = {}
     
+    # ---------------------------------------------------------------
+    # SECTION 1: Legacy sync methods (kept for backward compatibility)
+    # ---------------------------------------------------------------
+    
     def store_prompt(self, session_id: str, prompt: str) -> bool:
         """
         Store prompt data for a session.
@@ -149,7 +153,7 @@ class RedisManager:
         except Exception as e:
             print(f"Error storing data for {session_id}:{action_tag}: {e}")
             return False
-        
+    
     def store_workflow_status(self, session_id: str, status: str) -> bool:
         """
         Store workflow status for a session.
@@ -205,6 +209,98 @@ class RedisManager:
         except Exception as e:
             print(f"Error deleting session: {e}")
             return False
+    
+    # ---------------------------------------------------------------
+    # SECTION 2: Async wrapper methods for use with `await`
+    # ---------------------------------------------------------------
+
+    async def store_data_async(self, session_id: str, action_tag: str, data: Any) -> bool:
+        """
+        (ASYNC WRAPPER) Safely calls the synchronous store_data method.
+        """
+        return await asyncio.to_thread(
+            self.store_data, session_id, action_tag, data
+        )
+
+    async def get_data_async(self, session_id: str, action_tag: str) -> Optional[Any]:
+        """
+        (ASYNC WRAPPER) Safely calls the synchronous get_data method.
+        """
+        return await asyncio.to_thread(
+            self.get_data, session_id, action_tag
+        )
+
+    # ---------------------------------------------------------------
+    # SECTION 3: Session Management Convenience Methods
+    # ---------------------------------------------------------------
+    
+    async def create_session(self, session_id: str) -> bool:
+        """
+        Initialize a new session with basic metadata.
+        
+        Args:
+            session_id: Unique session identifier
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            # Store session creation timestamp
+            import time
+            await self.store_data_async(session_id, "created_at", time.time())
+            await self.store_data_async(session_id, "status", "active")
+            print(f"✅ Created session: {session_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Error creating session {session_id}: {e}")
+            return False
+    
+    async def set_session_data(self, session_id: str, key: str, value: Any) -> bool:
+        """
+        Store data for a session (async wrapper with cleaner naming).
+        
+        Args:
+            session_id: Unique session identifier
+            key: Data key (e.g., "scorecard", "conversation", "phase")
+            value: Value to store
+            
+        Returns:
+            bool: True if successful
+        """
+        return await self.store_data_async(session_id, key, value)
+    
+    async def get_session_data(self, session_id: str, key: str) -> Optional[Any]:
+        """
+        Retrieve data for a session (async wrapper with cleaner naming).
+        
+        Args:
+            session_id: Unique session identifier
+            key: Data key (e.g., "scorecard", "conversation", "phase")
+            
+        Returns:
+            The stored value or None if not found
+        """
+        return await self.get_data_async(session_id, key)
+    
+    async def session_exists(self, session_id: str) -> bool:
+        """
+        Check if a session exists.
+        
+        Args:
+            session_id: Unique session identifier
+            
+        Returns:
+            bool: True if session exists
+        """
+        try:
+            status = await self.get_session_data(session_id, "status")
+            return status is not None
+        except Exception:
+            return False
+    
+    # ---------------------------------------------------------------
+    # SECTION 4: Redis Pub/Sub for WebSocket Communication
+    # ---------------------------------------------------------------
     
     async def subscribe_to_session(self, session_id: str, callback: Callable):
         """

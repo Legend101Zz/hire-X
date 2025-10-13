@@ -1,9 +1,10 @@
 """
 WebSocket connection manager for real-time session updates.
 """
-import json
 import asyncio
-from typing import Dict, Set, Any
+import json
+from typing import Any, Dict, Set
+
 from fastapi import WebSocket
 from redis_manager import RedisManager
 
@@ -61,6 +62,21 @@ class WebSocketManager:
         
         print(f"🔌 WebSocket disconnected for session: {session_id}")
     
+    async def broadcast_to_session(self, session_id: str, message: Dict[str, Any]):
+        """
+        Broadcast message to all WebSocket connections for a session.
+        (Public method - can be called from API endpoints)
+        
+        Args:
+            session_id: Session ID
+            message: Message to broadcast with structure:
+                {
+                    "action": "action_name",
+                    "data": {...}
+                }
+        """
+        await self._broadcast_to_session(session_id, message)
+    
     async def _start_redis_listener(self, session_id: str):
         """Start Redis pub/sub listener for a session."""
         try:
@@ -94,6 +110,7 @@ class WebSocketManager:
     async def _broadcast_to_session(self, session_id: str, message: Dict[str, Any]):
         """
         Broadcast message to all WebSocket connections for a session.
+        (Private method - used internally)
         
         Args:
             session_id: Session ID
@@ -168,7 +185,10 @@ class WebSocketManager:
             "followup_questions",
             "direct_profiles",
             "scorecard_results",
-            "final_results"
+            "final_results",
+            "scorecard",
+            "conversation",
+            "phase"
         ]
         
         for action in actions:

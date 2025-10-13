@@ -19,6 +19,7 @@ export default function PromptPage() {
   const [preflightResults, setPreflightResults] = useState<any>(null);
   const [displayedText, setDisplayedText] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [useNewWorkflow, setUseNewWorkflow] = useState(true);
 
   // Typewriter effect
   useEffect(() => {
@@ -36,21 +37,25 @@ export default function PromptPage() {
 
     try {
       const token = localStorage.getItem('token');
+
+      // NEW: Start scorecard workflow instead of old parse-prompt
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v2/parse-prompt`,
+        `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/scorecard/start`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`,
           },
-          body: JSON.stringify({ prompt: query, filters }),
+          body: JSON.stringify({ query }),
         }
       );
 
       if (response.ok) {
         const data = await response.json();
-        setSessionId(data.session_id);
+
+        // Navigate to scorecard builder page
+        router.push(`/scorecard?session=${data.session_id}`);
       } else if (response.status === 401) {
         router.push('/login');
       } else {
@@ -63,7 +68,6 @@ export default function PromptPage() {
       setIsSearching(false);
     }
   };
-
   const handleComplete = () => {
     setIsSearching(false);
     router.push(`/results?session=${sessionId}`);
@@ -112,6 +116,18 @@ export default function PromptPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
       <Header />
+
+      <div className="fixed top-20 right-4 z-50">
+        <button
+          onClick={() => setUseNewWorkflow(!useNewWorkflow)}
+          className={`px-4 py-2 rounded-lg text-sm font-medium shadow-lg transition-all ${useNewWorkflow
+            ? 'bg-blue-600 text-white'
+            : 'bg-gray-600 text-white'
+            }`}
+        >
+          {useNewWorkflow ? '🆕 New Scorecard Flow' : '🔄 Old Flow'}
+        </button>
+      </div>
       <div className="max-w-5xl mx-auto px-4 py-30">
         {/* Hero Text with Typewriter Effect */}
         <motion.div
@@ -183,7 +199,7 @@ export default function PromptPage() {
       </div>
 
       {/* Modals */}
-      {isSearching && sessionId && (
+      {!useNewWorkflow && isSearching && sessionId && (
         <SearchProgress
           sessionId={sessionId}
           onComplete={handleComplete}
@@ -192,7 +208,7 @@ export default function PromptPage() {
         />
       )}
 
-      {showRefinement && preflightResults && (
+      {!useNewWorkflow && showRefinement && preflightResults && (
         <QueryRefinement
           preflightResults={preflightResults}
           onRefine={handleRefine}

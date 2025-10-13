@@ -23,6 +23,7 @@ from models import (HatchBulkContactRequest, HatchContactRequest,
                     SessionResponse)
 from pymongo import MongoClient
 from redis_manager import RedisManager
+from scorecard_workflow import ScorecardWorkflow
 from websocket_manager import WebSocketManager
 from workflow import Workflow
 from workflow_v2 import WorkflowV2
@@ -41,7 +42,7 @@ class API:
         self.websocket_manager = WebSocketManager(redis_manager)
         self.auth_manager = AuthManager()
         self.security = HTTPBearer()
-        
+        self.scorecard_workflow = ScorecardWorkflow(redis_manager)
         # MongoDB connection for prompts collection
         self.mongo_client = MongoClient(os.getenv("MONGODB_URL", "mongodb://localhost:27017/"))
         self.db = self.mongo_client.get_database(os.getenv("DATABASE_NAME", "neuraleap"))
@@ -1239,6 +1240,236 @@ class API:
                 profile["_id"] = str(profile["_id"])
             
             return {"candidates": profiles}
+        
+        
+        @self.app.post("/api/scorecard/start")
+        async def start_scorecard_workflow(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Start a new scorecard building session.
+            
+            Body:
+                {
+                    "query": "Senior backend engineer with Go in Gurgaon"
+                }
+            
+            Returns:
+                {
+                    "session_id": "...",
+                    "scorecard": {...},
+                    "message": "Initial validation message",
+                    "phase": "validation"
+                }
+            """
+            try:
+                query = request.get("query", "").strip()
+                if not query:
+                    raise HTTPException(status_code=400, detail="Query is required")
+                
+                username = current_user.get("sub")
+                
+                # Create new session
+                session_id = str(uuid.uuid4())
+                
+                # Initialize session in Redis
+                await self.redis_manager.create_session(session_id)
+                await self.redis_manager.store_data_async(session_id, "username", username)
+                await self.redis_manager.store_data_async(session_id, "query", query)
+                await self.redis_manager.store_data_async(session_id, "phase", "entity_extraction")
+                
+                # Start scorecard building workflow
+                result = await self.scorecard_workflow.start_scorecard_building(
+                    session_id=session_id,
+                    username=username,
+                    initial_query=query
+                )
+                
+                # Initialize conversation history
+                conversation = [
+                    {"role": "user", "content": query},
+                    {"role": "assistant", "content": result["message"]}
+                ]
+                await self.redis_manager.set_session_data(session_id, "conversation", conversation)
+                
+                # Broadcast via WebSocket
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_created",
+                        "data": {
+                            "scorecard": result["scorecard"],
+                            "message": result["message"],
+                            "phase": result["phase"]
+                        }
+                    }
+                )
+                
+                return {
+                    "session_id": session_id,
+                    "scorecard": result["scorecard"],
+                    "message": result["message"],
+                    "phase": result["phase"]
+                }
+                
+            except Exception as e:
+                print(f"❌ Error starting scorecard workflow: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
+
+        @self.app.post("/api/scorecard/{session_id}/message")
+        async def send_scorecard_message(
+            session_id: str,
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Send a message in the scorecard refinement conversation.
+            
+            Body:
+                {
+                    "message": "Yes, include Software Engineer titles too"
+                }
+            
+            Returns:
+                {
+                    "scorecard": {...},
+                    "message": "Next validation question",
+                    "phase": "validation" or "ready_to_search",
+                    "ready": false or true
+                }
+            """
+            try:
+                user_message = request.get("message", "").strip()
+                if not user_message:
+                    raise HTTPException(status_code=400, detail="Message is required")
+                
+                # Get conversation history
+                conversation = self.redis_manager.get_data(session_id, "conversation") or []
+                
+                # Add user message
+                conversation.append({"role": "user", "content": user_message})
+                
+                # Process feedback
+                result = await self.scorecard_workflow.process_user_feedback(
+                    session_id=session_id,
+                    user_message=user_message,
+                    conversation_history=conversation
+                )
+                
+                if "error" in result:
+                    raise HTTPException(status_code=404, detail=result["error"])
+                
+                # Add assistant response
+                conversation.append({"role": "assistant", "content": result["message"]})
+                await self.redis_manager.store_data_async(session_id, "conversation", conversation)
+                
+                # Update phase
+                await self.redis_manager.store_data_async(session_id, "phase", result["phase"])
+                
+                # Broadcast via WebSocket
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_updated",
+                        "data": {
+                            "scorecard": result["scorecard"],
+                            "message": result["message"],
+                            "phase": result["phase"],
+                            "ready": result.get("ready", False)
+                        }
+                    }
+                )
+                
+                return result
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error processing scorecard message: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
+
+        @self.app.get("/api/scorecard/{session_id}")
+        async def get_scorecard(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """Get current scorecard for a session."""
+            try:
+                scorecard =  await self.redis_manager.get_data_async(session_id, "scorecard")
+                conversation =  await self.redis_manager.get_data_async(session_id, "conversation") or []
+                phase = await self.redis_manager.get_data_async(session_id, "phase") or "unknown"
+                
+                if not scorecard:
+                    raise HTTPException(status_code=404, detail="Scorecard not found")
+                
+                return {
+                    "scorecard": scorecard,
+                    "conversation": conversation,
+                    "phase": phase
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error getting scorecard: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+
+        @self.app.put("/api/scorecard/{session_id}")
+        async def update_scorecard(
+            session_id: str,
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Manually update scorecard (for advanced edit mode).
+            
+            Body:
+                {
+                    "scorecard": {...}
+                }
+            """
+            try:
+                updated_scorecard = request.get("scorecard")
+                if not updated_scorecard:
+                    raise HTTPException(status_code=400, detail="Scorecard is required")
+                
+                # Update in Redis
+                await self.redis_manager.store_data_async(session_id, "scorecard", updated_scorecard)
+                
+                # Update in MongoDB
+                from datetime import datetime
+                updated_scorecard["updated_at"] = datetime.utcnow().isoformat()
+                
+                self.scorecard_workflow.scorecards_collection.update_one(
+                    {"session_id": session_id},
+                    {"$set": updated_scorecard}
+                )
+                
+                # Broadcast update
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_updated",
+                        "data": {"scorecard": updated_scorecard}
+                    }
+                )
+                
+                return {"scorecard": updated_scorecard}
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error updating scorecard: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
         @self.app.post("/hatch/contact", response_model=HatchContactResponse)
         async def get_hatch_contact(
             request: HatchContactRequest,
