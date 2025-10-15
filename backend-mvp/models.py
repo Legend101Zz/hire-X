@@ -207,6 +207,104 @@ class FullProfile(BaseModel):
     linkedin_url: Optional[str]
     
     
+# ===== Scorecard Workflow Models =====
+
+class ScorecardStartRequest(BaseModel):
+    """Request to start a new scorecard building session."""
+    query: str = Field(..., min_length=3, description="User's natural language query")
+
+
+class ScorecardStartResponse(BaseModel):
+    """Response when starting a new scorecard session."""
+    session_id: str
+    prompt_id: str
+    scorecard_id: str
+    scorecard: Dict[str, Any]
+    message: str
+    phase: str
+
+
+class ScorecardMessageRequest(BaseModel):
+    """Request to send a message in scorecard refinement."""
+    message: str = Field(..., min_length=1, description="User's feedback message")
+
+
+class ScorecardMessageResponse(BaseModel):
+    """Response after processing user feedback."""
+    scorecard: Dict[str, Any]
+    message: str
+    phase: str
+    ready: bool = False
+
+
+class ScorecardGetResponse(BaseModel):
+    """Response when getting current scorecard."""
+    scorecard: Dict[str, Any]
+    conversation: List[Dict[str, str]]
+    phase: str
+
+
+class SampleCandidate(BaseModel):
+    """A sample candidate with score."""
+    profile: Dict[str, Any]
+    score: float
+    max_score: float
+    score_breakdown: List[Dict[str, Any]]
+
+
+class FindSamplesResponse(BaseModel):
+    """Response when finding sample candidates."""
+    candidates: List[SampleCandidate]
+    total_matches: int
+    phase: str
+
+
+class ApproveSamplesResponse(BaseModel):
+    """Response when approving sample candidates."""
+    message: str
+    phase: str
+
+
+class RejectSamplesRequest(BaseModel):
+    """Request when rejecting sample candidates."""
+    feedback: str = Field(..., min_length=5, description="Reason for rejection")
+
+
+class RejectSamplesResponse(BaseModel):
+    """Response when rejecting samples."""
+    scorecard: Dict[str, Any]
+    message: str
+    phase: str
+
+
+class Prompt(BaseModel):
+    """Full prompt document model."""
+    prompt_id: str
+    session_id: str
+    username: str
+    prompt: str
+    scorecard_id: Optional[str] = None
+    status: str = "draft"
+    created_at: str
+    updated_at: str
+
+
+class Scorecard(BaseModel):
+    """Full scorecard document model."""
+    scorecard_id: str
+    session_id: str
+    prompt_id: Optional[str] = None
+    username: str
+    status: str = "draft"
+    mustHaveFilters: List[Dict[str, Any]] = []
+    scoringCriteria: List[Dict[str, Any]] = []
+    expansions: Dict[str, List[str]] = {}
+    threshold: int = 50
+    metadata: Dict[str, Any] = {}
+    created_at: str
+    updated_at: str
+    
+    
 PromptHistoryResponse.update_forward_refs()
 PromptSearchResponse.update_forward_refs()
 

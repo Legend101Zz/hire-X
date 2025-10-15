@@ -11,25 +11,25 @@ import {
     X,
     Plus,
     GripVertical,
-    MoreHorizontal,
     Trash2,
     AlertCircle,
     ChevronDown,
-    Edit3,
     Hash,
     Type,
     List,
-    BarChart3,
     Eye,
-    EyeOff,
+    MoreHorizontal,
+    BarChart3,
     HelpCircle,
     ArrowRight,
     ArrowLeft,
     Lightbulb,
-    Search,
-    MessageSquare,
     Users,
-    Award
+    Award,
+    Tag,
+    Edit2,
+    Save,
+    XCircle
 } from 'lucide-react';
 import TextareaAutosize from 'react-textarea-autosize';
 
@@ -39,6 +39,57 @@ interface ScorecardDocumentProps {
     sessionId: string;
     isEditable?: boolean;
 }
+
+const SEARCHABLE_FIELDS = {
+    // Must-have filter fields
+    FILTERS: [
+        { value: 'location', label: 'Location (City/State)' },
+        { value: 'city', label: 'City' },
+        { value: 'state', label: 'State' },
+        { value: 'country', label: 'Country' },
+        { value: 'title', label: 'Job Title' },
+        { value: 'current_industry', label: 'Current Industry' },
+        { value: 'seniority_level', label: 'Seniority Level' },
+        { value: 'functional_area', label: 'Functional Area' },
+        { value: 'expertise', label: 'Skills/Expertise' },
+    ],
+
+    // Scoring criteria fields (can check these in profile)
+    SCORING: [
+        { value: 'title', label: 'Job Title' },
+        { value: 'expertise', label: 'Skills/Expertise' },
+        { value: 'current_industry', label: 'Current Industry' },
+        { value: 'functional_area', label: 'Functional Area' },
+        { value: 'seniority_level', label: 'Seniority Level' },
+        { value: 'location', label: 'Location' },
+        { value: 'city', label: 'City' },
+        { value: 'education', label: 'Education' },
+        { value: 'certifications', label: 'Certifications' },
+        { value: 'awards', label: 'Awards' },
+    ],
+
+    // Operators for each field type
+    OPERATORS: {
+        text: [
+            { value: 'contains', label: 'Contains' },
+            { value: 'equals', label: 'Equals' },
+            { value: 'not_contains', label: 'Does Not Contain' },
+        ],
+        list: [
+            { value: 'in', label: 'Is One Of' },
+            { value: 'not_in', label: 'Is Not One Of' },
+        ],
+        number: [
+            { value: '>=', label: 'Greater Than or Equal' },
+            { value: '<=', label: 'Less Than or Equal' },
+            { value: '==', label: 'Equals' },
+        ]
+    }
+};
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+
+
 
 export default function ScorecardDocument({
     scorecard,
@@ -51,14 +102,43 @@ export default function ScorecardDocument({
     const [showHelp, setShowHelp] = useState(false);
     const [highlightedSection, setHighlightedSection] = useState<string | null>(null);
 
+    const [animatingFields, setAnimatingFields] = useState<Set<string>>(new Set());
+    const [changedSections, setChangedSections] = useState<Set<string>>(new Set());
+
     useEffect(() => {
-        if (scorecard) {
-            setIsTyping(true);
+        // CHECK FOR _changes FIELD FROM BACKEND
+        const changes = scorecard._changes || [];
+
+        if (changes.length > 0) {
+            console.log('🎨 AI made changes:', changes);
+
+            // Track which fields are animating
+            const fieldIds = new Set<string>();
+            const sections = new Set<string>();
+
+            changes.forEach((change: any) => {
+                // Create unique field ID: "section-index-field"
+                const fieldId = `${change.section}-${change.field}`;
+                fieldIds.add(fieldId);
+                sections.add(change.section);
+            });
+
+            setAnimatingFields(fieldIds);
+            setChangedSections(sections);
+
+            // Remove animations after 2.5 seconds
             setTimeout(() => {
-                setLocalScorecard(scorecard);
-                setIsTyping(false);
-            }, 300);
+                setAnimatingFields(new Set());
+                setChangedSections(new Set());
+            }, 2500);
         }
+
+        setIsTyping(true);
+        setTimeout(() => {
+            setLocalScorecard(scorecard);
+            setIsTyping(false);
+        }, 300);
+
     }, [scorecard]);
 
     if (!localScorecard) {
@@ -142,6 +222,8 @@ export default function ScorecardDocument({
                             isEditable={isEditable}
                             isTyping={isTyping}
                             isHighlighted={highlightedSection === 'filters'}
+                            animatingFields={animatingFields}
+                            sectionChanged={changedSections.has('mustHaveFilters')}
                         />
                     </div>
 
@@ -162,6 +244,8 @@ export default function ScorecardDocument({
                             isEditable={isEditable}
                             isTyping={isTyping}
                             isHighlighted={highlightedSection === 'scoring'}
+                            animatingFields={animatingFields}
+                            sectionChanged={changedSections.has('scoringCriteria')}
                         />
                     </div>
 
@@ -172,6 +256,12 @@ export default function ScorecardDocument({
                                 expansions={localScorecard.expansions}
                                 isTyping={isTyping}
                                 isHighlighted={highlightedSection === 'expansions'}
+                                sessionId={sessionId}
+                                onUpdate={(newExpansions) => {
+                                    const updated = { ...localScorecard, expansions: newExpansions };
+                                    setLocalScorecard(updated);
+                                    onUpdate(updated);
+                                }}
                             />
                         </div>
                     )}
@@ -206,7 +296,7 @@ const HELP_STEPS = [
                     <p className="text-sm text-gray-800 font-medium">
                         💡 <span className="font-bold">Example:</span> "Senior backend engineer with Go experience in Gurgaon"
                     </p>
-                    <p className="text-sm text-gray-600 mt-2">
+                    <p className="text-sm text-gray-900 mt-2">
                         The AI automatically understands: location, skills, seniority, and more!
                     </p>
                 </div>
@@ -232,7 +322,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="text-sm font-semibold text-gray-900">Entity Extraction</p>
-                            <p className="text-sm text-gray-600">Identifies: roles, locations, skills, experience levels, industries</p>
+                            <p className="text-sm text-gray-900">Identifies: roles, locations, skills, experience levels, industries</p>
                         </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -241,7 +331,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="text-sm font-semibold text-gray-900">Creates Initial Structure</p>
-                            <p className="text-sm text-gray-600">Builds the foundation of your search criteria</p>
+                            <p className="text-sm text-gray-900">Builds the foundation of your search criteria</p>
                         </div>
                     </div>
                 </div>
@@ -351,7 +441,7 @@ const HELP_STEPS = [
                             </div>
                             <div className="flex-1">
                                 <p className="text-sm font-medium text-gray-900">Go Programming Experience</p>
-                                <p className="text-xs text-gray-600">Critical skill - highest weight</p>
+                                <p className="text-xs text-gray-900">Critical skill - highest weight</p>
                             </div>
                         </div>
                         <div className="flex items-start gap-2">
@@ -360,7 +450,7 @@ const HELP_STEPS = [
                             </div>
                             <div className="flex-1">
                                 <p className="text-sm font-medium text-gray-900">Startup Experience</p>
-                                <p className="text-xs text-gray-600">Important but not required</p>
+                                <p className="text-xs text-gray-900">Important but not required</p>
                             </div>
                         </div>
                         <div className="flex items-start gap-2">
@@ -369,7 +459,7 @@ const HELP_STEPS = [
                             </div>
                             <div className="flex-1">
                                 <p className="text-sm font-medium text-gray-900">AWS Certification</p>
-                                <p className="text-xs text-gray-600">Nice bonus</p>
+                                <p className="text-xs text-gray-900">Nice bonus</p>
                             </div>
                         </div>
                     </div>
@@ -407,14 +497,14 @@ const HELP_STEPS = [
                                 <p className="text-sm font-bold text-gray-900">Sarah Johnson</p>
                                 <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-bold">45/60</span>
                             </div>
-                            <p className="text-xs text-gray-600">Senior Backend Engineer • Gurgaon • 7 years Go</p>
+                            <p className="text-xs text-gray-900">Senior Backend Engineer • Gurgaon • 7 years Go</p>
                         </div>
                         <div className="bg-white rounded-lg p-3 border-2 border-green-400">
                             <div className="flex items-center justify-between mb-2">
                                 <p className="text-sm font-bold text-gray-900">Raj Patel</p>
                                 <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-bold">42/60</span>
                             </div>
-                            <p className="text-xs text-gray-600">Software Engineer • Gurgaon • 5 years Go</p>
+                            <p className="text-xs text-gray-900">Software Engineer • Gurgaon • 5 years Go</p>
                         </div>
                     </div>
                     <div className="flex gap-2 mt-3">
@@ -458,7 +548,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="text-sm font-semibold text-gray-900">Comprehensive Search</p>
-                            <p className="text-xs text-gray-600">Search thousands of candidates with your filters</p>
+                            <p className="text-xs text-gray-900">Search thousands of candidates with your filters</p>
                         </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -467,7 +557,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="text-sm font-semibold text-gray-900">Apply Scoring</p>
-                            <p className="text-xs text-gray-600">Calculate points for each candidate based on your criteria</p>
+                            <p className="text-xs text-gray-900">Calculate points for each candidate based on your criteria</p>
                         </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -476,7 +566,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="text-sm font-semibold text-gray-900">AI Deep Evaluation</p>
-                            <p className="text-xs text-gray-600">AI reads full profiles and explains why each person is a good match</p>
+                            <p className="text-xs text-gray-900">AI reads full profiles and explains why each person is a good match</p>
                         </div>
                     </div>
                 </div>
@@ -524,7 +614,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="font-bold text-gray-900">Simple for HR</p>
-                            <p className="text-sm text-gray-600">Just talk naturally - no technical knowledge needed</p>
+                            <p className="text-sm text-gray-900">Just talk naturally - no technical knowledge needed</p>
                         </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -533,7 +623,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="font-bold text-gray-900">Powerful AI</p>
-                            <p className="text-sm text-gray-600">Handles complexity, expansions, scoring, and evaluation automatically</p>
+                            <p className="text-sm text-gray-900">Handles complexity, expansions, scoring, and evaluation automatically</p>
                         </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -542,7 +632,7 @@ const HELP_STEPS = [
                         </div>
                         <div>
                             <p className="font-bold text-gray-900">Collaborative</p>
-                            <p className="text-sm text-gray-600">AI asks questions, you provide feedback, together you find the best candidates</p>
+                            <p className="text-sm text-gray-900">AI asks questions, you provide feedback, together you find the best candidates</p>
                         </div>
                     </div>
                 </div>
@@ -618,13 +708,13 @@ function HelpWalkthrough({ onClose, onHighlight }: { onClose: () => void; onHigh
                             onClick={onClose}
                             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                         >
-                            <X className="w-5 h-5 text-gray-500" />
+                            <X className="w-5 h-5 text-gray-700" />
                         </button>
                     </div>
                     <h2 className="text-2xl font-bold text-gray-900">
                         {step.title}
                     </h2>
-                    <p className="text-gray-600 mt-1">
+                    <p className="text-gray-900 mt-1">
                         {step.description}
                     </p>
                 </div>
@@ -745,7 +835,7 @@ function DocumentHeader({ query, isTyping, isHighlighted }: any) {
                     Your Search Criteria
                 </h1>
                 {query && (
-                    <p className="text-lg text-gray-600 mt-2">
+                    <p className="text-lg text-gray-900 mt-2">
                         Based on: <span className="text-gray-800 font-medium">"{query}"</span>
                     </p>
                 )}
@@ -758,7 +848,8 @@ function DocumentHeader({ query, isTyping, isHighlighted }: any) {
 // MUST-HAVE SECTION
 // ============================================================================
 
-function MustHaveSection({ filters, onUpdate, isEditable, isTyping, isHighlighted }: any) {
+function MustHaveSection({ filters, onUpdate, isEditable, isTyping, isHighlighted, animatingFields = new Set(),
+    sectionChanged = false }: any) {
     const [isCollapsed, setIsCollapsed] = useState(false);
 
     return (
@@ -767,11 +858,36 @@ function MustHaveSection({ filters, onUpdate, isEditable, isTyping, isHighlighte
                 scale: isHighlighted ? 1.01 : 1,
                 boxShadow: isHighlighted
                     ? '0 0 0 4px rgba(239, 68, 68, 0.3), 0 20px 25px -5px rgba(0, 0, 0, 0.1)'
-                    : '0 0 0 0px rgba(239, 68, 68, 0)'
+                    : sectionChanged
+                        ? '0 0 0 3px rgba(59, 130, 246, 0.5)'
+                        : '0 0 0 0px rgba(239, 68, 68, 0)'
             }}
             transition={{ duration: 0.3 }}
             className={`space-y-3 ${isHighlighted ? 'bg-white rounded-xl p-6 relative' : ''}`}
         >
+            {/* CHANGE INDICATOR */}
+            {sectionChanged && !isHighlighted && (
+                <motion.div
+                    initial={{ scale: 0, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0, opacity: 0 }}
+                    className="absolute -top-2 -right-2 z-10"
+                >
+                    <div className="relative">
+                        <motion.div
+                            animate={{
+                                scale: [1, 1.2, 1],
+                                opacity: [0.5, 1, 0.5]
+                            }}
+                            transition={{ repeat: Infinity, duration: 2 }}
+                            className="absolute inset-0 bg-blue-500 rounded-full blur-sm"
+                        />
+                        <div className="relative w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
+                            <Sparkles className="w-3 h-3 text-white" />
+                        </div>
+                    </div>
+                </motion.div>
+            )}
             {isHighlighted && (
                 <div className="absolute -top-3 left-6 px-3 py-1 bg-red-600 text-white text-sm font-bold rounded-full">
                     Must-Have Filters
@@ -787,7 +903,7 @@ function MustHaveSection({ filters, onUpdate, isEditable, isTyping, isHighlighte
                             animate={{ rotate: isCollapsed ? -90 : 0 }}
                             transition={{ duration: 0.2 }}
                         >
-                            <ChevronDown className="w-5 h-5 text-gray-600" />
+                            <ChevronDown className="w-5 h-5 text-gray-900" />
                         </motion.div>
                     </button>
                     <Target className="w-5 h-5 text-red-500" />
@@ -795,12 +911,12 @@ function MustHaveSection({ filters, onUpdate, isEditable, isTyping, isHighlighte
                         <h2 className="text-xl font-bold text-gray-900">
                             Must-Have Requirements
                         </h2>
-                        <p className="text-sm text-gray-600 mt-0.5">
+                        <p className="text-sm text-gray-900 mt-0.5">
                             Deal-breakers that eliminate candidates automatically
                         </p>
                     </div>
                 </div>
-                <span className="text-sm font-medium text-gray-500">
+                <span className="text-sm font-medium text-gray-700">
                     {filters.length} {filters.length === 1 ? 'requirement' : 'requirements'}
                 </span>
             </div>
@@ -823,10 +939,10 @@ function MustHaveSection({ filters, onUpdate, isEditable, isTyping, isHighlighte
                         <NotionTable
                             items={filters}
                             columns={[
-                                { key: 'field', label: 'Field', type: 'select', icon: <List className="w-4 h-4" /> },
-                                { key: 'operator', label: 'Condition', type: 'select', icon: <Type className="w-4 h-4" /> },
-                                { key: 'value', label: 'Value', type: 'text', icon: <Type className="w-4 h-4" /> },
-                                { key: 'description', label: 'Description', type: 'longtext', icon: <Type className="w-4 h-4" /> },
+                                { key: 'field', label: 'Field', type: 'select', icon: <List className="w-4 h-4" />, width: '200px' },
+                                { key: 'operator', label: 'Condition', type: 'select', icon: <Type className="w-4 h-4" />, width: '180px' },
+                                { key: 'value', label: 'Value', type: 'text', icon: <Type className="w-4 h-4" />, },
+                                { key: 'description', label: 'Description', type: 'longtext', icon: <Type className="w-4 h-4" />, },
                             ]}
                             onUpdate={onUpdate}
                             onAdd={() => {
@@ -843,6 +959,8 @@ function MustHaveSection({ filters, onUpdate, isEditable, isTyping, isHighlighte
                             isEditable={isEditable}
                             emptyMessage="No requirements yet. Add one to get started."
                             accentColor="red"
+                            animatingFields={animatingFields}
+                            sectionName="mustHaveFilters"
                         />
                     </motion.div>
                 )}
@@ -885,7 +1003,7 @@ function ScoringSection({ criteria, threshold, onUpdate, isEditable, isTyping, i
                             animate={{ rotate: isCollapsed ? -90 : 0 }}
                             transition={{ duration: 0.2 }}
                         >
-                            <ChevronDown className="w-5 h-5 text-gray-600" />
+                            <ChevronDown className="w-5 h-5 text-gray-900" />
                         </motion.div>
                     </button>
                     <Scale className="w-5 h-5 text-blue-500" />
@@ -893,13 +1011,13 @@ function ScoringSection({ criteria, threshold, onUpdate, isEditable, isTyping, i
                         <h2 className="text-xl font-bold text-gray-900">
                             What Makes a Great Match
                         </h2>
-                        <p className="text-sm text-gray-600 mt-0.5">
+                        <p className="text-sm text-gray-900 mt-0.5">
                             Weighted factors that rank and score candidates
                         </p>
                     </div>
                 </div>
                 <div className="flex items-center gap-4">
-                    <span className="text-sm font-medium text-gray-500">
+                    <span className="text-sm font-medium text-gray-700">
                         {criteria.length} {criteria.length === 1 ? 'factor' : 'factors'}
                     </span>
                     <div className="h-4 w-px bg-gray-300" />
@@ -941,10 +1059,10 @@ function ScoringSection({ criteria, threshold, onUpdate, isEditable, isTyping, i
                             <NotionTable
                                 items={criteria}
                                 columns={[
-                                    { key: 'description', label: 'What makes them great?', type: 'longtext', icon: <Type className="w-4 h-4" />, width: '40%' },
-                                    { key: 'keywords', label: 'Keywords', type: 'tags', icon: <List className="w-4 h-4" />, width: '35%' },
-                                    { key: 'points', label: 'Points', type: 'number', icon: <Hash className="w-4 h-4" />, width: '15%' },
-                                    { key: 'weight', label: 'Weight', type: 'progress', icon: <BarChart3 className="w-4 h-4" />, width: '10%' },
+                                    { key: 'description', label: 'What makes them great?', type: 'longtext', icon: <Type className="w-4 h-4" /> },
+                                    { key: 'keywords', label: 'Keywords', type: 'tags', icon: <List className="w-4 h-4" />, width: '280px' },
+                                    { key: 'points', label: 'Points', type: 'number', icon: <Hash className="w-4 h-4" />, width: '140px' },
+                                    { key: 'weight', label: 'Weight', type: 'progress', icon: <BarChart3 className="w-4 h-4" />, width: '180px' },
                                 ]}
                                 onUpdate={(updated) => onUpdate(updated, threshold)}
                                 onAdd={() => {
@@ -1055,7 +1173,7 @@ function ScoreThresholdCard({ threshold, totalPoints, onThresholdChange, isEdita
                     <div className="flex items-center justify-between">
                         <span className="text-3xl font-bold text-gray-900">
                             {threshold}
-                            <span className="text-lg text-gray-600 font-normal ml-2">/ {totalPoints}</span>
+                            <span className="text-lg text-gray-900 font-normal ml-2">/ {totalPoints}</span>
                         </span>
                         <span className="text-sm font-medium text-gray-700 bg-white/80 px-3 py-1 rounded-full">
                             {Math.round(percentage)}% required
@@ -1071,8 +1189,59 @@ function ScoreThresholdCard({ threshold, totalPoints, onThresholdChange, isEdita
 // EXPANSIONS SECTION
 // ============================================================================
 
-function ExpansionsSection({ expansions, isTyping, isHighlighted }: any) {
+function ExpansionsSection({ expansions, isTyping, isHighlighted, sessionId,
+    onUpdate }: any) {
     const [isCollapsed, setIsCollapsed] = useState(true);
+    const [isEditing, setIsEditing] = useState(false);
+    const [localExpansions, setLocalExpansions] = useState(expansions);
+    const [editingKey, setEditingKey] = useState<string | null>(null);
+
+
+    useEffect(() => {
+        setLocalExpansions(expansions);
+    }, [expansions]);
+
+    const handleSave = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            await fetch(`${API_BASE_URL}/api/scorecard/${sessionId}/update-expansions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ expansions: localExpansions })
+            });
+
+            onUpdate(localExpansions);
+            setIsEditing(false);
+            setEditingKey(null);
+        } catch (error) {
+            console.error('Error saving expansions:', error);
+        }
+    };
+
+    const handleCancel = () => {
+        setLocalExpansions(expansions);
+        setIsEditing(false);
+        setEditingKey(null);
+    };
+
+    const handleAddTerm = (key: string, term: string) => {
+        setLocalExpansions({
+            ...localExpansions,
+            [key]: [...(localExpansions[key] || []), term]
+        });
+    };
+
+    const handleRemoveTerm = (key: string, index: number) => {
+        const updated = [...localExpansions[key]];
+        updated.splice(index, 1);
+        setLocalExpansions({
+            ...localExpansions,
+            [key]: updated
+        });
+    }
 
     return (
         <motion.section
@@ -1100,7 +1269,7 @@ function ExpansionsSection({ expansions, isTyping, isHighlighted }: any) {
                             animate={{ rotate: isCollapsed ? -90 : 0 }}
                             transition={{ duration: 0.2 }}
                         >
-                            <ChevronDown className="w-5 h-5 text-gray-600" />
+                            <ChevronDown className="w-5 h-5 text-gray-900" />
                         </motion.div>
                     </button>
                     <Zap className="w-5 h-5 text-purple-500" />
@@ -1108,11 +1277,20 @@ function ExpansionsSection({ expansions, isTyping, isHighlighted }: any) {
                         <h2 className="text-xl font-bold text-gray-900">
                             Smart Expansions
                         </h2>
-                        <p className="text-sm text-gray-600 mt-0.5">
+                        <p className="text-sm text-gray-900 mt-0.5">
                             AI-generated variations to find more candidates
                         </p>
                     </div>
                 </div>
+                {!isEditing && (
+                    <button
+                        onClick={() => setIsEditing(true)}
+                        className="px-3 py-1.5 text-sm font-medium text-purple-700 bg-purple-100 rounded-lg hover:bg-purple-200 transition-colors flex items-center gap-2"
+                    >
+                        <Edit2 className="w-4 h-4" />
+                        Edit Expansions
+                    </button>
+                )}
             </div>
 
             <div className="flex items-start gap-3 p-4 bg-purple-50 rounded-lg border border-purple-100">
@@ -1124,36 +1302,88 @@ function ExpansionsSection({ expansions, isTyping, isHighlighted }: any) {
 
             <AnimatePresence>
                 {!isCollapsed && (
-                    <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        className="space-y-4 pt-2"
-                    >
-                        {Object.entries(expansions).map(([key, values]: [string, any]) => {
-                            if (!values || values.length === 0) return null;
+                    <motion.div className="space-y-4 pt-2">
+                        {Object.entries(localExpansions).map(([key, values]: [string, any]) => {
+                            const valuesArray = Array.isArray(values) ? values : [];
 
+                            if (valuesArray.length === 0) return null;
                             return (
                                 <div key={key} className="space-y-2">
-                                    <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wide">
-                                        {key.replace('_', ' ')}
-                                    </h4>
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wide">
+                                            {key.replace('_', ' ')}
+                                        </h4>
+
+                                        {/* ✅ ADD NEW TERM */}
+                                        {isEditing && editingKey === key && (
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="text"
+                                                    placeholder="Add term..."
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                                                            handleAddTerm(key, e.currentTarget.value.trim());
+                                                            e.currentTarget.value = '';
+                                                        }
+                                                    }}
+                                                    className="px-2 py-1 text-sm border-2 border-purple-500 rounded-lg"
+                                                />
+                                            </div>
+                                        )}
+
+                                        {isEditing && (
+                                            <button
+                                                onClick={() => setEditingKey(editingKey === key ? null : key)}
+                                                className="p-1 hover:bg-purple-100 rounded"
+                                            >
+                                                <Plus className="w-4 h-4 text-purple-600" />
+                                            </button>
+                                        )}
+                                    </div>
+
                                     <div className="flex flex-wrap gap-2">
                                         {values.map((value: string, i: number) => (
                                             <motion.span
                                                 key={i}
-                                                initial={{ opacity: 0, scale: 0.8 }}
-                                                animate={{ opacity: 1, scale: 1 }}
-                                                transition={{ delay: i * 0.03 }}
-                                                className="inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium bg-purple-100 text-purple-900 border border-purple-200"
+                                                layout
+                                                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-purple-100 text-purple-900 border border-purple-200"
                                             >
                                                 {value}
+
+                                                {/* ✅ REMOVE BUTTON */}
+                                                {isEditing && (
+                                                    <button
+                                                        onClick={() => handleRemoveTerm(key, i)}
+                                                        className="p-0.5 hover:bg-purple-200 rounded-full"
+                                                    >
+                                                        <X className="w-3 h-3" />
+                                                    </button>
+                                                )}
                                             </motion.span>
                                         ))}
                                     </div>
                                 </div>
                             );
                         })}
+
+                        {/* ✅ SAVE/CANCEL BUTTONS */}
+                        {isEditing && (
+                            <div className="flex items-center justify-end gap-2 pt-4 border-t border-purple-200">
+                                <button
+                                    onClick={handleCancel}
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleSave}
+                                    className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 flex items-center gap-2"
+                                >
+                                    <Save className="w-4 h-4" />
+                                    Save Changes
+                                </button>
+                            </div>
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -1180,6 +1410,8 @@ interface NotionTableProps {
     emptyMessage: string;
     accentColor: 'red' | 'blue';
     totalPoints?: number;
+    animatingFields?: Set<string>;
+    sectionName?: string;
 }
 
 function NotionTable({
@@ -1190,7 +1422,9 @@ function NotionTable({
     isEditable,
     emptyMessage,
     accentColor,
-    totalPoints = 0
+    totalPoints = 0,
+    animatingFields = new Set(),
+    sectionName = ''
 }: NotionTableProps) {
     const [editingCell, setEditingCell] = useState<{ row: number; col: string } | null>(null);
     const [hoveredRow, setHoveredRow] = useState<number | null>(null);
@@ -1207,116 +1441,431 @@ function NotionTable({
 
     if (items.length === 0) {
         return (
-            <div className="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center">
-                <div className="max-w-sm mx-auto space-y-3">
-                    <div className={`w-12 h-12 mx-auto rounded-xl ${accentColor === 'red' ? 'bg-red-50' : 'bg-blue-50'} flex items-center justify-center`}>
-                        {accentColor === 'red' ? <Target className="w-6 h-6 text-red-500" /> : <Scale className="w-6 h-6 text-blue-500" />}
+            <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="border-2 border-dashed border-gray-300 rounded-2xl p-16 text-center bg-gradient-to-br from-gray-50 to-gray-100"
+            >
+                <div className="max-w-md mx-auto space-y-4">
+                    <motion.div
+                        animate={{
+                            scale: [1, 1.1, 1],
+                            rotate: [0, 5, -5, 0]
+                        }}
+                        transition={{ duration: 2, repeat: Infinity }}
+                        className={`w-16 h-16 mx-auto rounded-2xl ${accentColor === 'red' ? 'bg-gradient-to-br from-red-400 to-pink-500' : 'bg-gradient-to-br from-blue-400 to-purple-500'
+                            } flex items-center justify-center shadow-xl`}
+                    >
+                        {accentColor === 'red' ? (
+                            <Target className="w-8 h-8 text-white" />
+                        ) : (
+                            <Scale className="w-8 h-8 text-white" />
+                        )}
+                    </motion.div>
+                    <div>
+                        <h3 className="text-lg font-bold text-gray-900 mb-2">Nothing here yet</h3>
+                        <p className="text-sm text-gray-600 leading-relaxed">{emptyMessage}</p>
                     </div>
-                    <p className="text-sm text-gray-600">{emptyMessage}</p>
                     {isEditable && (
-                        <button
+                        <motion.button
+                            whileHover={{ scale: 1.05, y: -2 }}
+                            whileTap={{ scale: 0.95 }}
                             onClick={onAdd}
-                            className={`inline-flex items-center gap-2 px-4 py-2 ${accentColor === 'red' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-lg transition-colors text-sm font-medium`}
+                            className={`inline-flex items-center gap-2 px-6 py-3 ${accentColor === 'red'
+                                ? 'bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700'
+                                : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
+                                } text-white rounded-xl transition-all text-sm font-bold shadow-lg hover:shadow-xl`}
                         >
-                            <Plus className="w-4 h-4" />
-                            Add First One
-                        </button>
+                            <Plus className="w-5 h-5" />
+                            Add Your First One
+                        </motion.button>
                     )}
                 </div>
-            </div>
+            </motion.div>
         );
     }
 
     return (
-        <div className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
-            {/* Table Header */}
-            <div className="bg-gray-50 border-b border-gray-200">
-                <div className="flex items-center">
-                    <div className="w-10 flex-shrink-0" />
-                    {columns.map((col) => (
+        <div className="border-2 border-gray-200 rounded-2xl overflow-hidden bg-white shadow-xl">
+            {/* Enhanced Table Header */}
+            <div className="bg-gradient-to-r from-gray-50 to-gray-100 border-b-2 border-gray-200">
+                <div className="flex items-stretch min-h-[56px]">
+                    {/* Row Number Column */}
+                    <div className="w-16 flex-shrink-0 border-r-2 border-gray-200 flex items-center justify-center">
+                        <div className="w-6 h-6 rounded-md bg-white flex items-center justify-center shadow-sm">
+                            <Hash className="w-4 h-4 text-gray-600" />
+                        </div>
+                    </div>
+
+                    {/* Column Headers */}
+                    {columns.map((col, idx) => (
                         <div
                             key={col.key}
-                            className="px-4 py-3 flex items-center gap-2 text-xs font-semibold text-gray-700 uppercase tracking-wide"
-                            style={{ width: col.width || 'auto', flex: col.width ? undefined : 1 }}
+                            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold text-gray-800 uppercase tracking-wider ${idx < columns.length - 1 ? 'border-r-2 border-gray-200' : ''
+                                }`}
+                            style={{
+                                width: col.width || 'auto',
+                                minWidth: col.width || '150px',
+                                flex: col.width ? '0 0 auto' : '1 1 0'
+                            }}
                         >
-                            {col.icon}
-                            {col.label}
+                            <div className="w-5 h-5 rounded-md bg-white flex items-center justify-center shadow-sm flex-shrink-0">
+                                {col.icon}
+                            </div>
+                            <span className="truncate">{col.label}</span>
                         </div>
                     ))}
-                    <div className="w-12 flex-shrink-0" />
+
+                    {/* Actions Column */}
+                    <div className="w-16 flex-shrink-0 border-l-2 border-gray-200 flex items-center justify-center">
+                        <MoreHorizontal className="w-4 h-4 text-gray-400" />
+                    </div>
                 </div>
             </div>
 
-            {/* Table Body */}
-            <div className="divide-y divide-gray-100">
+            {/* Info Banner */}
+            <div className="px-4 py-3 bg-blue-50 border-b-2 border-blue-100">
+                <div className="flex items-start gap-3 text-xs">
+                    <div className="p-1 bg-blue-100 rounded-md flex-shrink-0">
+                        <AlertCircle className="w-4 h-4 text-blue-600" />
+                    </div>
+                    <div className="flex-1">
+                        <p className="font-bold text-blue-900 mb-1">
+                            💡 Searchable Fields Only
+                        </p>
+                        <p className="text-blue-800 leading-relaxed">
+                            {sectionName === 'mustHaveFilters'
+                                ? 'Only fields from candidate profiles: location, title, industry, skills, seniority, etc.'
+                                : 'Only fields from candidate profiles: title, skills, industry, education, certifications, awards, etc.'
+                            }
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Enhanced Table Body */}
+            <div className="divide-y-2 divide-gray-100">
                 <AnimatePresence mode="popLayout">
-                    {items.map((item, index) => (
-                        <motion.div
-                            key={index}
-                            layout
-                            initial={{ opacity: 0, y: -10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, height: 0 }}
-                            onHoverStart={() => setHoveredRow(index)}
-                            onHoverEnd={() => setHoveredRow(null)}
-                            className="flex items-center hover:bg-gray-50 transition-colors group"
-                        >
-                            {/* Drag Handle */}
-                            <div className="w-10 flex-shrink-0 flex items-center justify-center">
-                                {isEditable && hoveredRow === index && (
-                                    <motion.div
-                                        initial={{ opacity: 0 }}
-                                        animate={{ opacity: 1 }}
-                                        exit={{ opacity: 0 }}
-                                    >
-                                        <GripVertical className="w-4 h-4 text-gray-400 cursor-grab active:cursor-grabbing" />
-                                    </motion.div>
-                                )}
-                            </div>
+                    {items.map((item, index) => {
+                        const isHovered = hoveredRow === index;
 
-                            {/* Cells */}
-                            {columns.map((col) => (
-                                <TableCell
-                                    key={col.key}
-                                    item={item}
-                                    column={col}
-                                    isEditing={editingCell?.row === index && editingCell?.col === col.key}
-                                    onStartEdit={() => isEditable && setEditingCell({ row: index, col: col.key })}
-                                    onStopEdit={() => setEditingCell(null)}
-                                    onUpdate={(value) => handleUpdate(index, col.key, value)}
-                                    isEditable={isEditable}
-                                    totalPoints={totalPoints}
-                                />
-                            ))}
+                        return (
+                            <motion.div
+                                key={index}
+                                layout
+                                initial={{ opacity: 0, x: -20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                exit={{ opacity: 0, x: 20, height: 0 }}
+                                transition={{ duration: 0.3 }}
+                                onHoverStart={() => setHoveredRow(index)}
+                                onHoverEnd={() => setHoveredRow(null)}
+                                className={`flex items-stretch min-h-[72px] group/row relative ${isHovered ? 'bg-blue-50/30' : 'bg-white'
+                                    } transition-all`}
+                            >
+                                {/* Row number & Drag Handle */}
+                                <div className="w-16 flex-shrink-0 flex flex-col items-center justify-center border-r-2 border-gray-100">
+                                    {isEditable && isHovered ? (
+                                        <motion.div
+                                            initial={{ opacity: 0, scale: 0.8 }}
+                                            animate={{ opacity: 1, scale: 1 }}
+                                            exit={{ opacity: 0, scale: 0.8 }}
+                                            whileHover={{ scale: 1.1 }}
+                                            className="cursor-grab active:cursor-grabbing"
+                                        >
+                                            <GripVertical className="w-5 h-5 text-gray-400" />
+                                        </motion.div>
+                                    ) : (
+                                        <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center">
+                                            <span className="text-xs font-bold text-gray-700">
+                                                {index + 1}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
 
-                            {/* Actions */}
-                            <div className="w-12 flex-shrink-0 flex items-center justify-center">
-                                {isEditable && hoveredRow === index && (
-                                    <motion.button
-                                        initial={{ opacity: 0, scale: 0.8 }}
-                                        animate={{ opacity: 1, scale: 1 }}
-                                        exit={{ opacity: 0, scale: 0.8 }}
-                                        onClick={() => handleDelete(index)}
-                                        className="p-1.5 hover:bg-red-100 rounded transition-colors"
-                                    >
-                                        <Trash2 className="w-4 h-4 text-red-600" />
-                                    </motion.button>
-                                )}
-                            </div>
-                        </motion.div>
-                    ))}
+                                {/* Cells */}
+                                {columns.map((col, colIdx) => {
+                                    const fieldId = `${sectionName}-${col.key}`;
+                                    const isAnimating = animatingFields.has(fieldId);
+
+                                    return (
+                                        <div
+                                            key={col.key}
+                                            className={`flex items-center ${colIdx < columns.length - 1 ? 'border-r-2 border-gray-100' : ''
+                                                }`}
+                                            style={{
+                                                width: col.width || 'auto',
+                                                minWidth: col.width || '150px',
+                                                flex: col.width ? '0 0 auto' : '1 1 0'
+                                            }}
+                                        >
+                                            <TableCell
+                                                item={item}
+                                                column={col}
+                                                isEditing={editingCell?.row === index && editingCell?.col === col.key}
+                                                onStartEdit={() => isEditable && setEditingCell({ row: index, col: col.key })}
+                                                onStopEdit={() => setEditingCell(null)}
+                                                onUpdate={(value) => handleUpdate(index, col.key, value)}
+                                                isEditable={isEditable}
+                                                totalPoints={totalPoints}
+                                                isAnimating={isAnimating}
+                                            />
+                                        </div>
+                                    );
+                                })}
+
+                                {/* Actions */}
+                                <div className="w-16 flex-shrink-0 flex items-center justify-center border-l-2 border-gray-100">
+                                    <AnimatePresence>
+                                        {isEditable && isHovered && (
+                                            <motion.button
+                                                initial={{ opacity: 0, scale: 0.5, rotate: -90 }}
+                                                animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                                                exit={{ opacity: 0, scale: 0.5, rotate: 90 }}
+                                                whileHover={{ scale: 1.1, rotate: 5 }}
+                                                whileTap={{ scale: 0.9 }}
+                                                onClick={() => handleDelete(index)}
+                                                className="p-2 hover:bg-red-100 rounded-lg transition-colors"
+                                            >
+                                                <Trash2 className="w-4 h-4 text-red-600" />
+                                            </motion.button>
+                                        )}
+                                    </AnimatePresence>
+                                </div>
+                            </motion.div>
+                        );
+                    })}
                 </AnimatePresence>
             </div>
 
-            {/* Add New Row */}
+            {/* Enhanced Add New Row Button */}
             {isEditable && (
-                <button
+                <motion.button
+                    whileHover={{ backgroundColor: 'rgb(249, 250, 251)' }}
+                    whileTap={{ scale: 0.98 }}
                     onClick={onAdd}
-                    className="w-full px-4 py-3 flex items-center gap-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors border-t border-gray-100"
+                    className="w-full px-4 py-4 flex items-center gap-3 text-sm font-semibold text-gray-700 transition-all border-t-2 border-gray-100 group"
                 >
-                    <Plus className="w-4 h-4" />
-                    New
-                </button>
+                    <motion.div
+                        whileHover={{ scale: 1.2, rotate: 90 }}
+                        className="w-6 h-6 rounded-lg bg-gray-200 group-hover:bg-blue-200 flex items-center justify-center transition-colors"
+                    >
+                        <Plus className="w-4 h-4 text-gray-600 group-hover:text-blue-600 transition-colors" />
+                    </motion.div>
+                    <span className="group-hover:text-blue-600 transition-colors">Add New Row</span>
+                </motion.button>
+            )}
+        </div>
+    );
+}
+
+
+// ============================================================================
+// TAGS INPUT COMPONENT
+// ============================================================================
+
+function TagsInput({
+    value = [],
+    onChange,
+    placeholder = "Add keywords...",
+    isEditable = true
+}: {
+    value: string[];
+    onChange: (tags: string[]) => void;
+    placeholder?: string;
+    isEditable?: boolean;
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [inputValue, setInputValue] = useState('');
+    const [localTags, setLocalTags] = useState<string[]>(value || []);
+    const inputRef = useRef<HTMLInputElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        setLocalTags(value || []);
+    }, [value]);
+
+    useEffect(() => {
+        if (isOpen && inputRef.current) {
+            inputRef.current.focus();
+        }
+    }, [isOpen]);
+
+    // Close on click outside
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+                handleClose();
+            }
+        };
+
+        if (isOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [isOpen]);
+
+    const handleAddTag = () => {
+        const trimmed = inputValue.trim();
+        if (trimmed && !localTags.includes(trimmed)) {
+            const newTags = [...localTags, trimmed];
+            setLocalTags(newTags);
+            setInputValue('');
+        }
+    };
+
+    const handleRemoveTag = (tagToRemove: string) => {
+        const newTags = localTags.filter(tag => tag !== tagToRemove);
+        setLocalTags(newTags);
+    };
+
+    const handleClose = () => {
+        onChange(localTags);
+        setIsOpen(false);
+        setInputValue('');
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleAddTag();
+        } else if (e.key === 'Escape') {
+            handleClose();
+        } else if (e.key === 'Backspace' && !inputValue && localTags.length > 0) {
+            handleRemoveTag(localTags[localTags.length - 1]);
+        }
+    };
+
+    return (
+        <div ref={containerRef} className="relative w-full">
+            {/* Display View */}
+            {!isOpen ? (
+                <div
+                    onClick={() => isEditable && setIsOpen(true)}
+                    className={`flex flex-wrap gap-1.5 min-h-[36px] ${isEditable ? 'cursor-pointer hover:bg-gray-50' : ''
+                        } rounded-lg p-2 transition-colors`}
+                >
+                    {localTags.length > 0 ? (
+                        <>
+                            {localTags.slice(0, 3).map((tag, i) => (
+                                <motion.span
+                                    key={i}
+                                    initial={{ scale: 0.8, opacity: 0 }}
+                                    animate={{ scale: 1, opacity: 1 }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-blue-100 text-blue-900 border border-blue-200"
+                                >
+                                    <Tag className="w-3 h-3" />
+                                    {tag}
+                                </motion.span>
+                            ))}
+                            {localTags.length > 3 && (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-200">
+                                    +{localTags.length - 3} more
+                                </span>
+                            )}
+                        </>
+                    ) : (
+                        <span className="text-sm text-gray-400 py-1">
+                            {placeholder}
+                        </span>
+                    )}
+                </div>
+            ) : (
+                /* Edit View - Popover */
+                <motion.div
+                    initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    className="absolute top-0 left-0 right-0 z-50 bg-white rounded-xl border-2 border-blue-500 shadow-2xl p-3 space-y-3"
+                    style={{ minWidth: '300px' }}
+                >
+                    {/* Header */}
+                    <div className="flex items-center justify-between pb-2 border-b border-gray-200">
+                        <div className="flex items-center gap-2">
+                            <Tag className="w-4 h-4 text-blue-600" />
+                            <h4 className="text-sm font-bold text-gray-900">Edit Keywords</h4>
+                        </div>
+                        <button
+                            onClick={handleClose}
+                            className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+                        >
+                            <X className="w-4 h-4 text-gray-500" />
+                        </button>
+                    </div>
+
+                    {/* Tags Display */}
+                    <div className="flex flex-wrap gap-2 min-h-[40px] max-h-[200px] overflow-y-auto p-2 bg-gray-50 rounded-lg">
+                        <AnimatePresence mode="popLayout">
+                            {localTags.map((tag, i) => (
+                                <motion.span
+                                    key={tag}
+                                    layout
+                                    initial={{ scale: 0.8, opacity: 0 }}
+                                    animate={{ scale: 1, opacity: 1 }}
+                                    exit={{ scale: 0.8, opacity: 0 }}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-blue-600 text-white shadow-sm group"
+                                >
+                                    <Tag className="w-3.5 h-3.5" />
+                                    {tag}
+                                    <button
+                                        onClick={() => handleRemoveTag(tag)}
+                                        className="ml-1 p-0.5 hover:bg-blue-700 rounded-full transition-colors"
+                                    >
+                                        <X className="w-3 h-3" />
+                                    </button>
+                                </motion.span>
+                            ))}
+                            {localTags.length === 0 && (
+                                <span className="text-sm text-gray-500 py-2">
+                                    No keywords yet. Add some below!
+                                </span>
+                            )}
+                        </AnimatePresence>
+                    </div>
+
+                    {/* Input */}
+                    <div className="flex items-center gap-2">
+                        <div className="flex-1 relative">
+                            <input
+                                ref={inputRef}
+                                type="text"
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="Type and press Enter..."
+                                className="w-full px-3 py-2 text-sm bg-white border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none text-gray-900 placeholder-gray-400"
+                            />
+                        </div>
+                        <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={handleAddTag}
+                            disabled={!inputValue.trim()}
+                            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                        >
+                            <Plus className="w-4 h-4" />
+                        </motion.button>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                        <p className="text-xs text-gray-600">
+                            <kbd className="px-1.5 py-0.5 bg-gray-200 rounded text-xs font-mono">Enter</kbd> to add,{' '}
+                            <kbd className="px-1.5 py-0.5 bg-gray-200 rounded text-xs font-mono">Esc</kbd> to close
+                        </p>
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={handleClose}
+                            className="px-4 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-xs font-semibold flex items-center gap-1"
+                        >
+                            <Check className="w-3 h-3" />
+                            Done ({localTags.length})
+                        </motion.button>
+                    </div>
+                </motion.div>
             )}
         </div>
     );
@@ -1326,7 +1875,17 @@ function NotionTable({
 // TABLE CELL
 // ============================================================================
 
-function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate, isEditable, totalPoints }: any) {
+function TableCell({
+    item,
+    column,
+    isEditing,
+    onStartEdit,
+    onStopEdit,
+    onUpdate,
+    isEditable,
+    totalPoints,
+    isAnimating = false
+}: any) {
     const [localValue, setLocalValue] = useState(item[column.key]);
     const inputRef = useRef<any>(null);
 
@@ -1335,6 +1894,10 @@ function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate,
             inputRef.current.focus();
         }
     }, [isEditing]);
+
+    useEffect(() => {
+        setLocalValue(item[column.key]);
+    }, [item[column.key]]);
 
     const handleSave = () => {
         onUpdate(localValue);
@@ -1352,71 +1915,77 @@ function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate,
         switch (column.type) {
             case 'tags':
                 return (
-                    <div className="flex flex-wrap gap-1.5">
-                        {value && value.length > 0 ? (
-                            <>
-                                {value.slice(0, 4).map((tag: string, i: number) => (
-                                    <span
-                                        key={i}
-                                        className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-800"
-                                    >
-                                        {tag}
-                                    </span>
-                                ))}
-                                {value.length > 4 && (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-600">
-                                        +{value.length - 4}
-                                    </span>
-                                )}
-                            </>
-                        ) : (
-                            <span className="text-sm text-gray-400">Empty</span>
-                        )}
+                    <div className="w-full">
+                        <TagsInput
+                            value={value || []}
+                            onChange={(newTags) => onUpdate(newTags)}
+                            placeholder="Click to add keywords..."
+                            isEditable={isEditable}
+                        />
                     </div>
                 );
 
             case 'number':
                 return (
-                    <span className="text-sm font-semibold text-gray-900">
-                        {value || 0}
-                    </span>
+                    <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg flex-shrink-0">
+                            <span className="text-lg font-bold text-white">
+                                {value || 0}
+                            </span>
+                        </div>
+                        <span className="text-xs text-gray-700 font-semibold whitespace-nowrap">points</span>
+                    </div>
                 );
 
             case 'progress':
                 const percentage = totalPoints > 0 ? (item.points / totalPoints) * 100 : 0;
                 return (
-                    <div className="flex items-center gap-2">
-                        <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div
-                                className="h-full bg-gradient-to-r from-blue-500 to-purple-500"
-                                style={{ width: `${percentage}%` }}
-                            />
+                    <div className="w-full space-y-2">
+                        <div className="flex items-center gap-3">
+                            <div className="flex-1 h-3 bg-gray-200 rounded-full overflow-hidden shadow-inner">
+                                <motion.div
+                                    initial={{ width: 0 }}
+                                    animate={{ width: `${percentage}%` }}
+                                    transition={{ duration: 0.8, ease: "easeOut" }}
+                                    className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500"
+                                />
+                            </div>
+                            <span className="text-sm font-bold text-gray-900 whitespace-nowrap min-w-[50px] text-right">
+                                {Math.round(percentage)}%
+                            </span>
                         </div>
-                        <span className="text-xs font-medium text-gray-600 whitespace-nowrap">
-                            {Math.round(percentage)}%
-                        </span>
                     </div>
                 );
 
             case 'select':
+                const displayValue = value ? value.replace(/_/g, ' ') : 'Select...';
                 return (
-                    <span className="text-sm text-gray-900 font-medium">
-                        {value ? value.replace('_', ' ') : 'Select...'}
-                    </span>
+                    <div className="w-full">
+                        <div className={`inline-flex items-center px-3 py-2 rounded-lg text-sm font-semibold border-2 ${value
+                            ? 'bg-blue-50 text-blue-900 border-blue-200'
+                            : 'bg-gray-50 text-gray-500 border-gray-200'
+                            }`}>
+                            {displayValue}
+                        </div>
+                    </div>
                 );
 
             case 'longtext':
                 return (
-                    <p className="text-sm text-gray-900 line-clamp-2">
-                        {value || <span className="text-gray-400">Empty</span>}
-                    </p>
+                    <div className="w-full py-1">
+                        <p className="text-sm text-gray-900 leading-relaxed font-medium">
+                            {value || <span className="text-gray-400 italic">Click to add description...</span>}
+                        </p>
+                    </div>
                 );
 
             default:
                 return (
-                    <span className="text-sm text-gray-900">
-                        {value || <span className="text-gray-400">Empty</span>}
-                    </span>
+                    <div className="w-full">
+                        <span className="text-sm text-gray-900 font-medium">
+                            {value || <span className="text-gray-400 italic">Empty</span>}
+                        </span>
+                    </div>
                 );
         }
     };
@@ -1424,9 +1993,23 @@ function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate,
     const renderEditor = () => {
         switch (column.type) {
             case 'select':
-                const options = column.key === 'field'
-                    ? ['location', 'title', 'expertise', 'current_industry', 'seniority_level']
-                    : ['contains', 'equals', 'in'];
+                let options: Array<{ value: string; label: string }> = [];
+
+                if (column.key === 'field') {
+                    options = SEARCHABLE_FIELDS.FILTERS;
+                } else if (column.key === 'operator') {
+                    const fieldValue = item.field;
+                    const isListField = ['education', 'certifications', 'awards'].includes(fieldValue);
+                    const isNumberField = ['experience_years', 'seniority_level'].includes(fieldValue);
+
+                    if (isListField) {
+                        options = SEARCHABLE_FIELDS.OPERATORS.list;
+                    } else if (isNumberField) {
+                        options = SEARCHABLE_FIELDS.OPERATORS.number;
+                    } else {
+                        options = SEARCHABLE_FIELDS.OPERATORS.text;
+                    }
+                }
 
                 return (
                     <select
@@ -1434,11 +2017,12 @@ function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate,
                         value={localValue}
                         onChange={(e) => setLocalValue(e.target.value)}
                         onBlur={handleSave}
-                        className="w-full px-2 py-1.5 text-sm bg-white border-2 border-blue-500 rounded focus:outline-none"
+                        className="w-full px-3 py-2.5 text-sm font-semibold bg-white border-2 border-blue-500 rounded-lg focus:outline-none text-gray-900 shadow-lg"
                     >
+                        <option value="">Select...</option>
                         {options.map((opt) => (
-                            <option key={opt} value={opt}>
-                                {opt.replace('_', ' ')}
+                            <option key={opt.value} value={opt.value}>
+                                {opt.label}
                             </option>
                         ))}
                     </select>
@@ -1456,27 +2040,7 @@ function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate,
                             if (e.key === 'Enter') handleSave();
                             if (e.key === 'Escape') handleCancel();
                         }}
-                        className="w-full px-2 py-1.5 text-sm bg-white border-2 border-blue-500 rounded focus:outline-none"
-                    />
-                );
-
-            case 'tags':
-                return (
-                    <input
-                        ref={inputRef}
-                        type="text"
-                        value={Array.isArray(localValue) ? localValue.join(', ') : localValue}
-                        onChange={(e) => {
-                            const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t);
-                            setLocalValue(tags);
-                        }}
-                        onBlur={handleSave}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleSave();
-                            if (e.key === 'Escape') handleCancel();
-                        }}
-                        placeholder="tag1, tag2, tag3..."
-                        className="w-full px-2 py-1.5 text-sm bg-white border-2 border-blue-500 rounded focus:outline-none"
+                        className="w-full px-3 py-2.5 text-sm font-bold bg-white border-2 border-blue-500 rounded-lg focus:outline-none text-gray-900 shadow-lg"
                     />
                 );
 
@@ -1491,7 +2055,7 @@ function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate,
                             if (e.key === 'Enter' && e.metaKey) handleSave();
                             if (e.key === 'Escape') handleCancel();
                         }}
-                        className="w-full px-2 py-1.5 text-sm bg-white border-2 border-blue-500 rounded focus:outline-none resize-none"
+                        className="w-full px-3 py-2.5 text-sm font-medium bg-white border-2 border-blue-500 rounded-lg focus:outline-none resize-none text-gray-900 shadow-lg leading-relaxed"
                         minRows={2}
                     />
                 );
@@ -1508,20 +2072,72 @@ function TableCell({ item, column, isEditing, onStartEdit, onStopEdit, onUpdate,
                             if (e.key === 'Enter') handleSave();
                             if (e.key === 'Escape') handleCancel();
                         }}
-                        className="w-full px-2 py-1.5 text-sm bg-white border-2 border-blue-500 rounded focus:outline-none"
+                        className="w-full px-3 py-2.5 text-sm font-medium bg-white border-2 border-blue-500 rounded-lg focus:outline-none text-gray-900 shadow-lg"
                     />
                 );
         }
     };
 
     return (
-        <div
-            className="px-4 py-3 cursor-pointer"
-            style={{ width: column.width || 'auto', flex: column.width ? undefined : 1 }}
-            onClick={() => !isEditing && isEditable && onStartEdit()}
+        <motion.div
+            animate={{
+                backgroundColor: isAnimating
+                    ? ['#FFFFFF', '#DBEAFE', '#FFFFFF']
+                    : '#FFFFFF',
+                scale: isAnimating ? [1, 1.005, 1] : 1
+            }}
+            transition={{
+                duration: 0.8,
+                ease: "easeInOut"
+            }}
+            className={`w-full h-full px-4 py-3 relative group/cell ${!isEditing && isEditable && column.type !== 'tags' ? 'cursor-pointer hover:bg-blue-50/50' : ''
+                } transition-all flex items-center`}
+            onClick={() => !isEditing && isEditable && column.type !== 'tags' && onStartEdit()}
         >
-            {isEditing ? renderEditor() : renderDisplay()}
-        </div>
+            {/* Sparkle animation when changed */}
+            <AnimatePresence>
+                {isAnimating && (
+                    <motion.div
+                        initial={{ scale: 0, opacity: 0, rotate: -180 }}
+                        animate={{ scale: 1, opacity: 1, rotate: 0 }}
+                        exit={{ scale: 0, opacity: 0, rotate: 180 }}
+                        className="absolute top-2 right-2 z-10"
+                    >
+                        <div className="relative">
+                            <motion.div
+                                animate={{
+                                    scale: [1, 1.5, 1],
+                                    opacity: [0.3, 0.8, 0.3]
+                                }}
+                                transition={{ repeat: 3, duration: 0.6 }}
+                                className="absolute inset-0 bg-blue-400 rounded-full blur-md"
+                            />
+                            <div className="relative w-6 h-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center shadow-lg">
+                                <Sparkles className="w-3.5 h-3.5 text-white" />
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Edit icon on hover (except for tags) */}
+            {!isEditing && isEditable && column.type !== 'tags' && (
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="absolute top-2 right-2 opacity-0 group-hover/cell:opacity-100 transition-opacity z-10"
+                >
+                    <div className="p-1 bg-blue-100 rounded-md shadow-sm">
+                        <Edit2 className="w-3 h-3 text-blue-600" />
+                    </div>
+                </motion.div>
+            )}
+
+            {/* Content */}
+            <div className="w-full">
+                {isEditing ? renderEditor() : renderDisplay()}
+            </div>
+        </motion.div>
     );
 }
 
@@ -1560,7 +2176,7 @@ function DocumentFooter({ scorecard }: any) {
     return (
         <div className="mt-16 pt-8 border-t border-gray-200">
             <div className="flex items-center justify-between">
-                <div className="flex items-center gap-8 text-sm text-gray-600">
+                <div className="flex items-center gap-8 text-sm text-gray-900">
                     <div className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-red-500 rounded-full" />
                         <span className="font-medium text-gray-900">{stats.filters}</span> requirements
@@ -1575,7 +2191,7 @@ function DocumentFooter({ scorecard }: any) {
                     </div>
                 </div>
                 <div className="text-sm">
-                    <span className="text-gray-600">Threshold: </span>
+                    <span className="text-gray-900">Threshold: </span>
                     <span className="font-bold text-gray-900">{stats.threshold} pts</span>
                 </div>
             </div>
