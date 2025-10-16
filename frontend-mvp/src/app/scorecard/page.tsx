@@ -3,7 +3,6 @@
 import { Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import Sidebar from '@/components/ui/sidebar';
 import ScorecardBuilder from '@/components/scorecard/ScorecardBuilder';
 import { Loader2 } from 'lucide-react';
 

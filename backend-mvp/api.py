@@ -6,7 +6,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ai_model import AIModel, HiringPromptParser
 from auth import AuthManager
@@ -821,83 +821,144 @@ class API:
             current_user: dict = Depends(self.get_current_user)
         ):
             """
-            Get search results with approved samples and criteria.
-            Returns data formatted for table view.
+            Get search results with AI summaries and match details.
             """
-            await self._verify_session_ownership(session_id, current_user)
-            
-            # Get scorecard for search criteria
-            scorecard = await self.redis_manager.get_data_async(session_id, "scorecard")
-            
-            # Get prompt document
-            prompt_doc = None
-            if scorecard and scorecard.get("prompt_id"):
+            try:
+                await self._verify_session_ownership(session_id, current_user)
+                
+                # Get scorecard
+                scorecard = await self.redis_manager.get_data_async(session_id, "scorecard")
+                
+                if not scorecard:
+                    raise HTTPException(status_code=404, detail="Scorecard not found")
+                
+                # Get prompt document
+                prompt_id = scorecard.get("prompt_id")
+                if not prompt_id:
+                    raise HTTPException(status_code=404, detail="No prompt ID found")
+                
                 prompt_doc = self.prompt_manager.prompts_collection.find_one({
-                    "prompt_id": scorecard["prompt_id"]
+                    "prompt_id": prompt_id
                 })
-            
-            if not prompt_doc:
-                raise HTTPException(status_code=404, detail="Results not found")
-            
-            # Get approved samples
-            approved_samples = prompt_doc.get("approved_samples", [])
-            
-            if not approved_samples:
-                raise HTTPException(status_code=404, detail="No approved samples found")
-            
-            # ✅ Format results for table view
-            results = []
-            scoring_criteria = scorecard.get("scoringCriteria", [])
-            
-            for sample in approved_samples:
-                # Extract what was searched vs what candidate has
-                breakdown = sample.get("score_breakdown", [])
                 
-                # Build column data based on scoring criteria
-                criteria_matches = {}
-                for criterion in scoring_criteria:
-                    description = criterion.get("description", "")
-                    points = criterion.get("points", 0)
-                    
-                    # Find matching breakdown item
-                    matched = False
-                    earned_points = 0
-                    for breakdown_item in breakdown:
-                        if breakdown_item.get("description") == description:
-                            matched = breakdown_item.get("matched", False)
-                            earned_points = breakdown_item.get("earned_points", 0)
-                            break
-                    
-                    criteria_matches[description] = {
-                        "matched": matched,
-                        "earned_points": earned_points,
-                        "max_points": points,
-                        "percentage": (earned_points / points * 100) if points > 0 else 0
-                    }
+                if not prompt_doc:
+                    raise HTTPException(status_code=404, detail="Prompt document not found")
                 
-                results.append({
-                    "profile_id": sample["profile_id"],
-                    "profile_summary": sample["profile_summary"],
-                    "total_score": sample["score"],
-                    "max_score": sample["max_score"],
-                    "score_percentage": (sample["score"] / sample["max_score"] * 100) if sample["max_score"] > 0 else 0,
-                    "criteria_matches": criteria_matches,
-                    "score_breakdown": breakdown,
-                    "approved_at": sample.get("approved_at")
-                })
+                # Get matched profiles and AI summaries
+                matched_profiles = prompt_doc.get("matched_profiles", [])
+                ai_summaries = prompt_doc.get("ai_summaries", {})
+                
+                if not matched_profiles:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="No candidates found. Please approve sample candidates first."
+                    )
+                
+                # Connect to profiles DB
+                profiles_db_url = os.getenv("PROFILES_DB_URL", "mongodb://localhost:27017/")
+                profiles_db_name = os.getenv("PROFILES_DB_NAME", "mydatabase")
+                profiles_client = MongoClient(profiles_db_url)
+                profiles_db = profiles_client[profiles_db_name]
+                profiles_collection = profiles_db["profiles"]
+                
+                # Format results
+                results = []
+                scoring_criteria = scorecard.get("scoringCriteria", [])
+                
+                for matched_profile in matched_profiles:
+                    profile_id = matched_profile["profile_id"]
+                    
+                    # Get AI summary
+                    ai_summary = ai_summaries.get(profile_id, {})
+                    final_score = ai_summary.get("final_score", matched_profile.get("pre_score", 0))
+                    summary_text = ai_summary.get("summary", "Good candidate match.")
+                    
+                    # Get full profile data
+                    from bson import ObjectId
+                    try:
+                        full_profile = profiles_collection.find_one({"_id": ObjectId(profile_id)})
+                    except:
+                        full_profile = None
+                    
+                    # Build criteria matches
+                    criteria_matches = {}
+                    
+                    for criterion in scoring_criteria:
+                        description = criterion.get("description", "")
+                        keywords = criterion.get("keywords", [])
+                        points = criterion.get("points", 0)
+                        fields = criterion.get("fields", [])
+                        
+                        # Check if candidate matches
+                        matched = False
+                        reasoning = ""
+                        
+                        if full_profile:
+                            for field in fields:
+                                field_value = full_profile.get(field, "")
+                                if isinstance(field_value, list):
+                                    field_value = " ".join(str(v) for v in field_value)
+                                else:
+                                    field_value = str(field_value)
+                                
+                                field_value_lower = field_value.lower()
+                                
+                                for keyword in keywords:
+                                    if keyword.lower() in field_value_lower:
+                                        matched = True
+                                        reasoning = f"Has '{keyword}' in {field}"
+                                        break
+                                
+                                if matched:
+                                    break
+                        
+                        earned_points = points if matched else 0
+                        
+                        criteria_matches[description] = {
+                            "matched": matched,
+                            "earned_points": earned_points,
+                            "max_points": points,
+                            "percentage": (earned_points / points * 100) if points > 0 else 0,
+                            "reasoning": reasoning or f"{'✓ Matched' if matched else '✗ Not matched'} for {description}"
+                        }
+                    
+                    # Calculate scores
+                    total_earned = sum(c["earned_points"] for c in criteria_matches.values())
+                    max_possible = sum(c["max_points"] for c in criteria_matches.values())
+                    score_percentage = (total_earned / max_possible * 100) if max_possible > 0 else 0
+                    
+                    results.append({
+                        "profile_id": profile_id,
+                        "profile_summary": matched_profile["profile_summary"],
+                        "total_score": final_score,
+                        "max_score": max_possible,
+                        "score_percentage": score_percentage,
+                        "criteria_matches": criteria_matches,
+                        "summary": summary_text,
+                        "linkedin_url": full_profile.get("linkedin_url", "") if full_profile else ""
+                    })
+                
+                # Sort by AI score
+                results.sort(key=lambda x: x["total_score"], reverse=True)
+                
+                return {
+                    "session_id": session_id,
+                    "prompt": prompt_doc["prompt"],
+                    "scorecard": scorecard,
+                    "total_matches": len(results),
+                    "results": results,
+                    "search_criteria": [c["description"] for c in scoring_criteria],
+                    "ai_summaries_available": len(ai_summaries) > 0
+                }
             
-            # Sort by score
-            results.sort(key=lambda x: x["total_score"], reverse=True)
-            
-            return {
-                "session_id": session_id,
-                "prompt": prompt_doc["prompt"],
-                "scorecard": scorecard,
-                "total_matches": len(results),
-                "results": results,
-                "search_criteria": [c["description"] for c in scoring_criteria],
-                "must_have_filters": scorecard.get("mustHaveFilters", [])
-            }
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error fetching results: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.post("/api/v2/session/{session_id}/load-more")
         async def load_more_results(
             session_id: str,
@@ -1658,7 +1719,6 @@ class API:
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=str(e))
 
-
         @self.app.post("/api/scorecard/{session_id}/approve-samples")
         async def approve_samples(
             session_id: str,
@@ -1666,7 +1726,7 @@ class API:
         ):
             """
             User approved the sample candidates.
-            Store samples and redirect to full search.
+            Generate AI summaries for top 10, store everything, and redirect to results.
             """
             try:
                 scorecard = await self.redis_manager.get_data_async(session_id, "scorecard")
@@ -1674,10 +1734,13 @@ class API:
                 if not scorecard:
                     raise HTTPException(status_code=404, detail="Scorecard not found")
                 
-                # Get sample candidates from Redis (they were stored during sample search)
+                # Get sample candidates from Redis
                 sample_candidates = await self.redis_manager.get_data_async(session_id, "sample_candidates") or []
                 
-                # ✅ FINAL REFINEMENT: Optimize expansions
+                if not sample_candidates:
+                    raise HTTPException(status_code=400, detail="No sample candidates found. Please generate samples first.")
+                
+                # ✅ FINAL REFINEMENT
                 conversation = await self.redis_manager.get_data_async(session_id, "conversation") or []
                 
                 print("🎯 Performing FINAL expansion refinement...")
@@ -1686,60 +1749,141 @@ class API:
                     conversation_history=conversation
                 )
                 
-                # Update scorecard
+                # Update scorecard status
                 refined_scorecard["updated_at"] = datetime.utcnow().isoformat()
                 refined_scorecard["status"] = "finalized"
                 
+                # Update in MongoDB
                 self.scorecard_workflow.scorecards_collection.update_one(
                     {"scorecard_id": refined_scorecard["scorecard_id"]},
                     {"$set": refined_scorecard}
                 )
                 
-                # ✅ NEW: Store approved samples in prompt document
+                # ✅ Generate AI summaries for top 10 candidates
                 prompt_id = refined_scorecard.get("prompt_id")
                 
-                if prompt_id and sample_candidates:
-                    print(f"📝 Storing {len(sample_candidates)} approved samples in prompt document...")
+                if not prompt_id:
+                    raise HTTPException(status_code=400, detail="No prompt_id found in scorecard")
+                
+                print(f"\n{'='*80}")
+                print(f"🤖 GENERATING AI SUMMARIES FOR TOP 10 CANDIDATES")
+                print(f"{'='*80}")
+                
+                # Get original query for context
+                original_query = refined_scorecard.get("metadata", {}).get("originalQuery", "")
+                
+                # Prepare matched profiles and generate summaries
+                matched_profiles = []
+                ai_summaries = {}
+                
+                # Sort by score and take top 10
+                sorted_candidates = sorted(
+                    sample_candidates,
+                    key=lambda x: x.get("score", 0),
+                    reverse=True
+                )[:10]
+                
+                for idx, candidate in enumerate(sorted_candidates):
+                    profile = candidate.get("profile", {})
                     
-                    # Prepare samples for storage
-                    approved_samples = []
-                    for candidate in sample_candidates:
-                        approved_samples.append({
-                            "profile_id": str(candidate["profile"].get("_id", "")),
-                            "score": candidate["score"],
-                            "max_score": candidate["max_score"],
-                            "score_breakdown": candidate["score_breakdown"],
-                            "profile_summary": {
-                                "name": f"{candidate['profile'].get('first_name', '')} {candidate['profile'].get('last_name', '')}",
-                                "title": candidate['profile'].get('title', ''),
-                                "location": candidate['profile'].get('location', ''),
-                                "current_industry": candidate['profile'].get('current_industry', ''),
-                                "expertise": candidate['profile'].get('expertise', ''),
-                            },
-                            "approved_at": datetime.utcnow().isoformat()
-                        })
+                    # Extract profile ID
+                    from bson import ObjectId
+                    profile_id_raw = profile.get("_id", "") if "_id" in profile else profile.get("profile_id", "")
                     
-                    # Update prompt document
-                    self.prompt_manager.prompts_collection.update_one(
+                    # Convert ObjectId to string if needed
+                    if isinstance(profile_id_raw, ObjectId):
+                        profile_id = str(profile_id_raw)
+                    else:
+                        profile_id = str(profile_id_raw)
+                    
+                    # Add to matched_profiles
+                    matched_profiles.append({
+                        "profile_id": profile_id,
+                        "pre_score": candidate.get("score", 0),
+                        "profile_summary": {
+                            "name": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
+                            "title": profile.get('title', ''),
+                            "location": profile.get('location', ''),
+                            "industry": profile.get('current_industry', '')
+                        }
+                    })
+                    
+                    # ✅ GENERATE AI SUMMARY FOR THIS CANDIDATE
+                    print(f"\n  🧠 Generating AI summary {idx+1}/10 for {matched_profiles[-1]['profile_summary']['name']}...")
+                    
+                    try:
+                        ai_summary = await self._generate_candidate_summary(
+                            profile=profile,
+                            original_query=original_query,
+                            scorecard=refined_scorecard,
+                            score_breakdown=candidate.get("score_breakdown", [])
+                        )
+                        
+                        ai_summaries[profile_id] = {
+                            "final_score": ai_summary.get("final_score", candidate.get("score", 0)),
+                            "summary": ai_summary.get("summary", "Good candidate match."),
+                            "generated_at": datetime.utcnow()
+                        }
+                        
+                        print(f"  ✅ Summary generated: {ai_summary.get('final_score', 0)}/100 - {ai_summary.get('summary', '')[:80]}...")
+                    except Exception as e:
+                        print(f"  ⚠️ AI summary generation failed for {profile_id}: {e}")
+                        # Fallback to basic score
+                        ai_summaries[profile_id] = {
+                            "final_score": candidate.get("score", 0),
+                            "summary": "Good candidate match based on keyword scoring.",
+                            "generated_at": datetime.utcnow()
+                        }
+                
+                # ✅ UPDATE PROMPT DOCUMENT WITH ALL DATA
+                print(f"\n📝 Updating prompt document {prompt_id}...")
+                
+                try:
+                    update_result = self.prompt_manager.prompts_collection.update_one(
                         {"prompt_id": prompt_id},
                         {
                             "$set": {
-                                "approved_samples": approved_samples,
-                                "samples_approved_at": datetime.utcnow().isoformat(),
-                                "status": "samples_approved"
+                                "matched_profiles": matched_profiles,
+                                "ai_summaries": ai_summaries,
+                                "summary_generation": {
+                                    "total_profiles": len(sample_candidates),
+                                    "summaries_generated": len(ai_summaries),
+                                    "last_batch_size": len(sorted_candidates),
+                                    "last_generated_at": datetime.utcnow()
+                                },
+                                "status": "samples_approved",
+                                "samples_approved_at": datetime.utcnow(),
+                                "updated_at": datetime.utcnow()
                             }
                         }
                     )
                     
-                    print(f"✅ Stored {len(approved_samples)} samples in prompt {prompt_id}")
+                    print(f"  Update matched: {update_result.matched_count}")
+                    print(f"  Update modified: {update_result.modified_count}")
+                    
+                    if update_result.modified_count > 0:
+                        print(f"✅ Prompt document updated successfully!")
+                    elif update_result.matched_count > 0:
+                        print(f"⚠️ Prompt document matched but not modified (maybe already updated)")
+                    else:
+                        print(f"❌ Prompt document not found with prompt_id: {prompt_id}")
+                        raise HTTPException(status_code=404, detail=f"Prompt document not found: {prompt_id}")
                 
+                except Exception as e:
+                    print(f"❌ Error updating prompt document: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    raise HTTPException(status_code=500, detail=f"Failed to update prompt: {str(e)}")
+                
+                # Remove MongoDB _id if present
                 if "_id" in refined_scorecard:
                     del refined_scorecard["_id"]
                 
+                # Update Redis
                 await self.redis_manager.store_data_async(session_id, "scorecard", refined_scorecard)
                 await self.redis_manager.store_data_async(session_id, "phase", "ready_for_full_search")
                 
-                # Broadcast via WebSocket
+                # ✅ BROADCAST VIA WEBSOCKET WITH REDIRECT FLAG
                 await self.websocket_manager.broadcast_to_session(
                     session_id,
                     {
@@ -1747,8 +1891,9 @@ class API:
                         "data": {
                             "scorecard": refined_scorecard,
                             "phase": "ready_for_full_search",
-                            "message": "Perfect! Your criteria is fully optimized. Ready to search all candidates! 🚀",
-                            "redirect_to_results": True  # ✅ Signal to redirect
+                            "message": "Perfect! Your criteria is fully optimized. Redirecting to results... 🚀",
+                            "redirect_to_results": True,
+                            "prompt_id": prompt_id
                         }
                     }
                 )
@@ -1757,15 +1902,20 @@ class API:
                     "success": True,
                     "scorecard": refined_scorecard,
                     "phase": "ready_for_full_search",
-                    "message": "Samples approved! Scorecard finalized.",
-                    "redirect_to_results": True
+                    "message": "Samples approved! AI summaries generated.",
+                    "redirect_to_results": True,
+                    "prompt_id": prompt_id,
+                    "summaries_generated": len(ai_summaries)
                 }
                 
+            except HTTPException:
+                raise
             except Exception as e:
                 print(f"❌ Error approving samples: {e}")
                 import traceback
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=str(e))
+
 
         @self.app.post("/api/scorecard/{session_id}/reject-samples")
         async def reject_samples(
@@ -2131,3 +2281,147 @@ class API:
         # Case-insensitive replacement with markers
         pattern = re.compile(re.escape(search_term), re.IGNORECASE)
         return pattern.sub(lambda m: f"<<{m.group()}>>", text)
+    
+    async def _generate_candidate_summary(
+        self,
+        profile: Dict[str, Any],
+        original_query: str,
+        scorecard: Dict[str, Any],
+        score_breakdown: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Generate AI summary explaining why this candidate is a great match.
+        """
+        
+        # Build a concise profile description
+        profile_text = f"""
+    **Name:** {profile.get('first_name', '')} {profile.get('last_name', '')}
+
+    **Title:** {profile.get('title', 'N/A')}
+
+    **Location:** {profile.get('location', 'N/A')}
+
+    **Industry:** {profile.get('current_industry', 'N/A')}
+
+    **Expertise:** {profile.get('expertise', 'N/A')[:500]}  # Truncate to 500 chars
+
+    **Summary:** {profile.get('summary', 'N/A')[:1000]}  # Truncate to 1000 chars
+
+    **Education:** {', '.join([f"{edu.get('major', '')} from {edu.get('campus', '')}" for edu in profile.get('education', [])[:2]])}
+
+    **Score Breakdown:**
+    {chr(10).join([f"- {item.get('description', '')}: {item.get('earned_points', 0)}/{item.get('max_points', 0)} {'✓' if item.get('matched') else '✗'}" for item in score_breakdown])}
+    """
+
+        # Get scoring criteria for context
+        scoring_criteria_text = "\n".join([
+            f"- {criterion.get('description', '')} ({criterion.get('points', 0)} points)"
+            for criterion in scorecard.get('scoringCriteria', [])
+        ])
+
+        system_prompt = f"""You are an expert HR recruiter evaluating candidates. Provide a concise, compelling explanation of why this candidate is a great match for the role.
+
+    **Role Requirements:**
+    {original_query}
+
+    **Key Scoring Criteria:**
+    {scoring_criteria_text}
+
+    Your task:
+    1. Analyze the candidate's profile against the requirements
+    2. Assign a final score (0-100) based on overall fit
+    3. Write a 2-3 sentence summary explaining:
+    - Why they're a strong match (highlight key strengths)
+    - Any notable advantages or unique qualifications
+    - Minor gaps if any (be honest but constructive)
+
+    Be specific and reference actual skills, experience, or qualifications from their profile.
+
+    Return JSON:
+    {{
+    "final_score": <number 0-100>,
+    "summary": "<2-3 sentence overall evaluation>",
+    "criteria_reasoning": {{
+        "<criterion_name>": {{
+        "matched": true/false,
+        "reasoning": "<1-2 sentences explaining why they match or don't match this criterion>"
+        }}
+    }}
+    }}
+
+
+    Example:
+    {{
+    "final_score": 92,
+    "summary": "Exceptional match with strong backend experience and leadership skills.",
+    "criteria_reasoning": {{
+        "Backend Experience": {{
+        "matched": true,
+        "reasoning": "5+ years building scalable backend systems with Python and Go at companies like Twitter and Stripe."
+        }},
+        "Leadership": {{
+        "matched": true,
+        "reasoning": "Led teams of 4-6 engineers as Tech Lead, mentored junior developers, and drove architectural decisions."
+        }}
+    }}
+    }}
+    """
+
+        user_message = f"""Evaluate this candidate:
+
+    {profile_text}
+
+    Provide your evaluation as JSON:"""
+
+        try:
+            import requests
+            
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            model_name = os.getenv("AI_MODEL_NAME", "openai/gpt-4o-mini")
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+            }
+
+            data = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                "temperature": 0.3
+            }
+
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            
+            llm_response = result["choices"][0]["message"]["content"]
+            
+            # Extract JSON
+            response_text = llm_response.strip()
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            
+            import json
+            evaluation = json.loads(response_text)
+            
+            return {
+                "final_score": evaluation.get("final_score", 50),
+                "summary": evaluation.get("summary", "Good candidate match.")
+            }
+            
+        except Exception as e:
+            print(f"❌ AI summary generation failed: {e}")
+            # Fallback to basic scoring
+            return {
+                "final_score": sum([item.get('earned_points', 0) for item in score_breakdown]),
+                "summary": "Candidate shows relevant experience and skills for this role."
+            }

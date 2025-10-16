@@ -214,22 +214,22 @@ export default function ScorecardBuilder({ sessionId }: ScorecardBuilderProps) {
                         setPhase('max_iterations_reached');
                     }
                 } else if (data.action === 'samples_approved') {
-                    const data = JSON.parse(event.data);
+                    console.log('✅ Samples approved! Preparing redirect...');
 
-                    if (data.action === 'samples_approved') {
-                        setPhase('ready_for_full_search');
-                        setMessages(prev => [...prev, {
-                            role: 'assistant',
-                            content: data.data.message || "Perfect! Your criteria is ready. Let's find all matching candidates! 🚀",
-                            timestamp: new Date().toISOString()
-                        }]);
+                    setPhase('ready_for_full_search');
+                    setMessages(prev => [...prev, {
+                        role: 'assistant',
+                        content: data.data.message || "Perfect! Your criteria is ready. Redirecting... 🚀",
+                        timestamp: new Date().toISOString()
+                    }]);
+                    // ✅ ALWAYS REDIRECT when samples are approved
+                    if (data.data.redirect_to_results || data.data.phase === 'ready_for_full_search') {
+                        console.log('🚀 Redirecting to results page...');
 
-                        // ✅ NEW: Redirect to results page
-                        if (data.data.redirect_to_results) {
-                            setTimeout(() => {
-                                router.push(`/results?session=${sessionId}`);
-                            }, 2000); // Wait 2 seconds so user sees the success message
-                        }
+                        setTimeout(() => {
+                            // Use window.location for guaranteed redirect
+                            window.location.href = `/results?session=${sessionId}`;
+                        }, 2000); // 2 second delay to show success message
                     }
                 }
             };
@@ -405,19 +405,29 @@ export default function ScorecardBuilder({ sessionId }: ScorecardBuilderProps) {
 
             if (response.ok) {
                 const data = await response.json();
+                console.log('✅ Samples approved:', data);
 
-                // ✅ Direct redirect if API says so
+                // ✅ Show success message
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: "Perfect! Generating AI summaries and preparing your results... 🚀",
+                    timestamp: new Date().toISOString()
+                }]);
+
+                // ✅ Direct redirect if WebSocket doesn't fire
                 if (data.redirect_to_results) {
-                    setMessages(prev => [...prev, {
-                        role: 'assistant',
-                        content: "Perfect! Redirecting you to search all candidates... 🚀",
-                        timestamp: new Date().toISOString()
-                    }]);
-
                     setTimeout(() => {
-                        router.push(`/results?session=${sessionId}`);
-                    }, 1500);
+                        console.log('🚀 Redirecting via HTTP response...');
+                        window.location.href = `/results?session=${sessionId}`;
+                    }, 2500);
                 }
+            } else {
+                console.error('❌ Failed to approve samples');
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: "Sorry, there was an error. Please try again.",
+                    timestamp: new Date().toISOString()
+                }]);
             }
         } catch (error) {
             console.error('Error approving samples:', error);

@@ -12,7 +12,7 @@ import {
     LayoutGrid,
     Table as TableIcon
 } from 'lucide-react';
-import ResultsTableView from './ResultsTableView';
+import ResultsTableView from './ResultsTable';
 import CandidateCard from './CandidateCard';
 import ProfileDetailModal from './ProfileDetailModal';
 

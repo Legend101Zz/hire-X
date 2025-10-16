@@ -222,13 +222,12 @@ class ScorecardWorkflow:
         sample_size: int = 5
     ) -> Dict[str, Any]:
         """
-        Get sample candidates using progressive search strategy.
+        Get sample candidates using 2-strategy search.
         
         Strategy:
-        1. Try strict search
-        2. If no results, try partial search
-        3. If still no results, ask AI what to relax
-        4. Return candidates with scores
+        1. Try STRICT search (all filters must match)
+        2. If no results, try RELAXED search (location mandatory + broad keywords)
+        3. If still no results, ask AI for suggestions
         """
         
         scorecard = self.redis_manager.get_data(session_id, "scorecard")
@@ -237,7 +236,7 @@ class ScorecardWorkflow:
             return {"error": "No scorecard found"}
         
         print(f"\n{'='*80}")
-        print(f"🔍 INTELLIGENT SEARCH - Phase 4")
+        print(f"🔍 INTELLIGENT SEARCH")
         print(f"{'='*80}")
         
         filters = scorecard.get("mustHaveFilters", [])
@@ -253,9 +252,9 @@ class ScorecardWorkflow:
         profiles_collection = profiles_db["profiles"]
         
         # ===================================================================
-        # STRATEGY 1: STRICT SEARCH
+        # STRATEGY 1: STRICT SEARCH (AI-Assisted)
         # ===================================================================
-        print("\n📍 STRATEGY 1: Strict search with all filters...")
+        print("\n📍 STRATEGY 1: Strict search (ALL criteria must match)...")
         
         try:
             strict_query = await self.query_builder.build_query_with_strategy(
@@ -269,97 +268,48 @@ class ScorecardWorkflow:
             
             print(f"✅ Found {len(candidates)} candidates")
             
-            if len(candidates) > 0:
-                # Score and return
-                return await self._score_and_return_samples(
+            if len(candidates) >= 10:  # Good number of results
+                result = await self._score_and_return_samples(
                     candidates, scoring_criteria, expansions, threshold, sample_size,
-                    message=f"Found {len(candidates)} candidates with strict criteria! 🎯"
+                    message=f"Found {len(candidates)} candidates matching all your criteria! 🎯"
                 )
+                
+                # ✅ STORE IN REDIS
+                if result.get("samples"):
+                    self.redis_manager.store_data(session_id, "sample_candidates", result["samples"])
+                    print(f"✅ Stored {len(result['samples'])} samples in Redis (strict search)")
+                
+                return result
         
         except Exception as e:
             print(f"❌ Strict search failed: {e}")
         
         # ===================================================================
-        # STRATEGY 2: PARTIAL SEARCH (More Relaxed)
+        # STRATEGY 2: RELAXED SEARCH (AI-Assisted)
         # ===================================================================
-        print("\n📍 STRATEGY 2: Partial search (relaxed matching)...")
+        print("\n📍 STRATEGY 2: Relaxed search (location mandatory + broad keyword matching)...")
         
         try:
-            partial_query = await self.query_builder.build_query_with_strategy(
-                filters, expansions, strategy="partial"
-            )
-            
-            print(f"Query: {json.dumps(partial_query, indent=2)}")
-            
-            candidates_cursor = profiles_collection.find(partial_query).limit(sample_size * 10)
-            candidates = list(candidates_cursor)
-            
-            print(f"✅ Found {len(candidates)} candidates")
-            
-            if len(candidates) > 0:
-                return await self._score_and_return_samples(
-                    candidates, scoring_criteria, expansions, threshold, sample_size,
-                    message=f"Found {len(candidates)} candidates with relaxed criteria. Some filters were broadened. 🔍"
-                )
-        
-        except Exception as e:
-            print(f"❌ Partial search failed: {e}")
-        
-        # ===================================================================
-        # STRATEGY 3: AI-SUGGESTED QUERY
-        # ===================================================================
-        print("\n📍 STRATEGY 3: Let AI build query...")
-        
-        try:
-            ai_query = await self.query_builder.build_query_with_strategy(
-                filters, expansions, strategy="ai_suggested"
-            )
-            
-            print(f"AI Query: {json.dumps(ai_query, indent=2)}")
-            
-            candidates_cursor = profiles_collection.find(ai_query).limit(sample_size * 10)
-            candidates = list(candidates_cursor)
-            
-            print(f"✅ Found {len(candidates)} candidates")
-            
-            if len(candidates) > 0:
-                return await self._score_and_return_samples(
-                    candidates, scoring_criteria, expansions, threshold, sample_size,
-                    message=f"Found {len(candidates)} candidates using AI-optimized search! 🤖"
-                )
-        
-        except Exception as e:
-            print(f"❌ AI search failed: {e}")
-        
-        # ===================================================================
-        # STRATEGY 4: SEARCH WITHOUT THRESHOLD (Find ANY candidates)
-        # ===================================================================
-        print("\n📍 STRATEGY 4: Search without score threshold...")
-
-        try:
-            # Try relaxed query
             relaxed_query = await self.query_builder.build_query_with_strategy(
                 filters, expansions, strategy="relaxed"
             )
             
-            print(f"Relaxed Query: {json.dumps(relaxed_query, indent=2)}")
+            print(f"Query: {json.dumps(relaxed_query, indent=2)}")
             
-            candidates_cursor = profiles_collection.find(relaxed_query).limit(sample_size * 10)
+            candidates_cursor = profiles_collection.find(relaxed_query).limit(sample_size * 20)
             candidates = list(candidates_cursor)
             
             print(f"✅ Found {len(candidates)} candidates")
             
             if len(candidates) > 0:
-                # Score them but DON'T filter by threshold
+                # Score them all
                 scored_candidates = []
                 for candidate in candidates:
                     score_data = self._score_candidate(candidate, scoring_criteria, expansions)
-                    
-                    # ✅ FIX: Convert ObjectId to string
                     clean_candidate = self._convert_objectid_to_string(candidate)
                     
                     scored_candidates.append({
-                        "profile": clean_candidate,  # ✅ Use cleaned version
+                        "profile": clean_candidate,
                         "score": score_data["total_score"],
                         "max_score": score_data["max_score"],
                         "score_breakdown": score_data["breakdown"]
@@ -367,48 +317,45 @@ class ScorecardWorkflow:
                 
                 # Sort by score
                 scored_candidates.sort(key=lambda x: x["score"], reverse=True)
-                top_candidates = scored_candidates[:sample_size]
                 
                 # Check if any meet threshold
                 above_threshold = [c for c in scored_candidates if c["score"] >= threshold]
                 
-                if len(above_threshold) > 0:
-                    return {
+                if len(above_threshold) >= sample_size:
+                    result = {
                         "samples": above_threshold[:sample_size],
                         "total_matches": len(above_threshold),
-                        "message": f"Found {len(above_threshold)} candidates above your threshold of {threshold} points! 🎉"
+                        "message": f"Found {len(above_threshold)} candidates! Used relaxed criteria to cast a wider net. 🔍"
                     }
+                    
+                    # ✅ STORE IN REDIS
+                    self.redis_manager.store_data(session_id, "sample_candidates", result["samples"])
+                    print(f"✅ Stored {len(result['samples'])} samples in Redis (relaxed search - above threshold)")
+                    
+                    return result
                 else:
-                    # Show best candidates even if below threshold
+                    # Return best matches even if below threshold
+                    top_candidates = scored_candidates[:sample_size]
                     highest_score = top_candidates[0]["score"] if top_candidates else 0
-                    return {
+                    
+                    result = {
                         "samples": top_candidates,
-                        "total_matches": len(candidates),
+                        "total_matches": len(scored_candidates),
                         "below_threshold": True,
                         "highest_score": highest_score,
                         "threshold": threshold,
-                        "message": f"⚠️ Found {len(candidates)} candidates, but the highest score is {highest_score}/{threshold}. Here are the top matches. Consider lowering your threshold or relaxing requirements."
+                        "message": f"⚠️ Found {len(candidates)} candidates, but highest score is {highest_score}/{threshold}. Here are the best matches. Consider lowering your threshold."
                     }
                     
-                
+                    # ✅ STORE IN REDIS (even if below threshold)
+                    self.redis_manager.store_data(session_id, "sample_candidates", result["samples"])
+                    print(f"✅ Stored {len(result['samples'])} samples in Redis (relaxed search - below threshold)")
+                    
+                    return result
+        
         except Exception as e:
             print(f"❌ Relaxed search failed: {e}")
         
-        # ===================================================================
-        # NO CANDIDATES FOUND - ASK AI FOR SUGGESTIONS
-        # ===================================================================
-        print("\n❌ NO CANDIDATES FOUND - Getting AI suggestions...")
-        
-        try:
-            suggestion = await self.query_builder.suggest_relaxation(filters, 0)
-            
-            return {
-                "samples": [],
-                "total_matches": 0,
-                "no_results": True,
-                "suggestion": suggestion,
-                "message": f"😔 No candidates found matching your criteria.\n\n💡 **Suggestion:** {suggestion['suggestion']}\n\n**Reasoning:** {suggestion['reasoning']}\n\nWould you like me to adjust the criteria and try again?"
-            }
         
         except Exception as e:
             print(f"❌ AI suggestion failed: {e}")
@@ -416,10 +363,9 @@ class ScorecardWorkflow:
                 "samples": [],
                 "total_matches": 0,
                 "no_results": True,
-                "message": "😔 No candidates found. Try:\n1. Relaxing location requirements\n2. Broadening skills requirements\n3. Lowering experience requirements\n4. Reducing the score threshold"
+                "message": "😔 No candidates found. Try:\n• Broadening location\n• Relaxing skill requirements\n• Lowering experience needs"
             }
-
-
+        
     # At the end of _score_and_return_samples, before return:
     async def _score_and_return_samples(
         self,

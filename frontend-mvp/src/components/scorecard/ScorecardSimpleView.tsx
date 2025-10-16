@@ -208,3 +208,5 @@ export default function ScorecardSimpleView({ scorecard }: ScorecardSimpleViewPr
         </div>
     );
 }
+
+
