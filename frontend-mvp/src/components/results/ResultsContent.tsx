@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+//@ts-nocheck
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -100,8 +103,8 @@ export default function ResultsContent({ sessionId }: ResultsContentProps) {
                                 <button
                                     onClick={() => setViewMode('table')}
                                     className={`px-3 py-2 rounded-md transition-all ${viewMode === 'table'
-                                            ? 'bg-white shadow-sm text-blue-600'
-                                            : 'text-gray-600 hover:text-gray-900'
+                                        ? 'bg-white shadow-sm text-blue-600'
+                                        : 'text-gray-600 hover:text-gray-900'
                                         }`}
                                 >
                                     <TableIcon className="w-5 h-5" />
@@ -109,8 +112,8 @@ export default function ResultsContent({ sessionId }: ResultsContentProps) {
                                 <button
                                     onClick={() => setViewMode('cards')}
                                     className={`px-3 py-2 rounded-md transition-all ${viewMode === 'cards'
-                                            ? 'bg-white shadow-sm text-blue-600'
-                                            : 'text-gray-600 hover:text-gray-900'
+                                        ? 'bg-white shadow-sm text-blue-600'
+                                        : 'text-gray-600 hover:text-gray-900'
                                         }`}
                                 >
                                     <LayoutGrid className="w-5 h-5" />

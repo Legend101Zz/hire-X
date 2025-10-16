@@ -193,8 +193,8 @@ export default function ContactFetchModal({
                             {/* Individual Results */}
                             <div className="space-y-3">
                                 <h3 className="font-semibold text-gray-900">Results</h3>
-                                {results.map((result, index) => {
-                                    const candidate = candidates[index];
+                                {results.map((result,) => {
+
                                     return (
                                         <div
                                             key={result.profile_id}

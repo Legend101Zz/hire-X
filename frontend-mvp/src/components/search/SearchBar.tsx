@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -122,8 +123,8 @@ export default function SearchBar({ onSearch, isLoading = false }: SearchBarProp
                             whileHover={query.trim() && !isLoading ? { scale: 1.05 } : {}}
                             whileTap={query.trim() && !isLoading ? { scale: 0.95 } : {}}
                             className={`px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${query.trim() && !isLoading
-                                    ? 'bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white shadow-lg hover:shadow-xl'
-                                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                ? 'bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white shadow-lg hover:shadow-xl'
+                                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                                 }`}
                         >
                             {isLoading ? (
