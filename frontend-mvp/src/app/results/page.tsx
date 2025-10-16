@@ -1,10 +1,9 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useEffect, useState, Suspense } from 'react';
-import Header from '@/components/ui/header';
+import { useEffect, Suspense } from 'react';
 import Sidebar from '@/components/ui/sidebar';
-import ResultsContent from '@/components/results/ResultsContent';
+import ResultsTable from '@/components/results/ResultsTable';
 import { Loader2 } from 'lucide-react';
 
 function ResultsPageContent() {
@@ -23,12 +22,11 @@ function ResultsPageContent() {
     }
 
     return (
-        <div className="min-h-screen bg-gray-50">
+        <div className="min-h-screen bg-white">
             <div className="flex">
                 <Sidebar />
                 <div className="flex-1 ml-64">
-
-                    <ResultsContent sessionId={sessionId} />
+                    <ResultsTable sessionId={sessionId} />
                 </div>
             </div>
         </div>
@@ -38,7 +36,7 @@ function ResultsPageContent() {
 export default function ResultsPage() {
     return (
         <Suspense fallback={
-            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+            <div className="min-h-screen bg-white flex items-center justify-center">
                 <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
             </div>
         }>

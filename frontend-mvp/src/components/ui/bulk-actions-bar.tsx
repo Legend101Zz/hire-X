@@ -1,6 +1,6 @@
 'use client';
 
-import { Users, Star, Download, Mail } from 'lucide-react';
+import { Users, Star, Download, } from 'lucide-react';
 
 interface BulkActionsBarProps {
     selectedCount: number;

@@ -159,9 +159,9 @@ export default function SearchProgress({
     }, []);
 
     // Memoize callbacks
-    const handleCompleteCallback = useCallback(onComplete, []);
-    const handleNeedsRefinementCallback = useCallback(onNeedsRefinement, []);
-    const handleErrorCallback = useCallback(onError, []);
+    const handleCompleteCallback = useCallback(onComplete, [onComplete]);
+    const handleNeedsRefinementCallback = useCallback(onNeedsRefinement, [onNeedsRefinement]);
+    const handleErrorCallback = useCallback(onError, [onError]);
 
     useEffect(() => {
         const token = localStorage.getItem('token');
@@ -242,7 +242,7 @@ export default function SearchProgress({
                 ws.close();
             }
         };
-    }, [sessionId]);
+    }, [sessionId, handleCompleteCallback, handleNeedsRefinementCallback, handleErrorCallback]);
 
     const Icon = statusIcons[progress.status as keyof typeof statusIcons] || Search;
     const currentFact = HR_FACTS[currentFactIndex];

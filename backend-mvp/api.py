@@ -5,7 +5,8 @@ import asyncio
 import json
 import os
 import uuid
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from ai_model import AIModel, HiringPromptParser
 from auth import AuthManager
@@ -21,8 +22,10 @@ from models import (HatchBulkContactRequest, HatchContactRequest,
                     PromptHistoryItem, PromptHistoryResponse, PromptRequest,
                     PromptResponse, PromptSearchItem, PromptSearchResponse,
                     SessionResponse)
+from prompt_manager import PromptManager
 from pymongo import MongoClient
 from redis_manager import RedisManager
+from scorecard_workflow import ScorecardWorkflow
 from websocket_manager import WebSocketManager
 from workflow import Workflow
 from workflow_v2 import WorkflowV2
@@ -41,7 +44,8 @@ class API:
         self.websocket_manager = WebSocketManager(redis_manager)
         self.auth_manager = AuthManager()
         self.security = HTTPBearer()
-        
+        self.scorecard_workflow = ScorecardWorkflow(redis_manager)
+        self.prompt_manager = PromptManager()
         # MongoDB connection for prompts collection
         self.mongo_client = MongoClient(os.getenv("MONGODB_URL", "mongodb://localhost:27017/"))
         self.db = self.mongo_client.get_database(os.getenv("DATABASE_NAME", "neuraleap"))
@@ -817,40 +821,144 @@ class API:
             current_user: dict = Depends(self.get_current_user)
         ):
             """
-            Get search results with top 10 AI-summarized profiles.
+            Get search results with AI summaries and match details.
             """
-            await self._verify_session_ownership(session_id, current_user)
-            
-            # Get from MongoDB
-            prompt_doc = self.workflow_v2.prompts_collection.find_one({"session_id": session_id})
-            
-            if not prompt_doc:
-                raise HTTPException(status_code=404, detail="Results not found")
-            
-            # Get top 10 with AI summaries
-            matched_profiles = prompt_doc["matched_profiles"]
-            ai_summaries = prompt_doc.get("ai_summaries", {})
-            
-            # Merge summaries with profile data
-            results = []
-            for profile in matched_profiles[:10]:
-                profile_id = profile["profile_id"]
-                profile_data = profile.copy()
+            try:
+                await self._verify_session_ownership(session_id, current_user)
                 
-                if profile_id in ai_summaries:
-                    profile_data.update(ai_summaries[profile_id])
+                # Get scorecard
+                scorecard = await self.redis_manager.get_data_async(session_id, "scorecard")
                 
-                results.append(profile_data)
+                if not scorecard:
+                    raise HTTPException(status_code=404, detail="Scorecard not found")
+                
+                # Get prompt document
+                prompt_id = scorecard.get("prompt_id")
+                if not prompt_id:
+                    raise HTTPException(status_code=404, detail="No prompt ID found")
+                
+                prompt_doc = self.prompt_manager.prompts_collection.find_one({
+                    "prompt_id": prompt_id
+                })
+                
+                if not prompt_doc:
+                    raise HTTPException(status_code=404, detail="Prompt document not found")
+                
+                # Get matched profiles and AI summaries
+                matched_profiles = prompt_doc.get("matched_profiles", [])
+                ai_summaries = prompt_doc.get("ai_summaries", {})
+                
+                if not matched_profiles:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="No candidates found. Please approve sample candidates first."
+                    )
+                
+                # Connect to profiles DB
+                profiles_db_url = os.getenv("PROFILES_DB_URL", "mongodb://localhost:27017/")
+                profiles_db_name = os.getenv("PROFILES_DB_NAME", "mydatabase")
+                profiles_client = MongoClient(profiles_db_url)
+                profiles_db = profiles_client[profiles_db_name]
+                profiles_collection = profiles_db["profiles"]
+                
+                # Format results
+                results = []
+                scoring_criteria = scorecard.get("scoringCriteria", [])
+                
+                for matched_profile in matched_profiles:
+                    profile_id = matched_profile["profile_id"]
+                    
+                    # Get AI summary
+                    ai_summary = ai_summaries.get(profile_id, {})
+                    final_score = ai_summary.get("final_score", matched_profile.get("pre_score", 0))
+                    summary_text = ai_summary.get("summary", "Good candidate match.")
+                    
+                    # Get full profile data
+                    from bson import ObjectId
+                    try:
+                        full_profile = profiles_collection.find_one({"_id": ObjectId(profile_id)})
+                    except:
+                        full_profile = None
+                    
+                    # Build criteria matches
+                    criteria_matches = {}
+                    
+                    for criterion in scoring_criteria:
+                        description = criterion.get("description", "")
+                        keywords = criterion.get("keywords", [])
+                        points = criterion.get("points", 0)
+                        fields = criterion.get("fields", [])
+                        
+                        # Check if candidate matches
+                        matched = False
+                        reasoning = ""
+                        
+                        if full_profile:
+                            for field in fields:
+                                field_value = full_profile.get(field, "")
+                                if isinstance(field_value, list):
+                                    field_value = " ".join(str(v) for v in field_value)
+                                else:
+                                    field_value = str(field_value)
+                                
+                                field_value_lower = field_value.lower()
+                                
+                                for keyword in keywords:
+                                    if keyword.lower() in field_value_lower:
+                                        matched = True
+                                        reasoning = f"Has '{keyword}' in {field}"
+                                        break
+                                
+                                if matched:
+                                    break
+                        
+                        earned_points = points if matched else 0
+                        
+                        criteria_matches[description] = {
+                            "matched": matched,
+                            "earned_points": earned_points,
+                            "max_points": points,
+                            "percentage": (earned_points / points * 100) if points > 0 else 0,
+                            "reasoning": reasoning or f"{'✓ Matched' if matched else '✗ Not matched'} for {description}"
+                        }
+                    
+                    # Calculate scores
+                    total_earned = sum(c["earned_points"] for c in criteria_matches.values())
+                    max_possible = sum(c["max_points"] for c in criteria_matches.values())
+                    score_percentage = (total_earned / max_possible * 100) if max_possible > 0 else 0
+                    
+                    results.append({
+                        "profile_id": profile_id,
+                        "profile_summary": matched_profile["profile_summary"],
+                        "total_score": final_score,
+                        "max_score": max_possible,
+                        "score_percentage": score_percentage,
+                        "criteria_matches": criteria_matches,
+                        "summary": summary_text,
+                        "linkedin_url": full_profile.get("linkedin_url", "") if full_profile else ""
+                    })
+                
+                # Sort by AI score
+                results.sort(key=lambda x: x["total_score"], reverse=True)
+                
+                return {
+                    "session_id": session_id,
+                    "prompt": prompt_doc["prompt"],
+                    "scorecard": scorecard,
+                    "total_matches": len(results),
+                    "results": results,
+                    "search_criteria": [c["description"] for c in scoring_criteria],
+                    "ai_summaries_available": len(ai_summaries) > 0
+                }
             
-            return {
-                "session_id": session_id,
-                "prompt": prompt_doc["prompt"],
-                "total_matches": len(matched_profiles),
-                "results": results,
-                "summary_generation": prompt_doc.get("summary_generation", {}),
-                "preflight_check": prompt_doc.get("preflight_check", {})
-            }
-        
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error fetching results: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.post("/api/v2/session/{session_id}/load-more")
         async def load_more_results(
             session_id: str,
@@ -1239,6 +1347,722 @@ class API:
                 profile["_id"] = str(profile["_id"])
             
             return {"candidates": profiles}
+        
+        
+        @self.app.post("/api/scorecard/start")
+        async def start_scorecard_workflow(
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Start a new scorecard building session.
+            
+            Body:
+                {
+                    "query": "Senior backend engineer with Go in Gurgaon"
+                }
+            
+            Returns:
+                {
+                    "session_id": "...",
+                    "scorecard": {...},
+                    "message": "Initial validation message",
+                    "phase": "validation"
+                }
+            """
+            try:
+                query = request.get("query", "").strip()
+                if not query:
+                    raise HTTPException(status_code=400, detail="Query is required")
+                
+                username = current_user.get("sub")
+                
+                # Create new session
+                session_id = str(uuid.uuid4())
+                
+                # Initialize session in Redis
+                await self.redis_manager.create_session(session_id)
+                await self.redis_manager.store_data_async(session_id, "username", username)
+                await self.redis_manager.store_data_async(session_id, "query", query)
+                await self.redis_manager.store_data_async(session_id, "phase", "entity_extraction")
+                
+                
+                prompt_doc = self.prompt_manager.create_prompt(
+                session_id=session_id,
+                username=username,
+                prompt_text=query,
+                scorecard_id=None  # Will link after scorecard creation
+                )
+                prompt_id = prompt_doc["prompt_id"]
+                self.prompt_manager.add_prompt_to_user(username, prompt_id)
+                
+                # Store prompt_id in session
+                await self.redis_manager.store_data_async(session_id, "prompt_id", prompt_id)
+            
+                # Start scorecard building workflow
+                result = await self.scorecard_workflow.start_scorecard_building(
+                    session_id=session_id,
+                    username=username,
+                    initial_query=query,
+                    prompt_id=prompt_id 
+                )
+                
+                scorecard_id = result["scorecard"]["scorecard_id"]
+                
+                # Link prompt and scorecard
+                self.prompt_manager.link_scorecard(prompt_id, scorecard_id)
+                # Initialize conversation history
+                conversation = [
+                    {"role": "user", "content": query},
+                    {"role": "assistant", "content": result["message"]}
+                ]
+                await self.redis_manager.set_session_data(session_id, "conversation", conversation)
+                
+                # Broadcast via WebSocket
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_created",
+                        "data": {
+                            "scorecard": result["scorecard"],
+                            "message": result["message"],
+                            "phase": result["phase"],
+                            "prompt_id": prompt_id
+                        }
+                    }
+                )
+                
+                return {
+                    "session_id": session_id,
+                    "prompt_id": prompt_id,
+                    "scorecard": result["scorecard"],
+                    "message": result["message"],
+                    "phase": result["phase"]
+                }
+                
+            except Exception as e:
+                print(f"❌ Error starting scorecard workflow: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
+
+        @self.app.post("/api/scorecard/{session_id}/message")
+        async def send_scorecard_message(
+            session_id: str,
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Send a message in the scorecard refinement conversation.
+            
+            Body:
+                {
+                    "message": "Yes, include Software Engineer titles too"
+                }
+            
+            Returns:
+                {
+                    "scorecard": {...},
+                    "message": "Next validation question",
+                    "phase": "validation" or "ready_to_search",
+                    "ready": false or true
+                }
+            """
+            try:
+                user_message = request.get("message", "").strip()
+                if not user_message:
+                    raise HTTPException(status_code=400, detail="Message is required")
+                
+                # Get conversation history
+                conversation = self.redis_manager.get_data(session_id, "conversation") or []
+                
+                # Add user message
+                conversation.append({"role": "user", "content": user_message})
+                
+                # Process feedback
+                result = await self.scorecard_workflow.process_user_feedback(
+                    session_id=session_id,
+                    user_message=user_message,
+                    conversation_history=conversation
+                )
+                
+                if "error" in result:
+                    raise HTTPException(status_code=404, detail=result["error"])
+                
+                # Add assistant response
+                conversation.append({"role": "assistant", "content": result["message"]})
+                await self.redis_manager.store_data_async(session_id, "conversation", conversation)
+                
+                # Update phase
+                await self.redis_manager.store_data_async(session_id, "phase", result["phase"])
+                
+                # Broadcast via WebSocket
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_updated",
+                        "data": {
+                            "scorecard": result["scorecard"],
+                            "message": result["message"],
+                            "phase": result["phase"],
+                            "ready": result.get("ready", False)
+                        }
+                    }
+                )
+                
+                return result
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error processing scorecard message: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
+
+        @self.app.get("/api/scorecard/{session_id}")
+        async def get_scorecard(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """Get current scorecard for a session."""
+            try:
+                scorecard =  await self.redis_manager.get_data_async(session_id, "scorecard")
+                conversation =  await self.redis_manager.get_data_async(session_id, "conversation") or []
+                phase = await self.redis_manager.get_data_async(session_id, "phase") or "unknown"
+                
+                if not scorecard:
+                    raise HTTPException(status_code=404, detail="Scorecard not found")
+                
+                return {
+                    "scorecard": scorecard,
+                    "conversation": conversation,
+                    "phase": phase
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error getting scorecard: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+
+        @self.app.put("/api/scorecard/{session_id}")
+        async def update_scorecard(
+            session_id: str,
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Manually update scorecard (for advanced edit mode).
+            
+            Body:
+                {
+                    "scorecard": {...}
+                }
+            """
+            try:
+                updated_scorecard = request.get("scorecard")
+                if not updated_scorecard:
+                    raise HTTPException(status_code=400, detail="Scorecard is required")
+                
+                # Update in Redis
+                await self.redis_manager.store_data_async(session_id, "scorecard", updated_scorecard)
+                
+                # Update in MongoDB
+                from datetime import datetime
+                updated_scorecard["updated_at"] = datetime.utcnow().isoformat()
+                
+                self.scorecard_workflow.scorecards_collection.update_one(
+                    {"session_id": session_id},
+                    {"$set": updated_scorecard}
+                )
+                
+                # Broadcast update
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_updated",
+                        "data": {"scorecard": updated_scorecard}
+                    }
+                )
+                
+                return {"scorecard": updated_scorecard}
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error updating scorecard: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/scorecard/{session_id}/update-expansions")
+        async def update_expansions(
+            session_id: str,
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Manually update expansions.
+            
+            Body:
+                {
+                    "expansions": {
+                        "roles": [...],
+                        "skills": [...],
+                        "industries": [...],
+                        "locations": [...]
+                    }
+                }
+            """
+            try:
+                new_expansions = request.get("expansions")
+                if not new_expansions:
+                    raise HTTPException(status_code=400, detail="Expansions required")
+                
+                scorecard = await self.redis_manager.get_data_async(session_id, "scorecard")
+                if not scorecard:
+                    raise HTTPException(status_code=404, detail="Scorecard not found")
+                
+                # Track change
+                change_record = {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "source": "user",
+                    "changes": [{"section": "expansions", "field": "all", "action": "modify"}],
+                    "snapshot": {
+                        "mustHaveFilters": scorecard["mustHaveFilters"],
+                        "scoringCriteria": scorecard["scoringCriteria"],
+                        "expansions": new_expansions,
+                        "threshold": scorecard["threshold"]
+                    }
+                }
+                
+                if "changeHistory" not in scorecard:
+                    scorecard["changeHistory"] = []
+                scorecard["changeHistory"].append(change_record)
+                
+                # Update expansions
+                scorecard["expansions"] = new_expansions
+                scorecard["updated_at"] = datetime.utcnow().isoformat()
+                
+                # Save
+                self.scorecard_workflow.scorecards_collection.update_one(
+                    {"scorecard_id": scorecard["scorecard_id"]},
+                    {"$set": scorecard}
+                )
+                
+                if "_id" in scorecard:
+                    del scorecard["_id"]
+                
+                await self.redis_manager.store_data_async(session_id, "scorecard", scorecard)
+                
+                # Broadcast
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_updated",
+                        "data": {"scorecard": scorecard}
+                    }
+                )
+                
+                return {"scorecard": scorecard}
+                
+            except Exception as e:
+                print(f"❌ Error updating expansions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        
+        @self.app.post("/api/scorecard/{session_id}/sample-search")
+        async def get_sample_candidates(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Get sample candidates for preview.
+            
+            Returns 5 sample candidates scored and ranked.
+            """
+            try:
+                result = await self.scorecard_workflow.get_sample_candidates(
+                    session_id=session_id,
+                    sample_size=5
+                )
+                
+                if "error" in result:
+                    raise HTTPException(status_code=404, detail=result["error"])
+                
+                # Update phase
+                await self.redis_manager.store_data_async(session_id, "phase", "sample_validation")
+                
+                # Broadcast via WebSocket
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "samples_ready",
+                        "data": {
+                            "samples": result["samples"],
+                            "total_matches": result.get("total_matches", 0),
+                            "message": result.get("message", ""),
+                            "phase": "sample_validation"
+                        }
+                    }
+                )
+                
+                return result
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error getting samples: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/scorecard/{session_id}/approve-samples")
+        async def approve_samples(
+            session_id: str,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            User approved the sample candidates.
+            Generate AI summaries for top 10, store everything, and redirect to results.
+            """
+            try:
+                scorecard = await self.redis_manager.get_data_async(session_id, "scorecard")
+                
+                if not scorecard:
+                    raise HTTPException(status_code=404, detail="Scorecard not found")
+                
+                # Get sample candidates from Redis
+                sample_candidates = await self.redis_manager.get_data_async(session_id, "sample_candidates") or []
+                
+                if not sample_candidates:
+                    raise HTTPException(status_code=400, detail="No sample candidates found. Please generate samples first.")
+                
+                # ✅ FINAL REFINEMENT
+                conversation = await self.redis_manager.get_data_async(session_id, "conversation") or []
+                
+                print("🎯 Performing FINAL expansion refinement...")
+                refined_scorecard = await self.scorecard_workflow.finalize_scorecard(
+                    scorecard=scorecard,
+                    conversation_history=conversation
+                )
+                
+                # Update scorecard status
+                refined_scorecard["updated_at"] = datetime.utcnow().isoformat()
+                refined_scorecard["status"] = "finalized"
+                
+                # Update in MongoDB
+                self.scorecard_workflow.scorecards_collection.update_one(
+                    {"scorecard_id": refined_scorecard["scorecard_id"]},
+                    {"$set": refined_scorecard}
+                )
+                
+                # ✅ Generate AI summaries for top 10 candidates
+                prompt_id = refined_scorecard.get("prompt_id")
+                
+                if not prompt_id:
+                    raise HTTPException(status_code=400, detail="No prompt_id found in scorecard")
+                
+                print(f"\n{'='*80}")
+                print(f"🤖 GENERATING AI SUMMARIES FOR TOP 10 CANDIDATES")
+                print(f"{'='*80}")
+                
+                # Get original query for context
+                original_query = refined_scorecard.get("metadata", {}).get("originalQuery", "")
+                
+                # Prepare matched profiles and generate summaries
+                matched_profiles = []
+                ai_summaries = {}
+                
+                # Sort by score and take top 10
+                sorted_candidates = sorted(
+                    sample_candidates,
+                    key=lambda x: x.get("score", 0),
+                    reverse=True
+                )[:10]
+                
+                for idx, candidate in enumerate(sorted_candidates):
+                    profile = candidate.get("profile", {})
+                    
+                    # Extract profile ID
+                    from bson import ObjectId
+                    profile_id_raw = profile.get("_id", "") if "_id" in profile else profile.get("profile_id", "")
+                    
+                    # Convert ObjectId to string if needed
+                    if isinstance(profile_id_raw, ObjectId):
+                        profile_id = str(profile_id_raw)
+                    else:
+                        profile_id = str(profile_id_raw)
+                    
+                    # Add to matched_profiles
+                    matched_profiles.append({
+                        "profile_id": profile_id,
+                        "pre_score": candidate.get("score", 0),
+                        "profile_summary": {
+                            "name": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
+                            "title": profile.get('title', ''),
+                            "location": profile.get('location', ''),
+                            "industry": profile.get('current_industry', '')
+                        }
+                    })
+                    
+                    # ✅ GENERATE AI SUMMARY FOR THIS CANDIDATE
+                    print(f"\n  🧠 Generating AI summary {idx+1}/10 for {matched_profiles[-1]['profile_summary']['name']}...")
+                    
+                    try:
+                        ai_summary = await self._generate_candidate_summary(
+                            profile=profile,
+                            original_query=original_query,
+                            scorecard=refined_scorecard,
+                            score_breakdown=candidate.get("score_breakdown", [])
+                        )
+                        
+                        ai_summaries[profile_id] = {
+                            "final_score": ai_summary.get("final_score", candidate.get("score", 0)),
+                            "summary": ai_summary.get("summary", "Good candidate match."),
+                            "generated_at": datetime.utcnow()
+                        }
+                        
+                        print(f"  ✅ Summary generated: {ai_summary.get('final_score', 0)}/100 - {ai_summary.get('summary', '')[:80]}...")
+                    except Exception as e:
+                        print(f"  ⚠️ AI summary generation failed for {profile_id}: {e}")
+                        # Fallback to basic score
+                        ai_summaries[profile_id] = {
+                            "final_score": candidate.get("score", 0),
+                            "summary": "Good candidate match based on keyword scoring.",
+                            "generated_at": datetime.utcnow()
+                        }
+                
+                # ✅ UPDATE PROMPT DOCUMENT WITH ALL DATA
+                print(f"\n📝 Updating prompt document {prompt_id}...")
+                
+                try:
+                    update_result = self.prompt_manager.prompts_collection.update_one(
+                        {"prompt_id": prompt_id},
+                        {
+                            "$set": {
+                                "matched_profiles": matched_profiles,
+                                "ai_summaries": ai_summaries,
+                                "summary_generation": {
+                                    "total_profiles": len(sample_candidates),
+                                    "summaries_generated": len(ai_summaries),
+                                    "last_batch_size": len(sorted_candidates),
+                                    "last_generated_at": datetime.utcnow()
+                                },
+                                "status": "samples_approved",
+                                "samples_approved_at": datetime.utcnow(),
+                                "updated_at": datetime.utcnow()
+                            }
+                        }
+                    )
+                    
+                    print(f"  Update matched: {update_result.matched_count}")
+                    print(f"  Update modified: {update_result.modified_count}")
+                    
+                    if update_result.modified_count > 0:
+                        print(f"✅ Prompt document updated successfully!")
+                    elif update_result.matched_count > 0:
+                        print(f"⚠️ Prompt document matched but not modified (maybe already updated)")
+                    else:
+                        print(f"❌ Prompt document not found with prompt_id: {prompt_id}")
+                        raise HTTPException(status_code=404, detail=f"Prompt document not found: {prompt_id}")
+                
+                except Exception as e:
+                    print(f"❌ Error updating prompt document: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    raise HTTPException(status_code=500, detail=f"Failed to update prompt: {str(e)}")
+                
+                # Remove MongoDB _id if present
+                if "_id" in refined_scorecard:
+                    del refined_scorecard["_id"]
+                
+                # Update Redis
+                await self.redis_manager.store_data_async(session_id, "scorecard", refined_scorecard)
+                await self.redis_manager.store_data_async(session_id, "phase", "ready_for_full_search")
+                
+                # ✅ BROADCAST VIA WEBSOCKET WITH REDIRECT FLAG
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "samples_approved",
+                        "data": {
+                            "scorecard": refined_scorecard,
+                            "phase": "ready_for_full_search",
+                            "message": "Perfect! Your criteria is fully optimized. Redirecting to results... 🚀",
+                            "redirect_to_results": True,
+                            "prompt_id": prompt_id
+                        }
+                    }
+                )
+                
+                return {
+                    "success": True,
+                    "scorecard": refined_scorecard,
+                    "phase": "ready_for_full_search",
+                    "message": "Samples approved! AI summaries generated.",
+                    "redirect_to_results": True,
+                    "prompt_id": prompt_id,
+                    "summaries_generated": len(ai_summaries)
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error approving samples: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+
+
+        @self.app.post("/api/scorecard/{session_id}/reject-samples")
+        async def reject_samples(
+            session_id: str,
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            User rejected the sample candidates with feedback.
+            
+            Body:
+                {
+                    "feedback": "Too junior, need more senior candidates"
+                }
+            """
+            try:
+                feedback = request.get("feedback", "").strip()
+                if not feedback:
+                    raise HTTPException(status_code=400, detail="Feedback is required")
+                
+                result = await self.scorecard_workflow.process_sample_rejection(
+                    session_id=session_id,
+                    feedback=feedback
+                )
+                
+                if "error" in result:
+                    raise HTTPException(status_code=404, detail=result["error"])
+                
+                # Update phase
+                phase = result.get("phase", "sample_iteration")
+                await self.redis_manager.store_data_async(session_id, "phase", phase)
+                
+                # Broadcast via WebSocket
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "samples_rejected",
+                        "data": {
+                            "scorecard": result["scorecard"],
+                            "message": result["message"],
+                            "phase": phase,
+                            "iteration_count": result.get("iteration_count", 0)
+                        }
+                    }
+                )
+                
+                return result
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"❌ Error rejecting samples: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/scorecard/{session_id}/apply-suggestion")
+        async def apply_ai_suggestion(
+            session_id: str,
+            request: dict,
+            current_user: dict = Depends(self.get_current_user)
+        ):
+            """
+            Apply AI's suggestion to relax filters and search again.
+            
+            Body:
+                {
+                    "suggestion": {...},  // The suggestion object from AI
+                    "accepted": true
+                }
+            """
+            try:
+                suggestion = request.get("suggestion")
+                accepted = request.get("accepted", False)
+                
+                if not accepted:
+                    return {"message": "Suggestion rejected"}
+                
+                scorecard = await self.redis_manager.get_data_async(session_id, "scorecard")
+                
+                if not scorecard:
+                    raise HTTPException(status_code=404, detail="Scorecard not found")
+                
+                # Apply suggested changes
+                filters = scorecard.get("mustHaveFilters", [])
+                
+                # Remove suggested filters
+                filters_to_remove = suggestion.get("filters_to_remove", [])
+                if filters_to_remove:
+                    filters = [f for f in filters if f.get("field") not in filters_to_remove]
+                
+                # Modify suggested filters
+                filters_to_modify = suggestion.get("filters_to_modify", [])
+                for mod in filters_to_modify:
+                    field = mod.get("field")
+                    change = mod.get("change")
+                    
+                    for f in filters:
+                        if f.get("field") == field:
+                            # Apply the change (could be updating value, operator, etc.)
+                            # This is simplified - you might need more logic
+                            if "value" in change:
+                                f["value"] = change["value"]
+                            if "operator" in change:
+                                f["operator"] = change["operator"]
+                
+                # Update scorecard
+                scorecard["mustHaveFilters"] = filters
+                scorecard["updated_at"] = datetime.utcnow().isoformat()
+                
+                # Save
+                self.scorecard_workflow.scorecards_collection.update_one(
+                    {"scorecard_id": scorecard["scorecard_id"]},
+                    {"$set": scorecard}
+                )
+                
+                if "_id" in scorecard:
+                    del scorecard["_id"]
+                
+                await self.redis_manager.store_data_async(session_id, "scorecard", scorecard)
+                
+                # Broadcast update
+                await self.websocket_manager.broadcast_to_session(
+                    session_id,
+                    {
+                        "action": "scorecard_updated",
+                        "data": {
+                            "scorecard": scorecard,
+                            "message": "Criteria updated based on AI suggestion. Re-searching..."
+                        }
+                    }
+                )
+                
+                # Automatically trigger new sample search
+                result = await self.scorecard_workflow.get_sample_candidates(
+                    session_id=session_id,
+                    sample_size=5
+                )
+                
+                return result
+                
+            except Exception as e:
+                print(f"❌ Error applying suggestion: {e}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=str(e))
+        
         @self.app.post("/hatch/contact", response_model=HatchContactResponse)
         async def get_hatch_contact(
             request: HatchContactRequest,
@@ -1457,3 +2281,147 @@ class API:
         # Case-insensitive replacement with markers
         pattern = re.compile(re.escape(search_term), re.IGNORECASE)
         return pattern.sub(lambda m: f"<<{m.group()}>>", text)
+    
+    async def _generate_candidate_summary(
+        self,
+        profile: Dict[str, Any],
+        original_query: str,
+        scorecard: Dict[str, Any],
+        score_breakdown: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Generate AI summary explaining why this candidate is a great match.
+        """
+        
+        # Build a concise profile description
+        profile_text = f"""
+    **Name:** {profile.get('first_name', '')} {profile.get('last_name', '')}
+
+    **Title:** {profile.get('title', 'N/A')}
+
+    **Location:** {profile.get('location', 'N/A')}
+
+    **Industry:** {profile.get('current_industry', 'N/A')}
+
+    **Expertise:** {profile.get('expertise', 'N/A')[:500]}  # Truncate to 500 chars
+
+    **Summary:** {profile.get('summary', 'N/A')[:1000]}  # Truncate to 1000 chars
+
+    **Education:** {', '.join([f"{edu.get('major', '')} from {edu.get('campus', '')}" for edu in profile.get('education', [])[:2]])}
+
+    **Score Breakdown:**
+    {chr(10).join([f"- {item.get('description', '')}: {item.get('earned_points', 0)}/{item.get('max_points', 0)} {'✓' if item.get('matched') else '✗'}" for item in score_breakdown])}
+    """
+
+        # Get scoring criteria for context
+        scoring_criteria_text = "\n".join([
+            f"- {criterion.get('description', '')} ({criterion.get('points', 0)} points)"
+            for criterion in scorecard.get('scoringCriteria', [])
+        ])
+
+        system_prompt = f"""You are an expert HR recruiter evaluating candidates. Provide a concise, compelling explanation of why this candidate is a great match for the role.
+
+    **Role Requirements:**
+    {original_query}
+
+    **Key Scoring Criteria:**
+    {scoring_criteria_text}
+
+    Your task:
+    1. Analyze the candidate's profile against the requirements
+    2. Assign a final score (0-100) based on overall fit
+    3. Write a 2-3 sentence summary explaining:
+    - Why they're a strong match (highlight key strengths)
+    - Any notable advantages or unique qualifications
+    - Minor gaps if any (be honest but constructive)
+
+    Be specific and reference actual skills, experience, or qualifications from their profile.
+
+    Return JSON:
+    {{
+    "final_score": <number 0-100>,
+    "summary": "<2-3 sentence overall evaluation>",
+    "criteria_reasoning": {{
+        "<criterion_name>": {{
+        "matched": true/false,
+        "reasoning": "<1-2 sentences explaining why they match or don't match this criterion>"
+        }}
+    }}
+    }}
+
+
+    Example:
+    {{
+    "final_score": 92,
+    "summary": "Exceptional match with strong backend experience and leadership skills.",
+    "criteria_reasoning": {{
+        "Backend Experience": {{
+        "matched": true,
+        "reasoning": "5+ years building scalable backend systems with Python and Go at companies like Twitter and Stripe."
+        }},
+        "Leadership": {{
+        "matched": true,
+        "reasoning": "Led teams of 4-6 engineers as Tech Lead, mentored junior developers, and drove architectural decisions."
+        }}
+    }}
+    }}
+    """
+
+        user_message = f"""Evaluate this candidate:
+
+    {profile_text}
+
+    Provide your evaluation as JSON:"""
+
+        try:
+            import requests
+            
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            model_name = os.getenv("AI_MODEL_NAME", "openai/gpt-4o-mini")
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+            }
+
+            data = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                "temperature": 0.3
+            }
+
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            
+            llm_response = result["choices"][0]["message"]["content"]
+            
+            # Extract JSON
+            response_text = llm_response.strip()
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            
+            import json
+            evaluation = json.loads(response_text)
+            
+            return {
+                "final_score": evaluation.get("final_score", 50),
+                "summary": evaluation.get("summary", "Good candidate match.")
+            }
+            
+        except Exception as e:
+            print(f"❌ AI summary generation failed: {e}")
+            # Fallback to basic scoring
+            return {
+                "final_score": sum([item.get('earned_points', 0) for item in score_breakdown]),
+                "summary": "Candidate shows relevant experience and skills for this role."
+            }
