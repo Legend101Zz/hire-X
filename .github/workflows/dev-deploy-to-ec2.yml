@@ -20,13 +20,10 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Deploy to EC2
+      - name: Deploy to EC2 with PM2
         run: |
           ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
             cd ~/hire-X/backend-mvp
-
-            echo "Stopping old process..."
-            pkill -f "python3 main.py" || true
 
             echo "Pulling latest code..."
             git pull origin dev
@@ -34,9 +31,17 @@ jobs:
             echo "Activating virtual environment..."
             source venv/bin/activate
 
-            echo "Installing requirements..."
+            echo "Installing dependencies..."
             pip install -r requirements.txt
 
-            echo "Starting new process..."
-            nohup python3 main.py > output.log 2>&1 &
+            echo "Restarting backend with PM2..."
+            pm2 stop hirex-backend || true
+            pm2 delete hirex-backend || true
+            pm2 start python3 --name hirex-backend -- main.py
+
+            echo "Saving PM2 process list..."
+            pm2 save
+
+            echo "Deployment complete!"
           EOF
+
