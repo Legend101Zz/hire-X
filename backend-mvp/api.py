@@ -72,6 +72,8 @@ class API:
                 "http://127.0.0.1:3001",  # Alternative port
                 "https://dev.damnuiwdbbvte.amplifyapp.com",  # AWS Amplify deployment
                 "https://dev.damnuiwdbbvte.amplifyapp.com/",  # With trailing slash
+                "https://hire-x-xi.vercel.app/",# vercel deployment With trailing slash
+                "https://hire-x-xi.vercel.app" # vercel deployment 
             ],
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
