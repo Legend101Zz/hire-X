@@ -45,9 +45,9 @@ async def lifespan(app: FastAPI):
     - Set up services
     - Clean up on shutdown
     """
-    logger.info("=" * 80)
-    logger.info("STARTING NEURALEAP BACKEND")
-    logger.info("=" * 80)
+    logger.debug("=" * 80)
+    logger.debug("STARTING NEURALEAP BACKEND")
+    logger.debug("=" * 80)
     
 
     try:        
@@ -59,22 +59,22 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to initialize: {e}")
         sys.exit(1)
         
-    logger.info("=" * 80)
-    logger.info(f"🌐 API Server ready at: http://{settings.SERVER_HOST}:{settings.SERVER_PORT}")
-    logger.info("=" * 80)
-    logger.info()
+    logger.debug("=" * 80)
+    logger.debug(f"🌐 API Server ready at: http://{settings.SERVER_HOST}:{settings.SERVER_PORT}")
+    logger.debug("=" * 80)
+    logger.debug()
     
     # Application is now running
     yield
     
     # Shutdown: Clean up resources
-    logger.info("Shutting downn gracefully...")
+    logger.debug("Shutting downn gracefully...")
     
     
 # Create FastAPI application
 app = FastAPI(
-    title="Neuraleap API",
-    description="Candidate scorecarding and search API for 56M profiles",
+    title="Neuraleap Backend",
+    description="AI-powered candidate search with smart matching and instant results",
     version="2.0.0",
     lifespan=lifespan
 )
