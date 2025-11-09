@@ -11,11 +11,11 @@ FastAPI's dependency injection system is awesome - it handles:
 
 from typing import Any, Dict
 
-# Import auth utilities
-from auth import verify_token
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+# Import auth utilities
+from core.auth import verify_token
 from core.logging_config import get_logger
 # Import data layer
 from data.mongodb import MongoDB
