@@ -26,13 +26,10 @@ from api import auth, scorecard
 # Import core components
 from core.config import settings
 from core.dependencies import initialize_services
-from core.logging_config import get_logger, setup_logging
+from core.logging_config import get_logger
 # Import data layer for connection testing
 from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
-
-# Initialise logging first
-setup_logging()
 
 # Get the logger for this module
 logger = get_logger(__name__)
@@ -52,17 +49,11 @@ async def lifespan(app: FastAPI):
     logger.info("STARTING NEURALEAP BACKEND")
     logger.info("=" * 80)
     
-    # Test database connections
-    try:
-        mongodb = MongoDB()
-        logger.info("MongoDB connected successfully")
 
-        redis_cache = RedisCache()
-        logger.info("Redis connected successfully")
-        
+    try:        
         # Initialize global services ( stored in app.state)
         app.state.services = initialize_services()
-        logger.info("MongoDB connected successfully")
+        logger.info("All services started")
         
     except Exception as e:
         logger.error("Failed to initialize: {e}")
