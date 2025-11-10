@@ -7,6 +7,8 @@ FastAPI's dependency injection system is awesome - it handles:
 - Service initialization
 - Request-scoped instances
 - Automatic cleanup
+
+MODIFIED FOR V3: Added model_config_manager
 """
 
 from typing import Any, Dict
@@ -22,6 +24,7 @@ from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
 from services.ai_parser import AIParser
 from services.candidate_scorer import CandidateScorer
+from services.model_config_manager import ModelConfigManager  # NEW FOR V3
 # Import all services
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
@@ -69,6 +72,10 @@ def initialize_services() -> Dict[str,Any]:
     ai_parser = AIParser()
     logger.info("AIParser Started")
     
+    # NEW FOR V3: Initialize model config manager
+    model_config_manager = ModelConfigManager(redis_cache)
+    logger.info("ModelConfigManager Started")
+    
     # Initialize workflow (orchestrator)
     workflow = ScorecardWorkflow(
         search_engine=search_engine,
@@ -77,7 +84,7 @@ def initialize_services() -> Dict[str,Any]:
         mongodb=mongodb,
         redis_cache=redis_cache
     )
-    logger.info("ScorecardWorkflow orchestratated successfully")
+    logger.info("ScorecardWorkflow orchestrated successfully")
     
     # Store in global dict
     services = {
@@ -86,7 +93,8 @@ def initialize_services() -> Dict[str,Any]:
         "search_engine": search_engine,
         "scorer": scorer,
         "ai_parser": ai_parser,
-        "workflow": workflow
+        "workflow": workflow,
+        "model_config_manager": model_config_manager  # NEW FOR V3
     }
     
     # Save to global variable
@@ -126,6 +134,23 @@ def get_search_engine() -> SearchEngine:
     """Get the search engine service."""
     return _global_services["search_engine"]
 
+
+def get_model_config_manager() -> ModelConfigManager:
+    """
+    Get the model configuration manager service.
+    
+    NEW FOR V3: Allows users to configure which LLM models to use.
+    
+    Usage:
+        @app.get("/config/models")
+        async def get_models(
+            config_mgr: ModelConfigManager = Depends(get_model_config_manager)
+        ):
+            return config_mgr.get_available_options()
+    """
+    return _global_services["model_config_manager"]
+
+
 def get_current_username(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> str:
@@ -134,44 +159,42 @@ def get_current_username(
     
     This is used in protected endpoints to get the username.
     
-    Usage:
-        @app.post("/protected-endpoint")
-        async def protected(username: str = Depends(get_current_username)):
-            # username is automatically extracted from JWT
-            return {"user": username}
-    
+    Args:
+        credentials: JWT token from Authorization header
+        
+    Returns:
+        username string
+        
     Raises:
-        HTTPException: If token is invalid or expired
+        HTTPException: If token is invalid
+        
+    Usage:
+        @app.get("/user/profile")
+        async def get_profile(username: str = Depends(get_current_username)):
+            return {"username": username}
     """
+    token = credentials.credentials
+    
     try:
-        # Get token from Authorization header
-        token = credentials.credentials
-        
-        # Verify token and extract username
+        # Verify token and extract payload
         payload = verify_token(token)
-        username = payload.get("sub")
+        username = payload.get("sub")  # "sub" field contains username
         
-        if username is None:
+        if not username:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"}
+                detail="Invalid token: username not found"
             )
         
         return username
         
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
     except Exception as e:
-        # Any other error
+        logger.error(f"Token verification failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Could not validate credentials: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"}
+            detail="Invalid or expired token"
         )
-
-
+        
 def get_optional_username(
     credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer(auto_error=False))
 ) -> str:
