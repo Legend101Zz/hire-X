@@ -9,9 +9,10 @@ Redis is used for:
 - Real-time status updates
 """
 
+import datetime
 import hashlib
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import redis
 
@@ -318,6 +319,329 @@ class RedisCache:
     async def get_prompt(self, session_id: str) -> Optional[str]:
         """Get the original prompt for a session."""
         return await self.get_session_data(session_id, "original_prompt")
+    
+    async def store_conversation_state(
+        self,
+        session_id: str,
+        state: Dict[str, Any],
+        ttl: int = 3600
+    ):
+        """
+        Store conversation state in Redis.
+        
+        Args:
+            session_id: Conversation session ID
+            state: Full conversation state dict
+            ttl: Time to live in seconds (default 1 hour)
+        """
+        
+        key = f"conversation:{session_id}"
+        
+        # Store as JSON
+        await self.redis.set(
+            key,
+            json.dumps(state),
+            ex=ttl
+        )
+    
+    
+    async def get_conversation_state(
+        self,
+        session_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get conversation state from Redis.
+        
+        Args:
+            session_id: Conversation session ID
+        
+        Returns:
+            Conversation state dict or None
+        """
+        
+        key = f"conversation:{session_id}"
+        
+        data = await self.redis.get(key)
+        
+        if data:
+            return json.loads(data)
+        
+        return None
+    
+    
+    async def delete_conversation_state(self, session_id: str):
+        """
+        Delete conversation state from Redis.
+        
+        Args:
+            session_id: Conversation session ID
+        """
+        
+        key = f"conversation:{session_id}"
+        await self.redis.delete(key)
+    
+    
+    async def extend_conversation_ttl(
+        self,
+        session_id: str,
+        ttl: int = 3600
+    ):
+        """
+        Extend TTL of conversation state.
+        
+        Args:
+            session_id: Conversation session ID
+            ttl: New TTL in seconds
+        """
+        
+        key = f"conversation:{session_id}"
+        await self.redis.expire(key, ttl)
+    
+    
+    # ================================================================
+    # WORKFLOW PROGRESS
+    # ================================================================
+    
+    async def store_workflow_progress(
+        self,
+        session_id: str,
+        status: str,
+        progress: int,
+        message: str,
+        ttl: int = 3600
+    ):
+        """
+        Store workflow progress for real-time tracking.
+        
+        Args:
+            session_id: Workflow session ID
+            status: Status (parsing, searching, scoring, enriching, completed, error)
+            progress: Progress percentage (0-100)
+            message: Progress message
+            ttl: Time to live in seconds
+        """
+        
+        key = f"progress:{session_id}"
+        
+        progress_data = {
+            "status": status,
+            "progress": progress,
+            "message": message,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        await self.redis.set(
+            key,
+            json.dumps(progress_data),
+            ex=ttl
+        )
+    
+    
+    async def get_workflow_progress(
+        self,
+        session_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get workflow progress.
+        
+        Args:
+            session_id: Workflow session ID
+        
+        Returns:
+            Progress data dict or None
+        """
+        
+        key = f"progress:{session_id}"
+        
+        data = await self.redis.get(key)
+        
+        if data:
+            return json.loads(data)
+        
+        return None
+    
+    
+    # ================================================================
+    # ENRICHMENT CACHE
+    # ================================================================
+    
+    async def cache_candidate_enrichment(
+        self,
+        profile_id: str,
+        enrichment_type: str,
+        enrichment_data: Dict[str, Any],
+        ttl: int = 86400  # 24 hours
+    ):
+        """
+        Cache enrichment data for a candidate.
+        
+        Args:
+            profile_id: Candidate profile ID
+            enrichment_type: Type of enrichment (salary, skills, response, availability)
+            enrichment_data: Enrichment data dict
+            ttl: Time to live (default 24 hours)
+        """
+        
+        key = f"enrichment:{profile_id}:{enrichment_type}"
+        
+        await self.redis.set(
+            key,
+            json.dumps(enrichment_data),
+            ex=ttl
+        )
+    
+    
+    async def get_cached_enrichment(
+        self,
+        profile_id: str,
+        enrichment_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get cached enrichment data.
+        
+        Args:
+            profile_id: Candidate profile ID
+            enrichment_type: Type of enrichment
+        
+        Returns:
+            Enrichment data dict or None
+        """
+        
+        key = f"enrichment:{profile_id}:{enrichment_type}"
+        
+        data = await self.redis.get(key)
+        
+        if data:
+            return json.loads(data)
+        
+        return None
+    
+    
+    async def batch_get_cached_enrichment(
+        self,
+        profile_ids: List[str],
+        enrichment_type: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Get cached enrichment for multiple candidates.
+        
+        Args:
+            profile_ids: List of profile IDs
+            enrichment_type: Type of enrichment
+        
+        Returns:
+            Dict mapping profile_id to enrichment data
+        """
+        
+        keys = [f"enrichment:{pid}:{enrichment_type}" for pid in profile_ids]
+        
+        # Get all at once (pipeline for efficiency)
+        pipeline = self.redis.pipeline()
+        for key in keys:
+            pipeline.get(key)
+        
+        results = await pipeline.execute()
+        
+        # Map results
+        enrichment_map = {}
+        for profile_id, data in zip(profile_ids, results):
+            if data:
+                enrichment_map[profile_id] = json.loads(data)
+        
+        return enrichment_map
+    
+    
+    # ================================================================
+    # SESSION MANAGEMENT
+    # ================================================================
+    
+    async def list_active_conversations(
+        self,
+        username: str
+    ) -> List[str]:
+        """
+        List active conversation session IDs for a user.
+        
+        Args:
+            username: Username
+        
+        Returns:
+            List of session IDs
+        """
+        
+        # Use a set to track active conversations per user
+        key = f"active_conversations:{username}"
+        
+        return await self.redis.smembers(key)
+    
+    
+    async def add_active_conversation(
+        self,
+        username: str,
+        session_id: str,
+        ttl: int = 3600
+    ):
+        """
+        Add conversation to active list.
+        
+        Args:
+            username: Username
+            session_id: Conversation session ID
+            ttl: Time to live
+        """
+        
+        key = f"active_conversations:{username}"
+        
+        await self.redis.sadd(key, session_id)
+        await self.redis.expire(key, ttl)
+    
+    
+    async def remove_active_conversation(
+        self,
+        username: str,
+        session_id: str
+    ):
+        """
+        Remove conversation from active list.
+        
+        Args:
+            username: Username
+            session_id: Conversation session ID
+        """
+        
+        key = f"active_conversations:{username}"
+        await self.redis.srem(key, session_id)
+    
+    
+    # ================================================================
+    # RATE LIMITING (Bonus)
+    # ================================================================
+    
+    async def check_rate_limit(
+        self,
+        key: str,
+        limit: int,
+        window: int
+    ) -> bool:
+        """
+        Check if rate limit exceeded.
+        
+        Args:
+            key: Rate limit key (e.g. "enrichment:user123")
+            limit: Max requests
+            window: Time window in seconds
+        
+        Returns:
+            True if limit not exceeded, False if exceeded
+        """
+        
+        current = await self.redis.incr(key)
+        
+        if current == 1:
+            # First request, set expiry
+            await self.redis.expire(key, window)
+        
+        return current <= limit
     
     # ========================================================================
     # User Context Storage
