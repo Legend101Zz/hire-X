@@ -39,6 +39,7 @@ email-validator
 # Utilities
 # ============================================
 python-dateutil
+PyPDF2
 
 # ============================================
 # Development & Testing (optional)

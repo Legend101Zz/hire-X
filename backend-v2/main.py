@@ -22,14 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 # Import API routes
-from api import auth, scorecard
+from api import auth, configuration, conversation, enriched_results, scorecard
 # Import core components
 from core.config import settings
 from core.dependencies import initialize_services
 from core.logging_config import get_logger
-# Import data layer for connection testing
-from data.mongodb import MongoDB
-from data.redis_cache import RedisCache
 
 # Get the logger for this module
 logger = get_logger(__name__)
@@ -62,7 +59,7 @@ async def lifespan(app: FastAPI):
     logger.debug("=" * 80)
     logger.debug(f"🌐 API Server ready at: http://{settings.SERVER_HOST}:{settings.SERVER_PORT}")
     logger.debug("=" * 80)
-    logger.debug()
+ 
     
     # Application is now running
     yield
@@ -146,6 +143,25 @@ app.include_router(
     scorecard.router,
     prefix="/scorecard", 
     tags=["Scorecard"]
+)
+
+# Configuration routes: /config/models/options, /config/session/{id}, etc.
+app.include_router(
+    configuration.router,
+    prefix="/config",
+    tags=["Configuration"]
+)
+
+app.include_router(
+    conversation.router,
+    prefix="/conversation",
+    tags=["Conversation"]
+)
+
+app.include_router(
+    enriched_results.router,
+    prefix="",
+    tags=["Results"]
 )
 
 
