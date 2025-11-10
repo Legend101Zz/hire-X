@@ -269,8 +269,7 @@ htmlcov/
 *.joblib
 *.h5
 *.hdf5
-models/
-data/
+
 datasets/
 
 # Weights and Biases

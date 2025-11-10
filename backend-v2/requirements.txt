@@ -1,0 +1,49 @@
+# Neuraleap Backend Requirements
+# Python 3.8+
+
+# ============================================
+# Web Framework
+# ============================================
+fastapi
+uvicorn[standard]
+python-multipart
+
+# ============================================
+# Database Drivers
+# ============================================
+pymongo
+redis
+
+# ============================================
+# Authentication & Security
+# ============================================
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+
+# ============================================
+# HTTP & API
+# ============================================
+requests
+httpx
+jwt
+
+# ============================================
+# Data Validation
+# ============================================
+pydantic
+pydantic-settings
+email-validator
+
+# ============================================
+# Utilities
+# ============================================
+python-dateutil
+
+# ============================================
+# Development & Testing (optional)
+# ============================================
+pytest
+pytest-asyncio
+black
+flake8
