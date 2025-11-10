@@ -1,286 +1,368 @@
 """
-Scorecard Workflow Service
-==========================
-This is the main orchestrator for the scorecard generation workflow.
+Scorecard Workflow V3
+====================
+MODIFIED FOR V3: Integrates conversation, search, and enrichment.
 
-It coordinates:
-1. AI parsing of the job requirement
-2. Database search for candidates
-3. Scoring and ranking
-4. Storing results
+This is the MODIFIED version of scorecard_workflow.py that:
+1. Works with conversation-built ideal profiles
+2. Integrates enrichment services after scoring
+3. Supports both old prompt-based and new conversation-based flows
+4. Provides progress tracking throughout
 
-This is a clean, simplified version of the old workflow.py
+INSTRUCTIONS:
+Replace your existing backend-v2/services/scorecard_workflow.py with this file.
 """
 
 import asyncio
-import uuid
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.logging_config import get_logger
 from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
 from services.ai_parser import AIParser
 from services.candidate_scorer import CandidateScorer
+from services.conversation_manager import ConversationManager
+from services.enrichment_service import EnrichmentService
+from services.model_config_manager import ModelConfigManager
 from services.search_engine import SearchEngine
 
-# Get the logger for this module
 logger = get_logger(__name__)
+
 
 class ScorecardWorkflow:
     """
-    Main workflow orchestrator for scorecard generation.
+    V3 Scorecard Workflow with conversation and enrichment integration.
     
-    This class replaces the old workflow.py with a cleaner design:
-    - Clear separation of concerns
-    - Each step is a simple method
-    - Easy to test and modify
-    - Good error handling
+    Supports two modes:
+    1. Legacy mode: Direct prompt → search (backward compatible)
+    2. V3 mode: Conversation → ideal profile → search → enrich
     """
     
     def __init__(
         self,
-        search_engine: SearchEngine,
-        scorer: CandidateScorer,
-        ai_parser: AIParser,
         mongodb: MongoDB,
-        redis_cache: RedisCache
+        redis_cache: RedisCache,
+        search_engine: SearchEngine,
+        candidate_scorer: CandidateScorer,
+        ai_parser: AIParser,
+        model_config_manager: ModelConfigManager,
+        enrichment_service: Optional[EnrichmentService] = None,
+        conversation_manager: Optional[ConversationManager] = None
     ):
-        """
-        Initialize workflow with all required services.
-        
-        Args:
-            search_engine: For searching candidate database
-            scorer: For scoring and ranking candidates
-            ai_parser: For parsing job requirements
-            mongodb: For storing results
-            redis_cache: For caching and progress tracking
-        """
+        """Initialize workflow with all services."""
+        self.mongodb = mongodb
+        self.redis = redis_cache
         self.search = search_engine
-        self.scorer = scorer
+        self.scorer = candidate_scorer
         self.ai = ai_parser
-        self.db = mongodb
-        self.cache = redis_cache
+        self.model_config = model_config_manager
+        self.enrichment = enrichment_service
+        self.conversation = conversation_manager
+        
+        logger.info("✅ ScorecardWorkflow V3 initialized")
     
-    async def execute(
+    
+    # ================================================================
+    # LEGACY MODE (BACKWARD COMPATIBLE)
+    # ================================================================
+    
+    async def execute_legacy(
         self,
         session_id: str,
         prompt: str,
         username: str
     ) -> Dict[str, Any]:
         """
-        Execute the complete scorecard workflow.
+        Legacy execution mode (backward compatible with V2).
         
-        This is the main entry point that your API calls.
-        
-        Steps:
-        1. Parse prompt with AI (~2s)
-        2. Search database (~0.5s with indexes)
-        3. Score candidates (~1s with parallel processing)
-        4. Store results (~0.2s)
-        
-        Total: ~3.7s (vs 95s without optimization!)
-        
-        Args:
-            session_id: Unique identifier for this workflow run
-            prompt: User's job requirements (natural language)
-            username: Username for tracking and storage
-            
-        Returns:
-            Dictionary with scorecard results:
-            {
-                "session_id": "abc-123",
-                "status": "completed",
-                "candidates": [...],  # Top 50 scored candidates
-                "summary": {...},     # Statistics
-                "created_at": "2025-01-01T00:00:00"
-            }
-            
-        Example:
-            result = await workflow.execute(
-                session_id="abc-123",
-                prompt="Find Senior Python Developer in SF",
-                username="john@company.com"
-            )
+        Flow: Prompt → Parse → Search → Score → Return
         """
         
-        logger.debug("\n" + "=" * 80)
-        logger.debug(f"STARTING SCORECARD WORKFLOW")
-        logger.debug(f"   Session: {session_id}")
-        logger.debug(f"   User: {username}")
-        logger.debug("=" * 80)
+        logger.info(f"Executing LEGACY workflow for session {session_id}")
         
         try:
-            # ================================================================
-            # STEP 1: Parse Prompt (AI extracts structured requirements)
-            # ================================================================
-            await self._update_progress(session_id, "parsing", 10, "Analyzing your requirements...")
+            # Update progress
+            await self._update_progress(session_id, "parsing", 10, "Parsing requirements...")
             
-            parsed_requirements = await self.ai.parse_prompt(prompt)
-            
-            # Store parsed data in cache (for later use)
-            await self.cache.store_session_data(
-                session_id, "parsed_requirements", parsed_requirements
+            # Step 1: Parse prompt
+            model_config = await self.model_config.get_session_config(session_id)
+            requirements = await self.ai.parse_prompt(
+                prompt,
+                model=model_config.get('jd_parsing', 'claude-sonnet-4-20250514')
             )
             
-            # Store original prompt
-            await self.cache.store_prompt(session_id, prompt)
+            # Update progress
+            await self._update_progress(session_id, "searching", 30, "Searching database...")
             
-            # Store user context
-            await self.cache.store_user_context(session_id, username)
+            # Step 2: Search
+            candidates = await self.search.search_with_fallback(requirements)
             
-            # ================================================================
-            # STEP 2: Search Database (find matching candidates)
-            # ================================================================
-            await self._update_progress(session_id, "searching", 30, "Searching our database...")
+            # Update progress
+            await self._update_progress(session_id, "scoring", 60, "Scoring candidates...")
             
-            candidates = self.search.search_with_fallback(
-                strict_industries=parsed_requirements.get("strict_industries", []),
-                strict_seniority=parsed_requirements.get("strict_seniority", []),
-                broad_industries=parsed_requirements.get("broad_industries", []),
-                broad_seniority=parsed_requirements.get("broad_seniority", []),
-                locations=parsed_requirements.get("locations", []),
-                keywords=parsed_requirements.get("keywords", "")
+            # Step 3: Score
+            scored_candidates = await self.scorer.score_candidates(
+                candidates,
+                requirements=requirements,
+                model=model_config.get('match_scoring', 'claude-sonnet-4-20250514')
             )
             
-            if not candidates or len(candidates) == 0:
-                # No candidates found
-                return await self._handle_no_candidates_found(session_id, username, prompt)
+            # Update progress
+            await self._update_progress(session_id, "completed", 100, "Done!")
+            
+            # Return results
+            return {
+                "session_id": session_id,
+                "status": "completed",
+                "candidates": scored_candidates[:50],  # Top 50
+                "total_found": len(candidates),
+                "mode": "legacy"
+            }
+        
+        except Exception as e:
+            logger.error(f"Legacy workflow error: {e}")
+            await self._update_progress(session_id, "error", 0, str(e))
+            raise
+    
+    
+    # ================================================================
+    # V3 MODE (NEW CONVERSATION-BASED FLOW)
+    # ================================================================
+    
+    async def execute_v3(
+        self,
+        session_id: str,
+        conversation_session_id: str,
+        username: str
+    ) -> Dict[str, Any]:
+        """
+        V3 execution mode with conversation and enrichment.
+        
+        Flow: Conversation → Ideal Profile → Search → Score → Enrich → Return
+        """
+        
+        logger.info(f"Executing V3 workflow for session {session_id}")
+        
+        if not self.conversation or not self.enrichment:
+            raise ValueError("V3 mode requires conversation and enrichment services")
+        
+        try:
+            # Step 1: Get ideal profile from conversation
+            await self._update_progress(session_id, "loading", 5, "Loading ideal profile...")
+            
+            conversation_state = await self.conversation._load_state(conversation_session_id)
+            if not conversation_state:
+                raise ValueError(f"Conversation {conversation_session_id} not found")
+            
+            ideal_profile = conversation_state.ideal_profile
+            
+            # Step 2: Convert to search requirements
+            await self._update_progress(session_id, "preparing", 10, "Preparing search...")
+            
+            requirements = self._ideal_profile_to_requirements(ideal_profile)
+            
+            # Step 3: Search
+            await self._update_progress(session_id, "searching", 20, "Searching 56M profiles...")
+            
+            candidates = await self.search.search_with_fallback(requirements)
             
             logger.info(f"Found {len(candidates)} candidates")
             
-            # Store candidates in cache
-            await self.cache.store_session_data(session_id, "candidates", candidates)
+            # Step 4: Score
+            await self._update_progress(session_id, "scoring", 40, f"Scoring {len(candidates)} candidates...")
             
-            # ================================================================
-            # STEP 3: Score and Rank Candidates (parallel processing)
-            # ================================================================
-            await self._update_progress(session_id, "scoring", 60, "Scoring and ranking candidates...")
-            
-            scored_candidates = await self.scorer.score_batch(
-                candidates=candidates,
-                criteria=parsed_requirements
+            model_config = await self.model_config.get_session_config(session_id)
+            scored_candidates = await self.scorer.score_candidates(
+                candidates,
+                requirements=requirements,
+                model=model_config.get('match_scoring', 'claude-sonnet-4-20250514')
             )
             
-            # ================================================================
-            # STEP 4: Store Results (save to MongoDB)
-            # ================================================================
-            await self._update_progress(session_id, "storing", 85, "Saving results...")
+            # Take top 50 for enrichment
+            top_50 = scored_candidates[:50]
             
-            scorecard = await self._create_and_store_scorecard(
+            # Step 5: Enrich (parallel)
+            await self._update_progress(session_id, "enriching", 50, "Enriching top 50 candidates...")
+            
+            enriched_candidates = await self._enrich_candidates(
+                candidates=top_50,
+                ideal_profile=ideal_profile,
+                model_config=model_config,
+                session_id=session_id
+            )
+            
+            # Step 6: Save results
+            await self._update_progress(session_id, "saving", 95, "Saving results...")
+            
+            await self._save_enriched_results(
                 session_id=session_id,
+                conversation_session_id=conversation_session_id,
                 username=username,
-                prompt=prompt,
-                parsed_requirements=parsed_requirements,
-                scored_candidates=scored_candidates
+                ideal_profile=ideal_profile,
+                enriched_candidates=enriched_candidates,
+                total_found=len(candidates)
             )
             
-            # ================================================================
-            # STEP 5: Complete
-            # ================================================================
+            # Step 7: Done
             await self._update_progress(session_id, "completed", 100, "Done!")
             
-            logger.info("=" * 80)
-            logger.info(f"WORKFLOW COMPLETED")
-            logger.info(f"   Total candidates: {scorecard['summary']['total_candidates']}")
-            logger.info(f"   Top score: {scorecard['summary']['top_score']:.1f}")
-            logger.info("=" * 80)
-            logger.info()
+            return {
+                "session_id": session_id,
+                "conversation_session_id": conversation_session_id,
+                "status": "completed",
+                "candidates": enriched_candidates,
+                "total_found": len(candidates),
+                "enriched_count": len(enriched_candidates),
+                "mode": "v3"
+            }
+        
+        except Exception as e:
+            logger.error(f"V3 workflow error: {e}")
+            await self._update_progress(session_id, "error", 0, str(e))
+            raise
+    
+    
+    # ================================================================
+    # ENRICHMENT
+    # ================================================================
+    
+    async def _enrich_candidates(
+        self,
+        candidates: List[Dict],
+        ideal_profile: Any,
+        model_config: Dict[str, str],
+        session_id: str
+    ) -> List[Dict]:
+        """
+        Enrich candidates in parallel batches.
+        
+        Args:
+            candidates: List of scored candidates
+            ideal_profile: Ideal profile from conversation
+            model_config: Model configuration
+            session_id: Session ID for progress tracking
+        
+        Returns:
+            List of enriched candidates
+        """
+        
+        logger.info(f"Enriching {len(candidates)} candidates...")
+        
+        # Prepare enrichment tasks
+        enrichment_tasks = []
+        
+        for candidate in candidates:
+            task = self.enrichment.enrich_candidate(
+                candidate=candidate,
+                ideal_profile=ideal_profile,
+                model_config=model_config
+            )
+            enrichment_tasks.append(task)
+        
+        # Process in batches of 10 to avoid rate limits
+        batch_size = 10
+        enriched = []
+        
+        for i in range(0, len(enrichment_tasks), batch_size):
+            batch = enrichment_tasks[i:i+batch_size]
             
-            # Log this action
-            await self.db.log_user_action(
-                username=username,
-                action="scorecard_created",
-                details={"session_id": session_id, "candidates_found": len(scored_candidates)}
+            # Run batch in parallel
+            batch_results = await asyncio.gather(*batch, return_exceptions=True)
+            
+            # Filter out errors
+            for result in batch_results:
+                if isinstance(result, Exception):
+                    logger.error(f"Enrichment error: {result}")
+                else:
+                    enriched.append(result)
+            
+            # Update progress
+            progress = 50 + int((i + batch_size) / len(candidates) * 45)
+            await self._update_progress(
+                session_id,
+                "enriching",
+                progress,
+                f"Enriched {min(i+batch_size, len(candidates))}/{len(candidates)} candidates"
             )
             
-            return scorecard
-            
-        except Exception as e:
-            # Handle any errors
-            logger.error(f"\nWORKFLOW ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            return await self._handle_error(session_id, username, prompt, str(e))
+            # Small delay to avoid rate limits
+            if i + batch_size < len(enrichment_tasks):
+                await asyncio.sleep(0.5)
+        
+        logger.info(f"Successfully enriched {len(enriched)}/{len(candidates)} candidates")
+        
+        return enriched
     
-    async def _create_and_store_scorecard(
+    
+    # ================================================================
+    # HELPER METHODS
+    # ================================================================
+    
+    def _ideal_profile_to_requirements(self, ideal_profile: Any) -> Dict[str, Any]:
+        """
+        Convert ideal profile card to search requirements.
+        
+        Args:
+            ideal_profile: IdealProfileCard from conversation
+        
+        Returns:
+            Dict compatible with search engine
+        """
+        
+        requirements = {
+            "role": ideal_profile.role_title,
+            "must_have_skills": ideal_profile.must_have_skills,
+            "nice_to_have_skills": ideal_profile.nice_to_have_skills,
+            "seniority": ideal_profile.seniority,
+            "experience_years": ideal_profile.experience_years,
+            "industries": ideal_profile.industries,
+            "locations": ideal_profile.locations,
+            "company_size": ideal_profile.company_size,
+            "additional_requirements": ideal_profile.additional_requirements
+        }
+        
+        return requirements
+    
+    
+    async def _save_enriched_results(
         self,
         session_id: str,
+        conversation_session_id: str,
         username: str,
-        prompt: str,
-        parsed_requirements: Dict[str, Any],
-        scored_candidates: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        ideal_profile: Any,
+        enriched_candidates: List[Dict],
+        total_found: int
+    ):
         """
-        Create scorecard document and store in MongoDB.
+        Save enriched results to MongoDB.
         
-        This creates the final scorecard with all results and metadata.
+        Args:
+            session_id: Search session ID
+            conversation_session_id: Conversation session ID
+            username: Username
+            ideal_profile: Ideal profile card
+            enriched_candidates: List of enriched candidates
+            total_found: Total candidates found before filtering
         """
         
-        # Generate unique prompt ID
-        prompt_id = str(uuid.uuid4())
-        
-        # Take only top 50 candidates for storage
-        top_candidates = scored_candidates[:50]
-        
-        # Calculate summary statistics
-        summary = self._generate_summary(scored_candidates)
-        
-        # Create scorecard document
-        scorecard = {
-            "prompt_id": prompt_id,
+        # Save to enriched_results collection
+        result_doc = {
             "session_id": session_id,
+            "conversation_session_id": conversation_session_id,
             "username": username,
-            "prompt": prompt,
-            "parsed_requirements": parsed_requirements,
-            "candidates": top_candidates,
-            "summary": summary,
-            "created_at": datetime.utcnow(),
+            "ideal_profile": ideal_profile.dict(),
+            "candidates": enriched_candidates,
+            "total_found": total_found,
+            "enriched_count": len(enriched_candidates),
+            "created_at": datetime.utcnow().isoformat(),
             "status": "completed"
         }
         
-        # Store in MongoDB
-        doc_id = await self.db.save_scorecard(scorecard)
-        scorecard["_id"] = doc_id
+        await self.mongodb.save_enriched_results(result_doc)
         
-        # Also cache for quick access
-        await self.cache.store_session_data(session_id, "scorecard", scorecard)
-        
-        return scorecard
+        logger.info(f"Saved enriched results for session {session_id}")
     
-    def _generate_summary(self, scored_candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Generate summary statistics for the scorecard.
-        
-        Returns:
-            Dictionary with statistics like average score, distribution, etc.
-        """
-        
-        if not scored_candidates:
-            return {
-                "total_candidates": 0,
-                "average_score": 0,
-                "top_score": 0,
-                "distribution": {"excellent": 0, "good": 0, "fair": 0, "poor": 0}
-            }
-        
-        scores = [c.get("score", 0) for c in scored_candidates]
-        
-        # Calculate score distribution
-        distribution = {
-            "excellent": len([s for s in scores if s >= 80]),   # 80-100
-            "good": len([s for s in scores if 60 <= s < 80]),    # 60-79
-            "fair": len([s for s in scores if 40 <= s < 60]),    # 40-59
-            "poor": len([s for s in scores if s < 40])           # 0-39
-        }
-        
-        return {
-            "total_candidates": len(scored_candidates),
-            "average_score": round(sum(scores) / len(scores), 2),
-            "top_score": round(max(scores), 2),
-            "distribution": distribution
-        }
     
     async def _update_progress(
         self,
@@ -290,162 +372,77 @@ class ScorecardWorkflow:
         message: str
     ):
         """
-        Update workflow progress for real-time UI updates.
+        Update progress in Redis for real-time tracking.
         
-        This stores progress in Redis so the frontend can poll for updates.
+        Args:
+            session_id: Session ID
+            status: Status (parsing, searching, scoring, enriching, completed, error)
+            progress: Progress percentage (0-100)
+            message: Progress message
         """
         
-        await self.cache.set_workflow_status(
-            session_id=session_id,
-            status=status,
-            progress=progress,
-            message=message
+        progress_data = {
+            "status": status,
+            "progress": progress,
+            "message": message,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        await self.redis.store_session_data(
+            session_id,
+            "workflow_progress",
+            progress_data,
+            ttl=3600
         )
         
-        logger.info(f"Progress: {progress}% - {status} - {message}")
+        logger.info(f"[{session_id}] {status} - {progress}% - {message}")
     
-    async def _handle_no_candidates_found(
+    
+    # ================================================================
+    # PUBLIC METHODS
+    # ================================================================
+    
+    async def execute(
         self,
         session_id: str,
         username: str,
-        prompt: str
+        prompt: Optional[str] = None,
+        conversation_session_id: Optional[str] = None,
+        mode: str = "auto"
     ) -> Dict[str, Any]:
         """
-        Handle the case when no candidates are found.
+        Execute workflow in appropriate mode.
+        
+        Args:
+            session_id: Workflow session ID
+            username: Username
+            prompt: Legacy prompt (for legacy mode)
+            conversation_session_id: Conversation session ID (for V3 mode)
+            mode: "auto", "legacy", or "v3"
+        
+        Returns:
+            Results dict
         """
         
-        logger.warning("No candidates found matching the criteria")
+        # Determine mode
+        if mode == "auto":
+            if conversation_session_id:
+                mode = "v3"
+            elif prompt:
+                mode = "legacy"
+            else:
+                raise ValueError("Must provide either prompt or conversation_session_id")
         
-        await self._update_progress(
-            session_id, "completed", 100,
-            "No candidates found matching your criteria"
-        )
+        # Execute
+        if mode == "legacy":
+            if not prompt:
+                raise ValueError("Legacy mode requires prompt")
+            return await self.execute_legacy(session_id, prompt, username)
         
-        # Create empty scorecard
-        scorecard = {
-            "session_id": session_id,
-            "username": username,
-            "prompt": prompt,
-            "candidates": [],
-            "summary": {
-                "total_candidates": 0,
-                "average_score": 0,
-                "top_score": 0,
-                "message": "No candidates found. Try broader search criteria."
-            },
-            "created_at": datetime.utcnow(),
-            "status": "completed"
-        }
+        elif mode == "v3":
+            if not conversation_session_id:
+                raise ValueError("V3 mode requires conversation_session_id")
+            return await self.execute_v3(session_id, conversation_session_id, username)
         
-        # Store it anyway (for user history)
-        await self.db.save_scorecard(scorecard)
-        
-        return scorecard
-    
-    async def _handle_error(
-        self,
-        session_id: str,
-        username: str,
-        prompt: str,
-        error_message: str
-    ) -> Dict[str, Any]:
-        """
-        Handle workflow errors gracefully.
-        """
-        
-        await self._update_progress(
-            session_id, "error", 0,
-            f"An error occurred: {error_message}"
-        )
-        
-        # Log the error
-        await self.db.log_user_action(
-            username=username,
-            action="workflow_error",
-            details={"session_id": session_id, "error": error_message}
-        )
-        
-        return {
-            "session_id": session_id,
-            "status": "error",
-            "error": error_message,
-            "candidates": [],
-            "message": "Something went wrong. Please try again."
-        }
-    
-    # ========================================================================
-    # Additional Methods (for future features)
-    # ========================================================================
-    
-    async def get_scorecard_by_session(self, session_id: str) -> Dict[str, Any]:
-        """
-        Get a scorecard by session ID.
-        
-        Tries cache first (fast), then database.
-        """
-        
-        # Try cache first
-        scorecard = await self.cache.get_session_data(session_id, "scorecard")
-        
-        if scorecard:
-            return scorecard
-        
-        # Fallback to database
-        scorecard = await self.db.get_scorecard_by_session(session_id)
-        
-        return scorecard
-    
-    async def resume_after_followup(
-        self,
-        session_id: str,
-        followup_answers: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Resume workflow after user provides follow-up answers.
-        
-        This re-scores candidates based on additional user preferences.
-        """
-        logger.info(f"\nResuming workflow with follow-up answers: {session_id}")
-        
-        try:
-            # Get existing data from cache
-            candidates = await self.cache.get_session_data(session_id, "candidates")
-            parsed_requirements = await self.cache.get_session_data(session_id, "parsed_requirements")
-            user_context = await self.cache.get_user_context(session_id)
-            
-            if not candidates or not parsed_requirements or not user_context:
-                return {"error": "Session data not found or expired"}
-            
-            username = user_context.get("username", "unknown")
-            prompt = await self.cache.get_prompt(session_id)
-            
-            # Update progress
-            await self._update_progress(
-                session_id, "rescoring", 50,
-                "Re-scoring based on your preferences..."
-            )
-            
-            # First score with original criteria
-            scored_candidates = await self.scorer.score_batch(candidates, parsed_requirements)
-            
-            # Then adjust with follow-up answers
-            scored_candidates = await self.scorer.rescore_with_followup(
-                scored_candidates, followup_answers
-            )
-            
-            # Create and store updated scorecard
-            scorecard = await self._create_and_store_scorecard(
-                session_id=session_id,
-                username=username,
-                prompt=prompt,
-                parsed_requirements=parsed_requirements,
-                scored_candidates=scored_candidates
-            )
-            
-            await self._update_progress(session_id, "completed", 100, "Done!")
-            
-            return scorecard
-            
-        except Exception as e:
-            logger.error(f"Resume failed: {e}")
-            return {"error": str(e)}
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
