@@ -29,7 +29,6 @@ class MongoDB:
     
     This class is a singleton - one instance is created at startup and reused.
     """
-    
     def __init__(self):
         """
         Initialize MongoDB connections.
@@ -57,8 +56,9 @@ class MongoDB:
             self.profiles_collection = profiles_db["profiles"]
             
             # Count documents (for logging)
-            profile_count = self.profiles_collection.count_documents({})
-            logger.info(f"Profiles DB: {settings.PROFILES_DB_NAME} ({profile_count:,} profiles)")
+            profile_count = self.profiles_collection.estimated_document_count()
+            logger.info(f"Profiles DB: {settings.PROFILES_DB_NAME} (~{profile_count:,} profiles)")
+
             
         except ConnectionFailure as e:
             logger.error(f"Failed to connect to Profiles DB: {e}")
@@ -339,3 +339,166 @@ class MongoDB:
         if hasattr(self, 'main_client'):
             self.main_client.close()
         logger.info("MongoDB connections closed")
+        
+    async def save_enriched_results(self, result_doc: Dict[str, Any]):
+        """
+        Save enriched results to MongoDB.
+        
+        Args:
+            result_doc: Results document including:
+                - session_id
+                - conversation_session_id
+                - username
+                - ideal_profile
+                - candidates (with enrichment data)
+                - total_found
+                - enriched_count
+                - created_at
+                - status
+        """
+        
+        collection = self.db["enriched_results"]
+        
+        # Create indexes if not exists
+        await self._ensure_enriched_results_indexes()
+        
+        # Insert or update
+        await collection.update_one(
+            {"session_id": result_doc["session_id"]},
+            {"$set": result_doc},
+            upsert=True
+        )
+    
+    
+    async def get_enriched_results(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get enriched results by session ID.
+        
+        Args:
+            session_id: Search session ID
+        
+        Returns:
+            Results document or None
+        """
+        
+        collection = self.db["enriched_results"]
+        return await collection.find_one({"session_id": session_id})
+    
+    
+    async def list_enriched_results(
+        self,
+        username: str,
+        limit: int = 20,
+        skip: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        List enriched results for a user.
+        
+        Args:
+            username: Username
+            limit: Max results
+            skip: Number to skip (for pagination)
+        
+        Returns:
+            List of result documents (without full candidate data)
+        """
+        
+        collection = self.db["enriched_results"]
+        
+        cursor = collection.find(
+            {"username": username},
+            {
+                "session_id": 1,
+                "conversation_session_id": 1,
+                "ideal_profile": 1,
+                "total_found": 1,
+                "enriched_count": 1,
+                "created_at": 1,
+                "status": 1
+            }
+        ).sort("created_at", -1).skip(skip).limit(limit)
+        
+        return await cursor.to_list(length=limit)
+    
+    
+    async def _ensure_enriched_results_indexes(self):
+        """Create indexes for enriched_results collection."""
+        
+        collection = self.db["enriched_results"]
+        
+        # Index on session_id (unique)
+        await collection.create_index("session_id", unique=True)
+        
+        # Index on username + created_at (for listing)
+        await collection.create_index([
+            ("username", 1),
+            ("created_at", -1)
+        ])
+        
+        # Index on conversation_session_id
+        await collection.create_index("conversation_session_id")
+    
+    
+    # ================================================================
+    # CONVERSATIONS (Optional - for persistence)
+    # ================================================================
+    
+    async def save_conversation_state(self, conversation_doc: Dict[str, Any]):
+        """
+        Save conversation state to MongoDB (for long-term persistence).
+        
+        Args:
+            conversation_doc: Conversation state including:
+                - session_id
+                - username
+                - stage
+                - ideal_profile
+                - messages
+                - created_at
+                - updated_at
+        
+        Note: This is optional - conversation state is primarily in Redis.
+              This is for long-term archival or recovery.
+        """
+        
+        collection = self.db["conversations"]
+        
+        # Create indexes if not exists
+        await self._ensure_conversations_indexes()
+        
+        # Insert or update
+        await collection.update_one(
+            {"session_id": conversation_doc["session_id"]},
+            {"$set": conversation_doc},
+            upsert=True
+        )
+    
+    
+    async def get_conversation_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get conversation state from MongoDB.
+        
+        Args:
+            session_id: Conversation session ID
+        
+        Returns:
+            Conversation document or None
+        """
+        
+        collection = self.db["conversations"]
+        return await collection.find_one({"session_id": session_id})
+    
+    
+    async def _ensure_conversations_indexes(self):
+        """Create indexes for conversations collection."""
+        
+        collection = self.db["conversations"]
+        
+        # Index on session_id (unique)
+        await collection.create_index("session_id", unique=True)
+        
+        # Index on username + updated_at
+        await collection.create_index([
+            ("username", 1),
+            ("updated_at", -1)
+        ])

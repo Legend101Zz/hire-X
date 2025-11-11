@@ -148,3 +148,5 @@ if not settings.validate():
     logger.critical("Some configuration values are missing or invalid.")
     logger.critical("Please check your .env file and update the required values.")
     logger.critical()
+    
+    

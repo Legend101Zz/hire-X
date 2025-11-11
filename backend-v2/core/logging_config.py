@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Optional
 
 
+def supports_color():
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
 class ColoredFormatter(logging.Formatter):
     """Custom formatter with color coding for console output."""
     
@@ -31,10 +34,12 @@ class ColoredFormatter(logging.Formatter):
     RESET = '\033[0m'
     
     def format(self,record):
-        # Add color to level name
-        if record.levelname in self.COLORS:
-            record.levelname =f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
-        return super().format(record)
+        levelname = record.levelname
+        msg = super().format(record)
+        if levelname in self.COLORS:
+            color = self.COLORS[levelname]
+            return f"{color}{msg}{self.RESET}"
+        return msg
     
 class LoggerManager(object):
     """Centralized logger manager for the application."""
@@ -88,7 +93,7 @@ class LoggerManager(object):
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(self.log_level)
         
-        if self.environment == "production":
+        if self.environment == "production" and supports_color():
             # forv Production: Simple format without colors
             console_format = logging.Formatter(
                 fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
