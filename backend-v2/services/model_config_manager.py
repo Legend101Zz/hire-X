@@ -33,9 +33,9 @@ class ModelConfigManager:
         conversation="claude-sonnet-4-5",
         jd_parsing="claude-sonnet-4-5",
         web_search="perplexity/sonar-pro",
-        salary_estimation="deepseek/deepseek-r1",
-        skill_validation="deepseek/deepseek-r1",
-        response_likelihood="deepseek/deepseek-r1",
+        salary_estimation="x-ai/grok-code-fast-1",
+        skill_validation="x-ai/grok-code-fast-1",
+        response_likelihood="x-ai/grok-code-fast-1",
         match_scoring="claude-sonnet-4-5"
     )
     
@@ -44,103 +44,117 @@ class ModelConfigManager:
     # ========================================================================
     
     MODEL_OPTIONS = {
-        "conversation": [
-            ModelOption(
-                id="claude-sonnet-4-5",
-                name="Claude Sonnet 4.5",
-                cost="High",
-                quality="Excellent",
-                description="Best for natural conversation and complex reasoning"
-            ),
-            ModelOption(
-                id="claude-sonnet-4",
-                name="Claude Sonnet 4",
-                cost="High",
-                quality="Excellent",
-                description="Great for conversation, slightly older version"
-            ),
-            ModelOption(
-                id="gpt-4o",
-                name="GPT-4o",
-                cost="High",
-                quality="Very Good",
-                description="OpenAI's latest model, good for conversation"
-            )
-        ],
-        
-        "web_search": [
-            ModelOption(
-                id="perplexity/sonar-pro",
-                name="Perplexity Sonar Pro",
-                cost="Medium",
-                quality="Excellent",
-                description="Specialized for web search with citations"
-            ),
-            ModelOption(
-                id="perplexity/sonar",
-                name="Perplexity Sonar",
-                cost="Low",
-                quality="Very Good",
-                description="Good web search at lower cost"
-            ),
-            ModelOption(
-                id="deepseek/deepseek-r1",
-                name="DeepSeek R1",
-                cost="Very Low",
-                quality="Good",
-                description="Cost-effective option for web search"
-            )
-        ],
-        
-        "bulk_analysis": [  # For salary, skills, response likelihood
-            ModelOption(
-                id="deepseek/deepseek-r1",
-                name="DeepSeek R1",
-                cost="Very Low",
-                quality="Good",
-                description="Best cost/quality ratio for bulk analysis"
-            ),
-            ModelOption(
-                id="claude-haiku-4",
-                name="Claude Haiku 4",
-                cost="Low",
-                quality="Very Good",
-                description="Fast and accurate for analysis tasks"
-            ),
-            ModelOption(
-                id="gpt-4o-mini",
-                name="GPT-4o Mini",
-                cost="Low",
-                quality="Good",
-                description="Compact OpenAI model for analysis"
-            )
-        ],
-        
-        "scoring": [
-            ModelOption(
-                id="claude-sonnet-4-5",
-                name="Claude Sonnet 4.5",
-                cost="High",
-                quality="Excellent",
-                description="Best for nuanced candidate matching"
-            ),
-            ModelOption(
-                id="claude-sonnet-4",
-                name="Claude Sonnet 4",
-                cost="High",
-                quality="Excellent",
-                description="Great for candidate scoring"
-            ),
-            ModelOption(
-                id="deepseek/deepseek-r1",
-                name="DeepSeek R1",
-                cost="Very Low",
-                quality="Good",
-                description="Cost-effective for basic scoring"
-            )
-        ]
-    }
+    "conversation": [
+        ModelOption(
+            id="claude-sonnet-4-5",
+            name="Claude Sonnet 4.5",
+            cost="High",
+            quality="Excellent",
+            description="Best for natural conversation and complex reasoning"
+        ),
+        ModelOption(
+            id="claude-sonnet-4",
+            name="Claude Sonnet 4",
+            cost="High",
+            quality="Excellent",
+            description="Great for conversation, slightly older version"
+        ),
+        ModelOption(
+            id="gpt-4o",
+            name="GPT-4o",
+            cost="High",
+            quality="Very Good",
+            description="OpenAI's latest model, good for conversation"
+        )
+    ],
     
+    "web_search": [
+        ModelOption(
+            id="perplexity/sonar-pro",
+            name="Perplexity Sonar Pro",
+            cost="Medium",
+            quality="Excellent",
+            description="Specialized for web search with citations"
+        ),
+        ModelOption(
+            id="perplexity/sonar",
+            name="Perplexity Sonar",
+            cost="Low",
+            quality="Very Good",
+            description="Good web search at lower cost"
+        ),
+        ModelOption(
+            id="deepseek/deepseek-r1",
+            name="DeepSeek R1",
+            cost="Very Low",
+            quality="Good",
+            description="Cost-effective option for web search"
+        )
+    ],
+    
+    "bulk_analysis": [  # For salary, skills, response likelihood
+        ModelOption(
+            id="x-ai/grok-code-fast-1",
+            name="Grok Code Fast 1",
+            cost="Medium",
+            quality="Very Good",
+            description="xAI's optimized model for fast structured reasoning and code-like precision"
+        ),
+        ModelOption(
+            id="deepseek/deepseek-r1",
+            name="DeepSeek R1",
+            cost="Very Low",
+            quality="Good",
+            description="Best cost/quality ratio for bulk analysis"
+        ),
+        ModelOption(
+            id="claude-haiku-4",
+            name="Claude Haiku 4",
+            cost="Low",
+            quality="Very Good",
+            description="Fast and accurate for analysis tasks"
+        ),
+        ModelOption(
+            id="gpt-4o-mini",
+            name="GPT-4o Mini",
+            cost="Low",
+            quality="Good",
+            description="Compact OpenAI model for analysis"
+        )
+    ],
+    
+    "scoring": [
+        ModelOption(
+            id="claude-sonnet-4-5",
+            name="Claude Sonnet 4.5",
+            cost="High",
+            quality="Excellent",
+            description="Best for nuanced candidate matching"
+        ),
+        ModelOption(
+            id="x-ai/grok-code-fast-1",
+            name="Grok Code Fast 1",
+            cost="Medium",
+            quality="Very Good",
+            description="Efficient structured reasoning for candidate scoring and logic-based ranking"
+        ),
+        ModelOption(
+            id="claude-sonnet-4",
+            name="Claude Sonnet 4",
+            cost="High",
+            quality="Excellent",
+            description="Great for candidate scoring"
+        ),
+        ModelOption(
+            id="deepseek/deepseek-r1",
+            name="DeepSeek R1",
+            cost="Very Low",
+            quality="Good",
+            description="Cost-effective for basic scoring"
+        )
+    ]
+}
+
     # ========================================================================
     # PRESET CONFIGURATIONS
     # ========================================================================

@@ -29,7 +29,6 @@ class MongoDB:
     
     This class is a singleton - one instance is created at startup and reused.
     """
-    
     def __init__(self):
         """
         Initialize MongoDB connections.
@@ -57,8 +56,9 @@ class MongoDB:
             self.profiles_collection = profiles_db["profiles"]
             
             # Count documents (for logging)
-            profile_count = self.profiles_collection.count_documents({})
-            logger.info(f"Profiles DB: {settings.PROFILES_DB_NAME} ({profile_count:,} profiles)")
+            profile_count = self.profiles_collection.estimated_document_count()
+            logger.info(f"Profiles DB: {settings.PROFILES_DB_NAME} (~{profile_count:,} profiles)")
+
             
         except ConnectionFailure as e:
             logger.error(f"Failed to connect to Profiles DB: {e}")

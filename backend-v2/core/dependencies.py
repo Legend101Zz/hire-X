@@ -1,14 +1,9 @@
 """
-Dependency Injection for FastAPI
-=================================
+Dependency Injection for FastAPI - V3
+======================================
 This file sets up all the services and provides them to API endpoints.
 
-FastAPI's dependency injection system is awesome - it handles:
-- Service initialization
-- Request-scoped instances
-- Automatic cleanup
-
-MODIFIED FOR V3: Added model_config_manager
+MODIFIED FOR V3: Added enrichment_service and conversation_manager
 """
 
 from typing import Any, Dict
@@ -23,11 +18,20 @@ from core.logging_config import get_logger
 from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
 from services.ai_parser import AIParser
+from services.availability_checker import AvailabilityChecker
 from services.candidate_scorer import CandidateScorer
-from services.model_config_manager import ModelConfigManager  # NEW FOR V3
-# Import all services
+# Import all V3 services
+from services.conversation_manager import ConversationManager
+from services.enrichment_service import EnrichmentService
+from services.jd_parser import JDParser
+from services.model_config_manager import ModelConfigManager
+from services.response_likelihood_scorer import ResponseLikelihoodScorer
+from services.salary_estimator import SalaryEstimator
+from services.sample_profile_generator import SampleProfileGenerator
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
+from services.skill_validator import SkillValidator
+from services.web_search_wrapper import WebSearchWrapper
 
 # Security scheme for JWT
 security = HTTPBearer()
@@ -43,7 +47,7 @@ logger = get_logger(__name__)
 # We'll store these in a global dict that's initialized in main.py
 _global_services: Dict[str, Any] = {}
 
-def initialize_services() -> Dict[str,Any]:
+def initialize_services() -> Dict[str, Any]:
     """
     Initialize all services once at startup.
     
@@ -55,53 +59,127 @@ def initialize_services() -> Dict[str,Any]:
     """ 
     logger.info("Initializing services...")
     
-    # Initialize data layer
+    # ========================================
+    # DATA LAYER
+    # ========================================
     mongodb = MongoDB()
-    logger.info("MongoDB connected successfully")
+    logger.info("✅ MongoDB connected successfully")
     
     redis_cache = RedisCache()
-    logger.info("Redis connected successfully")
+    logger.info("✅ Redis connected successfully")
     
-    # Initialize service layer
+    # ========================================
+    # CORE SERVICES
+    # ========================================
     search_engine = SearchEngine(mongodb.profiles_collection)
-    logger.info("Search Engine Started")
+    logger.info("✅ SearchEngine initialized")
     
     scorer = CandidateScorer()
-    logger.info("CandidateScorer Started")
+    logger.info("✅ CandidateScorer initialized")
                 
     ai_parser = AIParser()
-    logger.info("AIParser Started")
+    logger.info("✅ AIParser initialized")
     
-    # NEW FOR V3: Initialize model config manager
     model_config_manager = ModelConfigManager(redis_cache)
-    logger.info("ModelConfigManager Started")
+    logger.info("✅ ModelConfigManager initialized")
     
-    # Initialize workflow (orchestrator)
-    workflow = ScorecardWorkflow(
-        search_engine=search_engine,
-        scorer=scorer,
-        ai_parser=ai_parser,
+    web_search = WebSearchWrapper(redis_cache,model_config_manager)
+    logger.info("✅ WebSearchWrapper initialized")
+    
+    salary_estimator = SalaryEstimator(web_search, redis_cache, model_config_manager)
+    logger.info("✅ SalaryEstimator initialized")
+    
+    response_scorer = ResponseLikelihoodScorer(redis_cache, model_config_manager)
+    logger.info("✅ ResponseLikelihoodScorer initialized")
+    
+    skill_validator = SkillValidator(web_search, model_config_manager)
+    logger.info("✅ SkillValidator initialized")
+    
+    availability_checker = AvailabilityChecker(web_search, redis_cache, model_config_manager)
+    logger.info("✅ AvailabilityChecker initialized")
+    
+    # Enrichment Service - orchestrates all enrichment
+    enrichment_service = EnrichmentService(
         mongodb=mongodb,
-        redis_cache=redis_cache
+        redis_cache=redis_cache,
+        model_config_manager=model_config_manager,
+        salary_estimator=salary_estimator,
+        response_scorer=response_scorer,
+        skill_validator=skill_validator,
+        availability_checker=availability_checker
     )
-    logger.info("ScorecardWorkflow orchestrated successfully")
+    logger.info("✅ EnrichmentService initialized")
     
-    # Store in global dict
+    # JD Parser
+    jd_parser = JDParser(model_config_manager)
+    logger.info("✅ JDParser initialized")
+    
+    # Sample Profile Generator
+    sample_generator = SampleProfileGenerator(
+        profiles_collection=mongodb.profiles_collection,
+        ai_scorer=scorer
+    )
+    logger.info("✅ SampleProfileGenerator initialized")
+    
+    # Conversation Manager
+    conversation_manager = ConversationManager(
+        redis_cache=redis_cache,
+        model_config_manager=model_config_manager,
+        sample_profile_generator=sample_generator
+    )
+    logger.info("✅ ConversationManager initialized")
+    
+    # ========================================
+    # WORKFLOW ORCHESTRATOR
+    # ========================================
+    workflow = ScorecardWorkflow(
+        mongodb=mongodb,
+        redis_cache=redis_cache,
+        search_engine=search_engine,
+        candidate_scorer=scorer,  
+        ai_parser=ai_parser,
+        model_config_manager=model_config_manager,
+        enrichment_service=enrichment_service, 
+        conversation_manager=conversation_manager  
+    )
+    logger.info("✅ ScorecardWorkflow V3 orchestrated successfully")
+    
+    # ========================================
+    # STORE IN GLOBAL DICT
+    # ========================================
     services = {
+        # Data Layer
         "mongodb": mongodb,
         "redis_cache": redis_cache,
+        
+        # Core Services (V2)
         "search_engine": search_engine,
         "scorer": scorer,
         "ai_parser": ai_parser,
-        "workflow": workflow,
-        "model_config_manager": model_config_manager  # NEW FOR V3
+        "model_config_manager": model_config_manager,
+        
+        # Phase 2A Services (Enrichment)
+        "web_search": web_search,
+        "salary_estimator": salary_estimator,
+        "response_scorer": response_scorer,
+        "skill_validator": skill_validator,
+        "availability_checker": availability_checker,
+        "enrichment_service": enrichment_service,
+        
+        # Phase 2B Services (Conversation)
+        "jd_parser": jd_parser,
+        "sample_generator": sample_generator,
+        "conversation_manager": conversation_manager,
+        
+        # Workflow Orchestrator
+        "workflow": workflow
     }
     
     # Save to global variable
     global _global_services
     _global_services = services
     
-    logger.info("All services initialized")
+    logger.info("🎉 All services initialized successfully")
     return services
 
 # ============================================================================
@@ -136,19 +214,61 @@ def get_search_engine() -> SearchEngine:
 
 
 def get_model_config_manager() -> ModelConfigManager:
-    """
-    Get the model configuration manager service.
-    
-    NEW FOR V3: Allows users to configure which LLM models to use.
-    
-    Usage:
-        @app.get("/config/models")
-        async def get_models(
-            config_mgr: ModelConfigManager = Depends(get_model_config_manager)
-        ):
-            return config_mgr.get_available_options()
-    """
+    """Get the model configuration manager service."""
     return _global_services["model_config_manager"]
+
+
+# ============================================================================
+# Phase 2A Dependencies (Enrichment)
+# ============================================================================
+
+def get_web_search():
+    """Get the web search wrapper service."""
+    return _global_services["web_search"]
+
+
+def get_salary_estimator():
+    """Get the salary estimator service."""
+    return _global_services["salary_estimator"]
+
+
+def get_response_scorer():
+    """Get the response scorer service."""
+    return _global_services["response_scorer"]
+
+
+def get_skill_validator():
+    """Get the skill validator service."""
+    return _global_services["skill_validator"]
+
+
+def get_availability_checker():
+    """Get the availability checker service."""
+    return _global_services["availability_checker"]
+
+
+def get_enrichment_service() -> EnrichmentService:
+    """Get the enrichment service."""
+    return _global_services["enrichment_service"]
+
+
+# ============================================================================
+# Phase 2B Dependencies (Conversation)
+# ============================================================================
+
+def get_conversation_manager() -> ConversationManager:
+    """Get the conversation manager service."""
+    return _global_services["conversation_manager"]
+
+
+def get_jd_parser() -> JDParser:
+    """Get the JD parser service."""
+    return _global_services["jd_parser"]
+
+
+def get_sample_generator() -> SampleProfileGenerator:
+    """Get the sample profile generator."""
+    return _global_services["sample_generator"]
 
 
 def get_current_username(

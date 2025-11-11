@@ -1,11 +1,12 @@
 """
-Main FastAPI Application Entry Point
-====================================
+Main FastAPI Application Entry Point - V3
+==========================================
 This is the starting point of Neuraleap backend application.
 It initializes all services and sets up the API routes.
 
 Author: Mrigesh Thakur
 Last Modified: Nov 2025
+Version: 3.0.0
 """
 
 
@@ -43,21 +44,23 @@ async def lifespan(app: FastAPI):
     - Clean up on shutdown
     """
     logger.debug("=" * 80)
-    logger.debug("STARTING NEURALEAP BACKEND")
+    logger.debug("STARTING NEURALEAP BACKEND V3")
     logger.debug("=" * 80)
     
 
     try:        
-        # Initialize global services ( stored in app.state)
+        # Initialize global services (stored in app.state)
         app.state.services = initialize_services()
-        logger.info("All services started")
+        logger.info("🎉 All services started successfully")
         
     except Exception as e:
-        logger.error("Failed to initialize: {e}")
+        logger.error(f"❌ Failed to initialize services: {e}")
+        logger.exception("Full error traceback:")  # This will show the full traceback
         sys.exit(1)
         
     logger.debug("=" * 80)
     logger.debug(f"🌐 API Server ready at: http://{settings.SERVER_HOST}:{settings.SERVER_PORT}")
+    logger.debug(f"📖 API Docs available at: http://{settings.SERVER_HOST}:{settings.SERVER_PORT}/docs")
     logger.debug("=" * 80)
  
     
@@ -65,14 +68,14 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown: Clean up resources
-    logger.debug("Shutting downn gracefully...")
+    logger.debug("Shutting down gracefully...")
     
     
 # Create FastAPI application
 app = FastAPI(
-    title="Neuraleap Backend",
-    description="AI-powered candidate search with smart matching and instant results",
-    version="2.0.0",
+    title="Neuraleap Backend V3",
+    description="AI-powered candidate search with conversational interface and smart enrichment",
+    version="3.0.0",
     lifespan=lifespan
 )
 
@@ -83,12 +86,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-    "http://localhost:3000",  # React development server
-    "http://127.0.0.1:3000",  # Alternative localhost
-    "http://localhost:3001",  # Alternative port
-    "http://127.0.0.1:3001",  # Alternative port
-    "https://hire-x-xi.vercel.app/",# vercel deployment With trailing slash
-    "https://hire-x-xi.vercel.app" # vercel deployment 
+        "http://localhost:3000",  # React development server
+        "http://127.0.0.1:3000",  # Alternative localhost
+        "http://localhost:3001",  # Alternative port
+        "http://127.0.0.1:3001",  # Alternative port
+        "https://hire-x-xi.vercel.app",  # Vercel deployment (without trailing slash)
+        "https://hire-x-xi.vercel.app/",  # Vercel deployment (with trailing slash)
     ],
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods
@@ -111,7 +114,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "neuraleap-api",
-        "version": "2.0.0"
+        "version": "3.0.0"
     }
 
 
@@ -121,9 +124,15 @@ async def root():
     Root endpoint - just a welcome message :) 
     """
     return {
-        "message": "Welcome to Neuraleap API v2.0",
+        "message": "Welcome to Neuraleap API v3.0",
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
+        "features": [
+            "Conversational interface with Donna",
+            "56M profile search",
+            "Smart candidate enrichment",
+            "Real-time progress tracking"
+        ]
     }
 
 
@@ -152,12 +161,14 @@ app.include_router(
     tags=["Configuration"]
 )
 
+# Conversation routes: /conversation/start, /conversation/message, etc.
 app.include_router(
     conversation.router,
     prefix="/conversation",
     tags=["Conversation"]
 )
 
+# Results routes: /results/session/{id}, etc.
 app.include_router(
     enriched_results.router,
     prefix="",
@@ -182,5 +193,3 @@ if __name__ == "__main__":
         reload=True,  # Auto-reload on code changes (disable in production)
         log_level="info"
     )
-
-
