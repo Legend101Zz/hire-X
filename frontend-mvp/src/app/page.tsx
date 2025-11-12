@@ -1,10 +1,6 @@
-import PromptPage from "@/components/PromptPage";
-import ProtectedRoute from "@/components/ProtectedRoute";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return (
-    <ProtectedRoute>
-      <PromptPage />
-    </ProtectedRoute>
-  );
+  // Redirect to search page
+  redirect("/search");
 }

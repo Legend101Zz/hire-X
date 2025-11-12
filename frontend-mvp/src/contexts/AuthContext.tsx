@@ -1,15 +1,23 @@
-'use client'
+"use client";
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from "react";
+import * as authApi from "@/utils/api/authApi";
+import type { User } from "@/types";
 
 interface AuthContextType {
   isAuthenticated: boolean;
-  user: { username: string; email?: string } | null;
+  user: User | null;
   token: string | null;
   login: (username: string, password: string) => Promise<boolean>;
-  loginWithGoogle: () => Promise<boolean>;
+  register: (
+    username: string,
+    email: string,
+    password: string,
+    fullName: string
+  ) => Promise<boolean>;
   logout: () => void;
   isLoading: boolean;
+  error: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -17,92 +25,113 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
 };
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [user, setUser] = useState<{ username: string; email?: string } | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // Check if user is logged in from localStorage
-    const savedUser = localStorage.getItem('user');
-    const savedToken = localStorage.getItem('token');
-    
+    const savedUser = localStorage.getItem("user");
+    const savedToken = localStorage.getItem("token");
+
     if (savedUser && savedToken) {
-      setUser(JSON.parse(savedUser));
-      setToken(savedToken);
-      setIsAuthenticated(true);
+      try {
+        setUser(JSON.parse(savedUser));
+        setToken(savedToken);
+        setIsAuthenticated(true);
+      } catch (err) {
+        console.error("Failed to parse saved user data:", err);
+        localStorage.removeItem("user");
+        localStorage.removeItem("token");
+      }
     }
     setIsLoading(false);
   }, []);
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const login = async (
+    username: string,
+    password: string
+  ): Promise<boolean> => {
     setIsLoading(true);
-    
+    setError(null);
+
     try {
-      // Call backend login endpoint
-      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiBaseUrl}/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ username, password }),
-      });
+      const response = await authApi.login(username, password);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Login failed:', errorData);
-        setIsLoading(false);
-        return false;
-      }
-
-      const data = await response.json();
-      
       // Store user data and token
-      const userData = { username: data.username, email: data.email };
+      const userData: User = {
+        username: response.username,
+        email: "", // Will be fetched separately if needed
+        full_name: "",
+      };
+
       setUser(userData);
-      setToken(data.access_token);
+      setToken(response.access_token);
       setIsAuthenticated(true);
-      
+
       // Persist to localStorage
-      localStorage.setItem('user', JSON.stringify(userData));
-      localStorage.setItem('token', data.access_token);
-      
+      localStorage.setItem("user", JSON.stringify(userData));
+      localStorage.setItem("token", response.access_token);
+
       setIsLoading(false);
       return true;
-    } catch (error) {
-      console.error('Login error:', error);
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Login failed";
+      setError(errorMessage);
+      console.error("Login error:", err);
       setIsLoading(false);
       return false;
     }
   };
 
-  const loginWithGoogle = async (): Promise<boolean> => {
+  const register = async (
+    username: string,
+    email: string,
+    password: string,
+    fullName: string
+  ): Promise<boolean> => {
     setIsLoading(true);
-    
-    // Simulate Google OAuth
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const userData = { username: 'google_user' };
-    setUser(userData);
-    setIsAuthenticated(true);
-    localStorage.setItem('user', JSON.stringify(userData));
-    setIsLoading(false);
-    return true;
+    setError(null);
+
+    try {
+      await authApi.register({
+        username,
+        email,
+        password,
+        full_name: fullName,
+      });
+
+      // Auto-login after successful registration
+      const success = await login(username, password);
+      return success;
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Registration failed";
+      setError(errorMessage);
+      console.error("Registration error:", err);
+      setIsLoading(false);
+      return false;
+    }
   };
 
   const logout = () => {
     setUser(null);
     setToken(null);
     setIsAuthenticated(false);
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
+    setError(null);
+    localStorage.removeItem("user");
+    localStorage.removeItem("token");
   };
 
   const value = {
@@ -110,14 +139,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     user,
     token,
     login,
-    loginWithGoogle,
+    register,
     logout,
-    isLoading
+    isLoading,
+    error,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
