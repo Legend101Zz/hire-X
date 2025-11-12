@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { SearchProvider } from "@/contexts/SearchContext";
+import { ThemeProvider } from "@/components/theme-provider";
 import AuthInterceptor from "@/components/AuthInterceptor";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,8 +19,22 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NeuralLeap - AI-Powered Talent Search",
-  description: "Advanced AI-powered platform for finding and analyzing professional profiles",
+  title: "NeuraLeap Hire - AI-Powered Talent Search",
+  description:
+    "Advanced AI-powered platform for finding and analyzing professional profiles with enrichment data",
+  keywords: [
+    "talent search",
+    "AI recruiting",
+    "candidate sourcing",
+    "enrichment",
+  ],
+  authors: [{ name: "NeuraLeap" }],
+  openGraph: {
+    title: "NeuraLeap Hire - AI-Powered Talent Search",
+    description:
+      "Find the best candidates with AI-powered search and enrichment",
+    type: "website",
+  },
 };
 
 export default function RootLayout({
@@ -26,16 +43,25 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
         <ErrorBoundary>
-          <AuthProvider>
-            <AuthInterceptor>
-              {children}
-            </AuthInterceptor>
-          </AuthProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="dark"
+            enableSystem={false}
+            disableTransitionOnChange
+          >
+            <TooltipProvider>
+              <AuthProvider>
+                <SearchProvider>
+                  <AuthInterceptor>{children}</AuthInterceptor>
+                </SearchProvider>
+              </AuthProvider>
+            </TooltipProvider>
+          </ThemeProvider>
         </ErrorBoundary>
       </body>
     </html>

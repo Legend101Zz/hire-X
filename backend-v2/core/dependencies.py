@@ -8,15 +8,14 @@ MODIFIED FOR V3: Added enrichment_service and conversation_manager
 
 from typing import Any, Dict
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
 # Import auth utilities
 from core.auth import verify_token
 from core.logging_config import get_logger
 # Import data layer
 from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from services.ai_parser import AIParser
 from services.availability_checker import AvailabilityChecker
 from services.candidate_scorer import CandidateScorer
@@ -92,7 +91,7 @@ def initialize_services() -> Dict[str, Any]:
     response_scorer = ResponseLikelihoodScorer(redis_cache, model_config_manager)
     logger.info("✅ ResponseLikelihoodScorer initialized")
     
-    skill_validator = SkillValidator(web_search, model_config_manager)
+    skill_validator = SkillValidator(web_search, redis_cache, model_config_manager)
     logger.info("✅ SkillValidator initialized")
     
     availability_checker = AvailabilityChecker(web_search, redis_cache, model_config_manager)
