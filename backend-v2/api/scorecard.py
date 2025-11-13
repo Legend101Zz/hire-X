@@ -9,21 +9,20 @@ All the business logic is in services/ - these endpoints just handle HTTP.
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
-
 # Import dependencies
 from core.dependencies import (get_current_username, get_mongodb,
                                get_optional_username, get_workflow)
 from core.logging_config import get_logger
 from data.mongodb import MongoDB
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 # Import models (request/response schemas)
 from models.requests import FollowupAnswersRequest, ParsePromptRequest
 from models.responses import ParsePromptResponse, ScorecardStatusResponse
 from services.scorecard_workflow import ScorecardWorkflow
 
 # Create router
-router = APIRouter()
+router = APIRouter(prefix="/scorecard")
 
 # Get the logger for this module
 logger = get_logger(__name__)

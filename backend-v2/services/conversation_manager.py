@@ -126,7 +126,8 @@ class ConversationManager:
             # Extract info from initial message
             extracted = await self._extract_info_from_message(
                 initial_message,
-                state.ideal_profile
+                state.ideal_profile,
+                username=username 
             )
             state.ideal_profile = extracted
             
@@ -190,7 +191,7 @@ class ConversationManager:
             role="user",
             content=user_message
         ))
-        state.turn_count += 1
+        state.turn_csount += 1
         state.stage_turn_count += 1
         
         # Handle special actions
@@ -214,7 +215,8 @@ class ConversationManager:
             # Extract info from user message
             extracted = await self._extract_info_from_message(
                 user_message,
-                state.ideal_profile
+                state.ideal_profile,
+                username=None
             )
             
             # Merge with existing profile
@@ -266,7 +268,8 @@ class ConversationManager:
     async def _extract_info_from_message(
         self,
         message: str,
-        current_profile: IdealProfileCard
+        current_profile: IdealProfileCard,
+        username: str = None 
     ) -> IdealProfileCard:
         """
         Extract structured info from user's message.
@@ -293,9 +296,7 @@ User's Message:
 Extract new information and return updated fields as JSON."""
         
         # Call LLM via model config manager
-        model_config = await self.model_config.get_user_config(
-            current_profile.username if hasattr(current_profile, 'username') else None
-        )
+        model_config = await self.model_config.get_user_config(username)
         
         # Get extraction model
         extraction_response = await self.model_config.call_model(

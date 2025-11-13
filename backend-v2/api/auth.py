@@ -7,20 +7,19 @@ This file works alongside core auth.py module which contains
 the JWT token generation and verification logic.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer
-
 from core.auth import create_access_token, get_password_hash, verify_password
 # Import dependencies
 from core.dependencies import get_current_username, get_mongodb
 from core.logging_config import get_logger
 from data.mongodb import MongoDB
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer
 # Import models
 from models.requests import LoginRequest, RegisterRequest
 from models.responses import TokenResponse, UserResponse
 
 # Create router
-router = APIRouter()
+router = APIRouter(prefix="/auth")
 security = HTTPBearer()
 
 # Get the logger for this module

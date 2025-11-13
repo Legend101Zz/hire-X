@@ -2,58 +2,42 @@
 Conversation API Routes
 ======================
 FastAPI routes for the conversational interface with Donna.
-
-Endpoints:
-- POST /conversation/start - Start new conversation
-- POST /conversation/{session_id}/message - Send message
-- GET /conversation/{session_id} - Get conversation state
-- POST /conversation/{session_id}/finalize - Finalize and search
-- POST /conversation/{session_id}/upload-jd - Upload JD file
 """
 
+import base64
 import uuid
 from datetime import datetime
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 
-from models.conversation_models import (ConversationFinalizeRequest,
-                                        ConversationFinalizeResponse,
-                                        ConversationMessageRequest,
-                                        ConversationMessageResponse,
-                                        ConversationStartRequest,
-                                        ConversationStartResponse,
-                                        ConversationState)
+# ✅ IMPORT ALL REAL DEPENDENCIES
+from core.dependencies import (
+    get_conversation_manager,
+    get_current_username,
+    get_jd_parser,
+    get_workflow  # ✅ ADD THIS
+)
+from core.logging_config import get_logger
+from models.conversation_models import (
+    ConversationFinalizeRequest,
+    ConversationFinalizeResponse,
+    ConversationMessageRequest,
+    ConversationMessageResponse,
+    ConversationStartRequest,
+    ConversationStartResponse,
+    ConversationState
+)
 from services.conversation_manager import ConversationManager
 from services.jd_parser import JDParser
+from services.scorecard_workflow import ScorecardWorkflow  # ✅ ADD THIS
 
 # ================================================================
 # ROUTER SETUP
 # ================================================================
 
 router = APIRouter(prefix="/conversation", tags=["Conversation"])
-
-
-# ================================================================
-# DEPENDENCIES
-# ================================================================
-
-def get_conversation_manager() -> ConversationManager:
-    """Dependency to get conversation manager."""
-    # This will be injected by the main app
-    # For now, we'll mark it as a placeholder
-    raise NotImplementedError("Inject conversation_manager dependency")
-
-
-def get_jd_parser() -> JDParser:
-    """Dependency to get JD parser."""
-    raise NotImplementedError("Inject jd_parser dependency")
-
-
-def get_current_user():
-    """Dependency to get current authenticated user."""
-    # Will be injected from auth system
-    raise NotImplementedError("Inject auth dependency")
+logger = get_logger(__name__)
 
 
 # ================================================================
@@ -63,7 +47,7 @@ def get_current_user():
 @router.post("/start", response_model=ConversationStartResponse)
 async def start_conversation(
     request: ConversationStartRequest,
-    current_user: Dict = Depends(get_current_user),
+    username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
     jd_parser: JDParser = Depends(get_jd_parser)
 ):
@@ -81,7 +65,8 @@ async def start_conversation(
     try:
         # Generate session ID
         session_id = f"conv_{uuid.uuid4().hex}"
-        username = current_user.get("username")
+        
+        logger.info(f"Starting conversation for {username}, session: {session_id}")
         
         # Parse JD if provided
         jd_data = None
@@ -113,6 +98,7 @@ async def start_conversation(
         )
     
     except Exception as e:
+        logger.error(f"Error starting conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -124,7 +110,7 @@ async def start_conversation(
 async def send_message(
     session_id: str,
     request: ConversationMessageRequest,
-    current_user: Dict = Depends(get_current_user),
+    username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager)
 ):
     """
@@ -165,6 +151,7 @@ async def send_message(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.error(f"Error processing message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -175,7 +162,7 @@ async def send_message(
 @router.get("/{session_id}")
 async def get_conversation(
     session_id: str,
-    current_user: Dict = Depends(get_current_user),
+    username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager)
 ):
     """
@@ -208,37 +195,43 @@ async def get_conversation(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error getting conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ================================================================
-# FINALIZE CONVERSATION
+# FINALIZE CONVERSATION - ✅ COMPLETE IMPLEMENTATION
 # ================================================================
 
 @router.post("/{session_id}/finalize", response_model=ConversationFinalizeResponse)
 async def finalize_conversation(
     session_id: str,
     request: ConversationFinalizeRequest,
-    current_user: Dict = Depends(get_current_user),
-    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+    background_tasks: BackgroundTasks,  # ✅ ADD THIS
+    username: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    workflow: ScorecardWorkflow = Depends(get_workflow)  # ✅ ADD THIS
 ):
     """
     Finalize conversation and trigger search.
     
     This endpoint:
     1. Validates the ideal profile
-    2. Triggers the actual candidate search
-    3. Returns search session info
+    2. Generates a new search session ID
+    3. Triggers the V3 workflow in background
+    4. Returns search session info for progress tracking
     
     Args:
         session_id: Conversation session ID
         request: Final adjustments and model config
     
     Returns:
-        Search status
+        Search session ID and status
     """
     
     try:
+        logger.info(f"Finalizing conversation {session_id} for {username}")
+        
         # Load conversation state
         state = await conversation_manager._load_state(session_id)
         
@@ -249,31 +242,53 @@ async def finalize_conversation(
         if request.final_profile_adjustments:
             state.ideal_profile = request.final_profile_adjustments
         
-        # Validate profile
+        # ✅ VALIDATE PROFILE
         if not state.ideal_profile.role_title:
             raise HTTPException(status_code=400, detail="Role title is required")
         
-        if len(state.ideal_profile.must_have_skills) < 3:
-            raise HTTPException(status_code=400, detail="At least 3 must-have skills required")
+        if not state.ideal_profile.must_have_skills or len(state.ideal_profile.must_have_skills) < 3:
+            raise HTTPException(
+                status_code=400, 
+                detail="At least 3 must-have skills required"
+            )
         
-        # Mark as ready
+        # Mark conversation as ready
         state.ready_to_search = True
         state.stage = "ready"
         await conversation_manager._save_state(state)
         
-        # TODO: Trigger actual search workflow
-        # This will be integrated with the existing search system
+        # ✅ GENERATE SEARCH SESSION ID (different from conversation session)
+        search_session_id = str(uuid.uuid4())
         
+        logger.info(f"Triggering V3 workflow:")
+        logger.info(f"  - Conversation session: {session_id}")
+        logger.info(f"  - Search session: {search_session_id}")
+        logger.info(f"  - Profile: {state.ideal_profile.role_title}")
+        
+        # ✅ TRIGGER V3 WORKFLOW IN BACKGROUND
+        # This runs: conversation → ideal profile → search → score → enrich
+        background_tasks.add_task(
+            workflow.execute,
+            session_id=search_session_id,  # Search workflow session ID
+            username=username,
+            conversation_session_id=session_id,  # Link to conversation
+            mode="v3"  # Use V3 mode with enrichment
+        )
+        
+        logger.info(f"✅ V3 workflow started in background for {search_session_id}")
+        
+        # ✅ RETURN IMMEDIATELY (workflow runs in background)
         return ConversationFinalizeResponse(
-            session_id=session_id,
+            session_id=search_session_id,  # Return the SEARCH session ID for polling
             search_triggered=True,
-            message="Search initiated! This will take about 30 seconds.",
-            estimated_candidates=None  # Will be filled by search system
+            message="Search initiated! Poll /session/{session_id}/status for progress.",
+            estimated_candidates=None  # Will be filled after search completes
         )
     
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error finalizing conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -285,7 +300,7 @@ async def finalize_conversation(
 async def upload_jd(
     session_id: str,
     file: UploadFile = File(...),
-    current_user: Dict = Depends(get_current_user),
+    username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
     jd_parser: JDParser = Depends(get_jd_parser)
 ):
@@ -313,11 +328,9 @@ async def upload_jd(
         file_content = await file.read()
         
         # Convert to base64
-        import base64
         file_content_b64 = base64.b64encode(file_content).decode('utf-8')
         
         # Parse JD
-        username = current_user.get("username")
         jd_data = await jd_parser.parse_jd(
             file_content=file_content_b64,
             file_name=file.filename,
@@ -357,6 +370,7 @@ async def upload_jd(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error uploading JD: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -367,7 +381,7 @@ async def upload_jd(
 @router.delete("/{session_id}")
 async def reset_conversation(
     session_id: str,
-    current_user: Dict = Depends(get_current_user),
+    username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager)
 ):
     """
@@ -387,7 +401,10 @@ async def reset_conversation(
             "conversation_state"
         )
         
+        logger.info(f"Conversation {session_id} reset for {username}")
+        
         return {"message": "Conversation reset successfully"}
     
     except Exception as e:
+        logger.error(f"Error resetting conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))

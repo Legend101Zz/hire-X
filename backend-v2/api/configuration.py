@@ -15,10 +15,9 @@ Endpoints:
 
 from typing import Dict
 
-from fastapi import APIRouter, Depends, HTTPException
-
 from core.dependencies import get_current_username, get_model_config_manager
 from core.logging_config import get_logger
+from fastapi import APIRouter, Depends, HTTPException
 from models.configuration_models import (CostEstimate, ModelConfigRequest,
                                          ModelConfiguration)
 from services.model_config_manager import ModelConfigManager
@@ -26,7 +25,7 @@ from services.model_config_manager import ModelConfigManager
 logger = get_logger(__name__)
 
 # Create router
-router = APIRouter()
+router = APIRouter(prefix="/config-model")
 
 
 # ============================================================================

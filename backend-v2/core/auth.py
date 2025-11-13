@@ -6,6 +6,7 @@ Handles JWT token creation/verification and password hashing.
 This module provides the core security functions used by the auth API endpoints.
 """
 
+import hashlib
 import os
 from datetime import datetime, timedelta
 from typing import Optional
@@ -29,39 +30,39 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
     Verify a plain password against a hashed password.
-    
-    Args:
-        plain_password: The plain text password to verify
-        hashed_password: The hashed password from the database
-        
-    Returns:
-        bool: True if password matches, False otherwise
+
+    Uses SHA-256 pre-hash to ensure consistency with bcrypt's 72-byte limit workaround.
     """
     try:
-        result = pwd_context.verify(plain_password, hashed_password)
-        logger.debug("Password verification completed", extra={
-            "result": result
-        })
+        # Pre-hash the plain password first (same as during hashing)
+        prehashed = hashlib.sha256(plain_password.encode("utf-8")).hexdigest()
+
+        result = pwd_context.verify(prehashed, hashed_password)
+        logger.debug("Password verification completed", extra={"result": result})
         return result
+
     except Exception as e:
         logger.error(f"Password verification failed: {e}", exc_info=True)
         return False
 
-
 def get_password_hash(password: str) -> str:
     """
-    Hash a password for storage.
-    
-    Args:
-        password: Plain text password
-        
-    Returns:
-        str: Hashed password
+    Hash a password securely using SHA-256 pre-hash + bcrypt.
+
+    This avoids bcrypt's 72-byte limit and ensures compatibility
+    with very long or Unicode-rich passwords.
     """
     try:
-        hashed = pwd_context.hash(password)
+        print('pass',password)
+        # Step 1: Pre-hash password to a fixed 64-character hex string
+        prehashed = hashlib.sha256(password.encode("utf-8")).hexdigest()
+        print('hashed',prehashed)
+        # Step 2: Pass the short, fixed-length hash to bcrypt
+        hashed = pwd_context.hash(prehashed)
+
         logger.debug("Password hashed successfully")
         return hashed
+
     except Exception as e:
         logger.error(f"Password hashing failed: {e}", exc_info=True)
         raise
