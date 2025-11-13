@@ -41,8 +41,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   useEffect(() => {
     // Check if user is logged in from localStorage
-    const savedUser = localStorage.getItem("user");
-    const savedToken = localStorage.getItem("token");
+    const savedUser = localStorage.getItem("user_neuraleap");
+    const savedToken = localStorage.getItem("token_neuraleap");
 
     if (savedUser && savedToken) {
       try {
@@ -51,8 +51,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         setIsAuthenticated(true);
       } catch (err) {
         console.error("Failed to parse saved user data:", err);
-        localStorage.removeItem("user");
-        localStorage.removeItem("token");
+        localStorage.removeItem("user_neuraleap");
+        localStorage.removeItem("token_neuraleap");
       }
     }
     setIsLoading(false);
@@ -80,8 +80,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setIsAuthenticated(true);
 
       // Persist to localStorage
-      localStorage.setItem("user", JSON.stringify(userData));
-      localStorage.setItem("token", response.access_token);
+      localStorage.setItem("user_neuraleap", JSON.stringify(userData));
+      localStorage.setItem("token_neuraleap", response.access_token);
 
       setIsLoading(false);
       return true;
@@ -130,8 +130,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     setToken(null);
     setIsAuthenticated(false);
     setError(null);
-    localStorage.removeItem("user");
-    localStorage.removeItem("token");
+    localStorage.removeItem("user_neuraleap");
+    localStorage.removeItem("token_neuraleap");
   };
 
   const value = {

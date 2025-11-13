@@ -174,15 +174,22 @@ select {
 
 /* Grid pattern background (like Vercel) */
 .grid-bg {
-  background-image:
-    linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px),
+  background-image: linear-gradient(
+      to right,
+      rgb(255 255 255 / 0.05) 1px,
+      transparent 1px
+    ),
     linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
   background-size: 50px 50px;
 }
 
 /* Dot pattern background */
 .dot-bg {
-  background-image: radial-gradient(circle, rgb(255 255 255 / 0.1) 1px, transparent 1px);
+  background-image: radial-gradient(
+    circle,
+    rgb(255 255 255 / 0.1) 1px,
+    transparent 1px
+  );
   background-size: 20px 20px;
 }
 
@@ -197,6 +204,10 @@ select {
 .spotlight {
   position: relative;
   overflow: hidden;
+}
+
+.bg-gradient-radial {
+  background: radial-gradient(circle, var(--tw-gradient-stops));
 }
 
 .spotlight::before {
