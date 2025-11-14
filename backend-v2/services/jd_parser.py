@@ -23,6 +23,9 @@ import json
 import re
 from typing import Dict, List, Optional
 
+from core.logging_config import get_logger
+from services.model_config_manager import ModelConfigManager
+
 # PDF and DOCX parsing libraries
 try:
     import PyPDF2
@@ -36,13 +39,14 @@ try:
 except ImportError:
     DOCX_AVAILABLE = False
 
+logger = get_logger(__name__)
 
 class JDParser:
     """
     Parses Job Description files and extracts structured data.
     """
     
-    def __init__(self, model_config_manager):
+    def __init__(self, model_config_manager:ModelConfigManager):
         """
         Initialize JD parser.
         
@@ -96,10 +100,10 @@ class JDParser:
         else:
             # Assume plain text
             text = file_bytes.decode('utf-8', errors='ignore')
-        
+        logger.debug('decoded JD',text)
         # Use LLM to extract structured data
         structured_data = await self._llm_extract_jd_data(text, username)
-        
+        print('LLM JD',structured_data)
         return structured_data
     
     
@@ -212,17 +216,18 @@ Rules:
 {jd_text}
 
 Extract structured data as JSON:"""
-        
+        logger.debug('model_config',username)
         # Get model config
         model_config = await self.model_config.get_user_config(username)
-        
+        print('calling_model_for_jd',model_config)
         # Call LLM
         response = await self.model_config.call_model(
             model_config=model_config,
             model_purpose="extraction",
             system_prompt=system_prompt,
             user_message=user_message,
-            temperature=0.3
+            temperature=0.3,
+            username=username 
         )
         
         # Parse JSON response
@@ -245,11 +250,12 @@ Extract structured data as JSON:"""
                 "seniority", "experience_years", "responsibilities",
                 "qualifications", "industries", "company_size"
             ]
+            print('extracted_data',extracted_data)
             
             for field in required_fields:
                 if field not in extracted_data:
                     extracted_data[field] = "" if "skills" not in field and "industries" not in field and "company_size" not in field else []
-            
+            print('extracted_data2',extracted_data)
             return extracted_data
         
         except json.JSONDecodeError as e:

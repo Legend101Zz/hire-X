@@ -7,7 +7,7 @@ import type {
   StartConversationRequest,
   StartConversationResponse,
   SendMessageRequest,
-  SendMessageResponse,
+  SampleProfile,
   ConversationState,
   IdealProfileCard,
 } from "@/types";
@@ -18,7 +18,14 @@ import type {
 export const startConversation = async (
   token: string,
   data?: StartConversationRequest
-): Promise<StartConversationResponse> => {
+): Promise<{
+  session_id: string;
+  donna_greeting: string;
+  ideal_profile: IdealProfileCard;
+  sample_profile: SampleProfile | null;
+  suggested_next_steps: string[];
+  stage: string;
+}> => {
   const response = await apiCall("/conversation/start", {
     method: "POST",
     body: JSON.stringify(data || {}),
@@ -28,14 +35,18 @@ export const startConversation = async (
   return handleApiResponse(response);
 };
 
-/**
- * Send a message in an ongoing conversation
- */
 export const sendMessage = async (
   sessionId: string,
   token: string,
   data: SendMessageRequest
-): Promise<SendMessageResponse> => {
+): Promise<{
+  donna_response: string;
+  updated_ideal_profile: IdealProfileCard;
+  sample_profile: SampleProfile | null;
+  stage: string;
+  ready_to_search: boolean;
+  suggested_next_steps: string[];
+}> => {
   const response = await apiCall(`/conversation/${sessionId}/message`, {
     method: "POST",
     body: JSON.stringify(data),

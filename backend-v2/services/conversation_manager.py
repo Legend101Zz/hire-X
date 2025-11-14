@@ -17,10 +17,13 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from data.redis_cache import RedisCache
 from models.conversation_models import (ConversationMessage, ConversationStage,
                                         ConversationState, IdealProfileCard,
                                         SampleProfile)
 from services.conversation_prompts import ConversationPrompts
+from services.model_config_manager import ModelConfigManager
+from services.sample_profile_generator import SampleProfileGenerator
 
 
 class ConversationManager:
@@ -56,9 +59,9 @@ class ConversationManager:
     
     def __init__(
         self,
-        redis_cache,
-        model_config_manager,
-        sample_profile_generator
+        redis_cache:RedisCache,
+        model_config_manager:ModelConfigManager,
+        sample_profile_generator:SampleProfileGenerator
     ):
         """
         Initialize conversation manager.
@@ -108,16 +111,18 @@ class ConversationManager:
         # If JD provided, pre-fill profile
         if jd_data:
             state.ideal_profile = self._jd_to_profile(jd_data)
+            print('jd_to_profile',state.ideal_profile)
             state.jd_uploaded = True
             state.stage = ConversationStage.REVIEW
             donna_reply = self.prompts.get_greeting_with_jd()
-            
+            print('donna_reply',donna_reply)
             # Generate sample profile
             if self._has_minimum_info(state.ideal_profile):
                 sample_profile = await self.sample_generator.generate_sample(
                     state.ideal_profile
                 )
                 state.sample_profile = sample_profile
+                print('sample-profile',state.sample_profile)
             else:
                 sample_profile = None
         
@@ -126,7 +131,8 @@ class ConversationManager:
             # Extract info from initial message
             extracted = await self._extract_info_from_message(
                 initial_message,
-                state.ideal_profile
+                state.ideal_profile,
+                username=username 
             )
             state.ideal_profile = extracted
             
@@ -190,7 +196,7 @@ class ConversationManager:
             role="user",
             content=user_message
         ))
-        state.turn_count += 1
+        state.turn_csount += 1
         state.stage_turn_count += 1
         
         # Handle special actions
@@ -214,7 +220,8 @@ class ConversationManager:
             # Extract info from user message
             extracted = await self._extract_info_from_message(
                 user_message,
-                state.ideal_profile
+                state.ideal_profile,
+                username=None
             )
             
             # Merge with existing profile
@@ -266,7 +273,8 @@ class ConversationManager:
     async def _extract_info_from_message(
         self,
         message: str,
-        current_profile: IdealProfileCard
+        current_profile: IdealProfileCard,
+        username: str = None 
     ) -> IdealProfileCard:
         """
         Extract structured info from user's message.
@@ -293,9 +301,7 @@ User's Message:
 Extract new information and return updated fields as JSON."""
         
         # Call LLM via model config manager
-        model_config = await self.model_config.get_user_config(
-            current_profile.username if hasattr(current_profile, 'username') else None
-        )
+        model_config = await self.model_config.get_user_config(username)
         
         # Get extraction model
         extraction_response = await self.model_config.call_model(
@@ -303,7 +309,8 @@ Extract new information and return updated fields as JSON."""
             model_purpose="extraction",
             system_prompt=system_prompt,
             user_message=user_prompt,
-            temperature=0.3
+            temperature=0.3,
+            username=username 
         )
         
         # Parse JSON response
@@ -534,7 +541,7 @@ Extract new information and return updated fields as JSON."""
             state.session_id,
             "conversation_state",
             state.dict(),
-            ttl=3600  # 1 hour
+            expire_seconds=3600  # 1 hour
         )
     
     

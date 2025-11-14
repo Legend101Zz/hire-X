@@ -12,8 +12,16 @@ import {
   FileText,
   X,
   Zap,
-  Target,
+  CheckCircle2,
+  AlertCircle,
+  SlidersHorizontal,
+  Users,
+  Brain,
   TrendingUp,
+  FileCheck,
+  Rocket,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -31,6 +39,7 @@ import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearch } from "@/contexts/SearchContext";
 import * as conversationApi from "@/utils/api/conversationApiV2";
+import AnimatedBackground from "@/components/auth/AnimatedBackground";
 
 export default function SearchPage() {
   const router = useRouter();
@@ -41,18 +50,29 @@ export default function SearchPage() {
   const [searchMode, setSearchMode] = useState<"text" | "jd">("text");
   const [query, setQuery] = useState("");
   const [jdFile, setJdFile] = useState<File | null>(null);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [filters, setFilters] = useState({
     locationEnabled: false,
     location: "",
     seniority: "",
-    industries: [] as string[],
+    industry: "",
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+  const [isValidInput, setIsValidInput] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+
+  // Validate input
+  useEffect(() => {
+    if (searchMode === "text") {
+      setIsValidInput(query.trim().length > 0);
+    } else {
+      setIsValidInput(jdFile !== null);
+    }
+  }, [searchMode, query, jdFile]);
 
   // Track mouse position for spotlight effect
   useEffect(() => {
@@ -75,8 +95,8 @@ export default function SearchPage() {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    console.log('heref', file)
     if (file) {
-      // Check file type
       const validTypes = [
         "application/pdf",
         "application/msword",
@@ -87,24 +107,23 @@ export default function SearchPage() {
         setError("Please upload a PDF, DOC, DOCX, or TXT file");
         return;
       }
-      // Check file size (max 10MB)
       if (file.size > 10 * 1024 * 1024) {
         setError("File size must be less than 10MB");
         return;
       }
+      console.log('file', file)
       setJdFile(file);
       setError(null);
     }
   };
 
   const handleSearch = async () => {
-    if (searchMode === "text" && !query.trim()) {
-      setError("Please enter a search query");
-      return;
-    }
-
-    if (searchMode === "jd" && !jdFile) {
-      setError("Please upload a job description file");
+    if (!isValidInput) {
+      setError(
+        searchMode === "text"
+          ? "Please enter a search query"
+          : "Please upload a job description file"
+      );
       return;
     }
 
@@ -122,7 +141,6 @@ export default function SearchPage() {
       let response;
 
       if (searchMode === "jd" && jdFile) {
-        // Convert file to base64
         const reader = new FileReader();
         reader.readAsDataURL(jdFile);
         await new Promise((resolve) => {
@@ -163,14 +181,9 @@ export default function SearchPage() {
   ];
 
   return (
-    <div className="min-h-screen relative overflow-hidden">
-      {/* Animated background */}
-      <div className="absolute inset-0 bg-gradient-to-b from-background via-background to-primary/5" />
-      <div className="absolute inset-0 grid-bg opacity-40" />
-
-      {/* Animated gradient orbs */}
-      <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-3xl animate-pulse" />
-      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl animate-pulse delay-1000" />
+    <div className="min-h-screen relative overflow-hidden bg-background">
+      {/* Enhanced Animated Background */}
+      <AnimatedBackground />
 
       <div className="relative z-10 container mx-auto px-4 py-16">
         {/* Header with animation */}
@@ -203,7 +216,7 @@ export default function SearchPage() {
           </p>
         </motion.div>
 
-        {/* Main Search Card with Spotlight Effect */}
+        {/* Main Search Card */}
         <motion.div
           ref={cardRef}
           initial={{ opacity: 0, y: 20 }}
@@ -212,7 +225,7 @@ export default function SearchPage() {
           className="max-w-4xl mx-auto"
         >
           <Card
-            className="shadow-2xl border-border/50 backdrop-blur-sm bg-card/95 spotlight"
+            className="shadow-2xl border-border/50 backdrop-blur-xl bg-card/80 spotlight"
             style={
               {
                 "--mouse-x": `${mousePosition.x}px`,
@@ -253,7 +266,10 @@ export default function SearchPage() {
                     className="space-y-4"
                   >
                     <div className="space-y-2">
-                      <Label htmlFor="search" className="text-base font-semibold">
+                      <Label
+                        htmlFor="search"
+                        className="text-base font-semibold"
+                      >
                         Describe your ideal candidate
                       </Label>
                       <div className="relative group">
@@ -262,11 +278,22 @@ export default function SearchPage() {
                           id="search"
                           value={query}
                           onChange={(e) => setQuery(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                          onKeyDown={(e) =>
+                            e.key === "Enter" && isValidInput && handleSearch()
+                          }
                           placeholder="e.g., Senior React Developer with 5+ years experience in fintech..."
                           className="pl-12 h-14 text-lg border-2 focus:border-primary transition-all"
                           disabled={isLoading}
                         />
+                        {query.trim() && (
+                          <motion.div
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="absolute right-4 top-1/2 -translate-y-1/2"
+                          >
+                            <CheckCircle2 className="w-5 h-5 text-green-500" />
+                          </motion.div>
+                        )}
                       </div>
                     </div>
                   </motion.div>
@@ -305,11 +332,20 @@ export default function SearchPage() {
                           </p>
                         </button>
                       ) : (
-                        <div className="p-4 bg-muted/50 rounded-lg flex items-center justify-between">
+                        <motion.div
+                          initial={{ scale: 0.9, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className="p-4 bg-green-500/10 border-2 border-green-500/30 rounded-lg flex items-center justify-between"
+                        >
                           <div className="flex items-center gap-3">
-                            <FileText className="w-8 h-8 text-primary" />
+                            <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center">
+                              <FileCheck className="w-5 h-5 text-green-500" />
+                            </div>
                             <div>
-                              <p className="font-medium">{jdFile.name}</p>
+                              <p className="font-medium flex items-center gap-2">
+                                {jdFile.name}
+                                <CheckCircle2 className="w-4 h-4 text-green-500" />
+                              </p>
                               <p className="text-xs text-muted-foreground">
                                 {(jdFile.size / 1024).toFixed(2)} KB
                               </p>
@@ -320,123 +356,218 @@ export default function SearchPage() {
                             size="icon"
                             onClick={() => setJdFile(null)}
                             disabled={isLoading}
+                            className="hover:bg-destructive/10 hover:text-destructive"
                           >
                             <X className="w-4 h-4" />
                           </Button>
-                        </div>
+                        </motion.div>
                       )}
                     </div>
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              <Separator />
-
-              {/* Advanced Filters */}
+              {/* Advanced Filters Toggle */}
               <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <SlidersHorizontal className="w-4 h-4 text-muted-foreground" />
-                  <h3 className="font-semibold text-sm">Advanced Filters</h3>
-                  <Badge variant="secondary" className="text-xs">
-                    Optional
-                  </Badge>
-                </div>
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                  className="w-full justify-between hover:bg-muted/50 group"
+                  disabled={isLoading}
+                >
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                    <span className="font-semibold text-sm">
+                      Advanced Filters
+                    </span>
+                    <Badge
+                      variant="secondary"
+                      className="text-xs group-hover:bg-primary/10 group-hover:text-primary transition-colors"
+                    >
+                      Optional
+                    </Badge>
+                  </div>
+                  <motion.div
+                    animate={{ rotate: showAdvancedFilters ? 180 : 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <ChevronDown className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                  </motion.div>
+                </Button>
 
-                {/* Location Filter */}
-                <div className="flex items-start gap-4 p-4 rounded-lg bg-muted/30 border border-border/50 transition-all hover:border-border">
-                  <div className="flex-1 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-muted-foreground" />
-                      <Label
-                        htmlFor="location"
-                        className="text-sm font-medium flex items-center gap-2"
+                {/* Collapsible Advanced Filters */}
+                <AnimatePresence>
+                  {showAdvancedFilters && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="overflow-hidden space-y-4"
+                    >
+                      <Separator />
+
+                      {/* Location Filter with Visual Toggle */}
+                      <motion.div
+                        initial={{ y: -20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ delay: 0.1 }}
+                        className="relative"
                       >
-                        Location Filter
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary text-xs font-bold cursor-help">
-                              i
+                        <div
+                          className={`p-4 rounded-lg border-2 transition-all duration-300 ${filters.locationEnabled
+                            ? "bg-primary/5 border-primary/30"
+                            : "bg-muted/30 border-border/50 opacity-60"
+                            }`}
+                        >
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <div
+                                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${filters.locationEnabled
+                                  ? "bg-primary/20"
+                                  : "bg-muted"
+                                  }`}
+                              >
+                                <MapPin
+                                  className={`w-4 h-4 transition-colors ${filters.locationEnabled
+                                    ? "text-primary"
+                                    : "text-muted-foreground"
+                                    }`}
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-sm font-semibold">
+                                  Location Filter
+                                </Label>
+                                <p className="text-xs text-muted-foreground">
+                                  {filters.locationEnabled
+                                    ? "Location filtering enabled"
+                                    : "Candidates from all locations"}
+                                </p>
+                              </div>
                             </div>
-                          </TooltipTrigger>
-                          <TooltipContent
-                            side="right"
-                            className="max-w-xs text-sm"
-                          >
-                            <p className="font-semibold mb-1">
-                              Location filter is OFF by default
-                            </p>
-                            <p className="text-muted-foreground">
-                              Candidates may be willing to relocate. Enable this
-                              filter only if location is a strict requirement.
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </Label>
-                    </div>
-                    <Input
-                      id="location"
-                      value={filters.location}
-                      onChange={(e) =>
-                        setFilters({ ...filters, location: e.target.value })
-                      }
-                      placeholder="e.g., Bangalore, Remote, United States..."
-                      disabled={!filters.locationEnabled || isLoading}
-                      className="h-10"
-                    />
-                  </div>
-                  <div className="flex flex-col items-center gap-2 pt-6">
-                    <Switch
-                      id="location-toggle"
-                      checked={filters.locationEnabled}
-                      onCheckedChange={(checked) =>
-                        setFilters({ ...filters, locationEnabled: checked })
-                      }
-                      disabled={isLoading}
-                    />
-                    <Label
-                      htmlFor="location-toggle"
-                      className="text-xs text-muted-foreground font-medium"
-                    >
-                      {filters.locationEnabled ? "ON" : "OFF"}
-                    </Label>
-                  </div>
-                </div>
 
-                {/* Other Filters */}
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label
-                      htmlFor="seniority"
-                      className="flex items-center gap-2"
-                    >
-                      <Briefcase className="w-4 h-4 text-muted-foreground" />
-                      Seniority Level
-                    </Label>
-                    <Input
-                      id="seniority"
-                      value={filters.seniority}
-                      onChange={(e) =>
-                        setFilters({ ...filters, seniority: e.target.value })
-                      }
-                      placeholder="e.g., Senior, Mid-level..."
-                      disabled={isLoading}
-                      className="h-10"
-                    />
-                  </div>
+                            <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2">
+                                <motion.div
+                                  animate={{
+                                    scale: filters.locationEnabled ? 1 : 0.9,
+                                    opacity: filters.locationEnabled ? 1 : 0.5,
+                                  }}
+                                  className={`text-xs font-bold px-2 py-1 rounded-full ${filters.locationEnabled
+                                    ? "bg-primary/20 text-primary"
+                                    : "bg-muted text-muted-foreground"
+                                    }`}
+                                >
+                                  {filters.locationEnabled ? "ON" : "OFF"}
+                                </motion.div>
+                                <Switch
+                                  checked={filters.locationEnabled}
+                                  onCheckedChange={(checked) =>
+                                    setFilters({
+                                      ...filters,
+                                      locationEnabled: checked,
+                                    })
+                                  }
+                                  disabled={isLoading}
+                                />
+                              </div>
+                            </div>
+                          </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="industry" className="flex items-center gap-2">
-                      <Building2 className="w-4 h-4 text-muted-foreground" />
-                      Industry
-                    </Label>
-                    <Input
-                      id="industry"
-                      placeholder="e.g., Fintech, Healthcare..."
-                      disabled={isLoading}
-                      className="h-10"
-                    />
-                  </div>
-                </div>
+                          <AnimatePresence>
+                            {filters.locationEnabled && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: "auto", opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="overflow-hidden"
+                              >
+                                <Input
+                                  value={filters.location}
+                                  onChange={(e) =>
+                                    setFilters({
+                                      ...filters,
+                                      location: e.target.value,
+                                    })
+                                  }
+                                  placeholder="e.g., Bangalore, Remote, United States..."
+                                  disabled={isLoading}
+                                  className="h-10"
+                                />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+
+                          {/* Info Tooltip */}
+                          {!filters.locationEnabled && (
+                            <motion.div
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              className="mt-3 flex items-start gap-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded-md"
+                            >
+                              <AlertCircle className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                              <p className="text-xs text-blue-600 dark:text-blue-400">
+                                Location filter is OFF by default. Candidates may be willing to relocate.
+                              </p>
+                            </motion.div>
+                          )}
+                        </div>
+                      </motion.div>
+
+                      {/* Other Filters */}
+                      <motion.div
+                        initial={{ y: -20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ delay: 0.2 }}
+                        className="grid md:grid-cols-2 gap-4"
+                      >
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2 text-sm">
+                            <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center">
+                              <Briefcase className="w-3.5 h-3.5 text-muted-foreground" />
+                            </div>
+                            Seniority Level
+                          </Label>
+                          <Input
+                            value={filters.seniority}
+                            onChange={(e) =>
+                              setFilters({
+                                ...filters,
+                                seniority: e.target.value,
+                              })
+                            }
+                            placeholder="e.g., Senior, Mid-level..."
+                            disabled={isLoading}
+                            className="h-10"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="flex items-center gap-2 text-sm">
+                            <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center">
+                              <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
+                            </div>
+                            Industry
+                          </Label>
+                          <Input
+                            value={filters.industry}
+                            onChange={(e) =>
+                              setFilters({
+                                ...filters,
+                                industry: e.target.value,
+                              })
+                            }
+                            placeholder="e.g., Fintech, Healthcare..."
+                            disabled={isLoading}
+                            className="h-10"
+                          />
+                        </div>
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {/* Error Message */}
@@ -446,38 +577,102 @@ export default function SearchPage() {
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: "auto" }}
                     exit={{ opacity: 0, height: 0 }}
-                    className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm"
+                    className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3"
                   >
-                    {error}
+                    <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                    <p className="text-destructive text-sm font-medium">
+                      {error}
+                    </p>
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              {/* Search Button */}
-              <Button
-                size="lg"
-                onClick={handleSearch}
-                disabled={isLoading || (searchMode === "text" && !query.trim()) || (searchMode === "jd" && !jdFile)}
-                className="w-full h-12 text-base font-semibold shine-effect relative overflow-hidden group"
+              {/* Enhanced Search Button */}
+              <motion.div
+                whileHover={{ scale: isValidInput ? 1.02 : 1 }}
+                whileTap={{ scale: isValidInput ? 0.98 : 1 }}
               >
-                {isLoading ? (
-                  <>
+                <Button
+                  size="lg"
+                  onClick={handleSearch}
+                  disabled={!isValidInput || isLoading}
+                  className={`w-full h-14 text-base font-bold relative overflow-hidden group transition-all duration-300 ${isValidInput
+                    ? "bg-yellow-500 hover:bg-yellow-600 text-black shadow-lg shadow-yellow-500/50"
+                    : "bg-muted text-muted-foreground cursor-not-allowed"
+                    }`}
+                >
+                  {isLoading ? (
                     <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                      className="mr-2"
+                      className="flex items-center gap-3"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
                     >
-                      <Sparkles className="w-5 h-5" />
+                      <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{
+                          duration: 1,
+                          repeat: Infinity,
+                          ease: "linear",
+                        }}
+                      >
+                        <Sparkles className="w-5 h-5" />
+                      </motion.div>
+                      <span>Searching 56M+ Profiles...</span>
+                      <motion.div
+                        animate={{
+                          scale: [1, 1.2, 1],
+                          opacity: [0.5, 1, 0.5],
+                        }}
+                        transition={{
+                          duration: 1.5,
+                          repeat: Infinity,
+                        }}
+                        className="flex gap-1"
+                      >
+                        {[0, 1, 2].map((i) => (
+                          <div
+                            key={i}
+                            className="w-1.5 h-1.5 bg-black rounded-full"
+                            style={{ animationDelay: `${i * 0.2}s` }}
+                          />
+                        ))}
+                      </motion.div>
                     </motion.div>
-                    <span>Searching...</span>
-                  </>
-                ) : (
-                  <>
-                    <Zap className="w-5 h-5 mr-2 group-hover:animate-pulse" />
-                    Find Candidates
-                  </>
-                )}
-              </Button>
+                  ) : (
+                    <>
+                      <span className="flex items-center gap-2 relative z-10">
+                        {isValidInput ? (
+                          <>
+                            <Zap className="w-5 h-5 group-hover:animate-pulse" />
+                            Find Candidates
+                            <CheckCircle2 className="w-5 h-5" />
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-5 h-5" />
+                            {searchMode === "text"
+                              ? "Enter search query"
+                              : "Upload job description"}
+                          </>
+                        )}
+                      </span>
+                      {isValidInput && (
+                        <motion.div
+                          className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
+                          animate={{
+                            x: ["-100%", "100%"],
+                          }}
+                          transition={{
+                            duration: 2,
+                            repeat: Infinity,
+                            ease: "linear",
+                          }}
+                        />
+                      )}
+                    </>
+                  )}
+                </Button>
+              </motion.div>
             </CardContent>
           </Card>
         </motion.div>
@@ -516,54 +711,34 @@ export default function SearchPage() {
           </motion.div>
         )}
 
-        {/* Features */}
+        {/* Job Search Pipeline Visualization */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.6 }}
-          className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto mt-16"
+          className="max-w-5xl mx-auto mt-20"
         >
-          {[
-            {
-              icon: Target,
-              title: "AI-Powered Matching",
-              description:
-                "Advanced algorithms find candidates that truly fit your requirements",
-              color: "text-blue-500",
-            },
-            {
-              icon: TrendingUp,
-              title: "Salary Insights",
-              description:
-                "Get estimated salary ranges and career progression data",
-              color: "text-green-500",
-            },
-            {
-              icon: Sparkles,
-              title: "Enrichment Data",
-              description:
-                "Response likelihood, skill validation, and availability insights",
-              color: "text-purple-500",
-            },
-          ].map((feature, idx) => (
-            <motion.div
-              key={idx}
+          <div className="text-center mb-12">
+            <motion.h2
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.7 + idx * 0.1 }}
-              whileHover={{ scale: 1.05 }}
+              transition={{ delay: 0.7 }}
+              className="text-3xl font-bold mb-3"
             >
-              <Card className="text-center p-6 hover:border-primary/50 transition-all hover:shadow-xl spotlight group">
-                <feature.icon
-                  className={`w-12 h-12 mx-auto mb-3 ${feature.color} group-hover:scale-110 transition-transform`}
-                />
-                <h3 className="font-semibold mb-2">{feature.title}</h3>
-                <p className="text-sm text-muted-foreground">
-                  {feature.description}
-                </p>
-              </Card>
-            </motion.div>
-          ))}
+              Your AI-Powered Hiring Pipeline
+            </motion.h2>
+            <motion.p
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.8 }}
+              className="text-muted-foreground"
+            >
+              Watch as AI transforms your search into perfect matches
+            </motion.p>
+          </div>
+
+
+
         </motion.div>
       </div>
 
@@ -585,6 +760,3 @@ export default function SearchPage() {
     </div>
   );
 }
-
-// Import SlidersHorizontal
-import { SlidersHorizontal } from "lucide-react";

@@ -5,8 +5,12 @@ Allows users to configure which LLM models to use for different tasks.
 This enables cost control and quality customization.
 """
 
+import json
 from typing import Dict, List, Optional
 
+import httpx
+
+from core.config import settings
 from core.logging_config import get_logger
 from data.redis_cache import RedisCache
 from models.configuration_models import (ModelConfiguration, ModelOption,
@@ -30,13 +34,13 @@ class ModelConfigManager:
     # ========================================================================
     
     DEFAULT_CONFIG = ModelConfiguration(
-        conversation="claude-sonnet-4-5",
-        jd_parsing="claude-sonnet-4-5",
+        conversation="anthropic/claude-sonnet-4.5",
+        jd_parsing="anthropic/claude-sonnet-4.5",
         web_search="perplexity/sonar-pro",
         salary_estimation="x-ai/grok-code-fast-1",
         skill_validation="x-ai/grok-code-fast-1",
         response_likelihood="x-ai/grok-code-fast-1",
-        match_scoring="claude-sonnet-4-5"
+        match_scoring="anthropic/claude-sonnet-4.5"
     )
     
     # ========================================================================
@@ -46,7 +50,7 @@ class ModelConfigManager:
     MODEL_OPTIONS = {
     "conversation": [
         ModelOption(
-            id="claude-sonnet-4-5",
+            id="claude-sonnet-4.5",
             name="Claude Sonnet 4.5",
             cost="High",
             quality="Excellent",
@@ -108,14 +112,14 @@ class ModelConfigManager:
             description="Best cost/quality ratio for bulk analysis"
         ),
         ModelOption(
-            id="claude-haiku-4",
+            id="anthropic/claude-haiku-4.5",
             name="Claude Haiku 4",
             cost="Low",
             quality="Very Good",
             description="Fast and accurate for analysis tasks"
         ),
         ModelOption(
-            id="gpt-4o-mini",
+            id="openai/gpt-4o-mini",
             name="GPT-4o Mini",
             cost="Low",
             quality="Good",
@@ -125,7 +129,7 @@ class ModelConfigManager:
     
     "scoring": [
         ModelOption(
-            id="claude-sonnet-4-5",
+            id="anthropic/claude-sonnet-4.5",
             name="Claude Sonnet 4.5",
             cost="High",
             quality="Excellent",
@@ -139,7 +143,7 @@ class ModelConfigManager:
             description="Efficient structured reasoning for candidate scoring and logic-based ranking"
         ),
         ModelOption(
-            id="claude-sonnet-4",
+            id="anthropic/claude-sonnet-4",
             name="Claude Sonnet 4",
             cost="High",
             quality="Excellent",
@@ -164,13 +168,13 @@ class ModelConfigManager:
             name="Balanced (Recommended)",
             description="Mix of quality and cost - best for most use cases",
             configuration=ModelConfiguration(
-                conversation="claude-sonnet-4-5",
-                jd_parsing="claude-sonnet-4-5",
+                conversation="claude-sonnet-4.5",
+                jd_parsing="claude-sonnet-4.5",
                 web_search="perplexity/sonar-pro",
                 salary_estimation="deepseek/deepseek-r1",
                 skill_validation="deepseek/deepseek-r1",
                 response_likelihood="deepseek/deepseek-r1",
-                match_scoring="claude-sonnet-4-5"
+                match_scoring="claude-sonnet-4.5"
             ),
             estimated_cost_per_50_candidates=25.0  # ₹25 per search
         ),
@@ -179,13 +183,13 @@ class ModelConfigManager:
             name="High Quality",
             description="Best models for all tasks - highest accuracy",
             configuration=ModelConfiguration(
-                conversation="claude-sonnet-4-5",
-                jd_parsing="claude-sonnet-4-5",
+                conversation="claude-sonnet-4.5",
+                jd_parsing="claude-sonnet-4.5",
                 web_search="perplexity/sonar-pro",
-                salary_estimation="claude-sonnet-4-5",
-                skill_validation="claude-sonnet-4-5",
-                response_likelihood="claude-sonnet-4-5",
-                match_scoring="claude-sonnet-4-5"
+                salary_estimation="claude-sonnet-4.5",
+                skill_validation="claude-sonnet-4.5",
+                response_likelihood="claude-sonnet-4.5",
+                match_scoring="claude-sonnet-4.5"
             ),
             estimated_cost_per_50_candidates=75.0  # ₹75 per search
         ),
@@ -194,7 +198,7 @@ class ModelConfigManager:
             name="Cost Efficient",
             description="Cheapest models - still good quality",
             configuration=ModelConfiguration(
-                conversation="claude-sonnet-4-5",  # Keep conversation high quality
+                conversation="claude-sonnet-4.5",  # Keep conversation high quality
                 jd_parsing="deepseek/deepseek-r1",
                 web_search="perplexity/sonar",
                 salary_estimation="deepseek/deepseek-r1",
@@ -244,7 +248,7 @@ class ModelConfigManager:
             username: Optional username
             
         Returns:
-            Model ID string (e.g., "claude-sonnet-4-5")
+            Model ID string (e.g., "claude-sonnet-4.5")
         
         Example:
             model = await manager.get_model_for_task(
@@ -275,6 +279,103 @@ class ModelConfigManager:
         logger.debug(f"Using default config for {task}: {default_model}")
         return default_model
     
+    async def call_model(
+        self,
+        model_config: Optional[ModelConfiguration],
+        model_purpose: str,
+        system_prompt: str,
+        user_message: str,
+        temperature: float = 0.3,
+        max_tokens: int = 1000,
+        session_id: Optional[str] = None,
+        username: Optional[str] = None
+    ) -> str:
+        """
+        Call LLM model via OpenRouter API.
+        
+        Args:
+            model_config: Model configuration (can be None)
+            model_purpose: Purpose mapping ("extraction" -> "conversation", etc.)
+            system_prompt: System prompt
+            user_message: User message
+            temperature: Sampling temperature
+            max_tokens: Max tokens
+            session_id: Optional session ID
+            username: Optional username
+            
+        Returns:
+            Model response string
+        """
+        
+        # Map model purposes to configuration fields
+        purpose_mapping = {
+            "extraction": "conversation",  # Use conversation model for extraction
+            "conversation": "conversation",
+            "jd_parsing": "jd_parsing",
+            "scoring": "match_scoring",
+            "web_search": "web_search"
+        }
+        
+        # Get the appropriate task name
+        task_name = purpose_mapping.get(model_purpose, "conversation")
+        
+        # Get model ID
+        if model_config and hasattr(model_config, task_name):
+            model_id = getattr(model_config, task_name)
+        else:
+            # Fall back to getting model by task
+            model_id = await self.get_model_for_task(
+                task_name,
+                session_id=session_id,
+                username=username
+            )
+        
+        # Validate API key
+        if not settings.OPENROUTER_API_KEY:
+            raise ValueError("OPENROUTER_API_KEY not configured")
+        
+        print(f"Calling {model_id} for {model_purpose}")
+        
+        # Prepare API request
+        headers = {
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://neuraleap.com",
+            "X-Title": "Neuraleap AI Platform"
+        }
+        
+        data = {
+            "model": model_id,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+        
+        # Make API call
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=data
+                )
+                response.raise_for_status()
+                
+                result = response.json()
+                ai_response = result["choices"][0]["message"]["content"]
+                print('ai_response',ai_response)
+                return ai_response
+                
+            except httpx.HTTPStatusError as e:
+                logger.error(f"OpenRouter API error: {e.response.status_code} - {e.response.text}")
+                raise
+            except Exception as e:
+                logger.error(f"Model call failed: {e}")
+                raise
+    
     async def update_session_config(
         self,
         session_id: str,
@@ -291,7 +392,7 @@ class ModelConfigManager:
             await manager.update_session_config(
                 "abc-123",
                 ModelConfiguration(
-                    conversation="claude-sonnet-4-5",
+                    conversation="claude-sonnet-4.5",
                     web_search="perplexity/sonar-pro",
                     # ... other fields
                 )
@@ -302,8 +403,8 @@ class ModelConfigManager:
             session_id,
             "model_config",
             config_dict,
-            ttl=3600  # 1 hour
-        )
+             expire_seconds=3600  # 1 hour
+            )
         logger.info(f"Updated model config for session {session_id}")
     
     async def get_session_config(
@@ -340,7 +441,13 @@ class ModelConfigManager:
         """
         config_dict = config.dict()
         key = f"user_model_config:{username}"
-        await self.redis.redis.set(key, str(config_dict))
+        
+        await self.redis.store_session_data(
+        session_id=f"user_config_{username}",
+        key=key,
+        data=config_dict,
+        expire_seconds=86400  # 24 hours
+        )
         logger.info(f"Updated default model config for user {username}")
     
     async def get_user_config(
@@ -356,13 +463,24 @@ class ModelConfigManager:
         Returns:
             ModelConfiguration if exists, None otherwise
         """
-        key = f"user_model_config:{username}"
-        config_str = await self.redis.redis.get(key)
-        if config_str:
-            import ast
-            config_dict = ast.literal_eval(config_str)
-            return ModelConfiguration(**config_dict)
+        if not username:
+            logger.debug("No username provided, using default config")
+            return None
+        
+        try:
+            config_dict = await self.redis.get_session_data(
+                session_id=f"user_config_{username}",
+                key="model_config"
+            )
+            
+            if config_dict:
+                return ModelConfiguration(**config_dict)
+                
+        except Exception as e:
+            logger.error(f"Error getting user config for {username}: {e}")
+        
         return None
+
     
     def get_available_options(self) -> Dict[str, List[ModelOption]]:
         """
@@ -437,7 +555,7 @@ class ModelConfigManager:
         """
         # Rough cost per candidate for different models (in INR)
         model_costs = {
-            "claude-sonnet-4-5": 0.8,
+            "claude-sonnet-4.5": 0.8,
             "claude-sonnet-4": 0.7,
             "claude-haiku-4": 0.2,
             "gpt-4o": 0.6,

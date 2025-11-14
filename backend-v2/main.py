@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
 
     try:        
         # Initialize global services (stored in app.state)
-        app.state.services = initialize_services()
+        app.state.services = await initialize_services()
         logger.info("🎉 All services started successfully")
         
     except Exception as e:
@@ -143,35 +143,30 @@ async def root():
 # Authentication routes: /auth/login, /auth/logout, etc.
 app.include_router(
     auth.router,
-    prefix="/auth",  
     tags=["Authentication"]
 )
 
 # Scorecard routes: /scorecard/parse-prompt, /scorecard/session/{id}/status, etc.
 app.include_router(
     scorecard.router,
-    prefix="/scorecard", 
     tags=["Scorecard"]
 )
 
 # Configuration routes: /config/models/options, /config/session/{id}, etc.
 app.include_router(
     configuration.router,
-    prefix="/config",
     tags=["Configuration"]
 )
 
 # Conversation routes: /conversation/start, /conversation/message, etc.
 app.include_router(
     conversation.router,
-    prefix="/conversation",
     tags=["Conversation"]
 )
 
 # Results routes: /results/session/{id}, etc.
 app.include_router(
     enriched_results.router,
-    prefix="",
     tags=["Results"]
 )
 
