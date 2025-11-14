@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
 
     try:        
         # Initialize global services (stored in app.state)
-        app.state.services = initialize_services()
+        app.state.services = await initialize_services()
         logger.info("🎉 All services started successfully")
         
     except Exception as e:

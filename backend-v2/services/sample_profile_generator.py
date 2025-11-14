@@ -22,8 +22,10 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from core.logging_config import get_logger
 from models.conversation_models import IdealProfileCard, SampleProfile
 
+logger = get_logger(__name__)
 
 class SampleProfileGenerator:
     """
@@ -68,10 +70,10 @@ class SampleProfileGenerator:
         
         # Build MongoDB query
         query = self._build_query(ideal_profile)
-        
+        print('query',query)
         # Fetch candidates
         candidates = await self._fetch_candidates(query, limit=5)
-        
+        print('candidates',candidates)
         if not candidates:
             return None
         
@@ -92,62 +94,68 @@ class SampleProfileGenerator:
     
     def _build_query(self, ideal_profile: IdealProfileCard) -> Dict:
         """
-        Build MongoDB query from ideal profile.
+        Build MongoDB query with progressive relaxation.
         
         Strategy:
-        - Use must-have skills with $all operator
-        - Match seniority if specified
-        - Match location if specified
-        - Match industry if specified
-        
-        Args:
-            ideal_profile: Ideal candidate profile
-        
-        Returns:
-            MongoDB query dict
+        - Start with lenient matching
+        - Use word-level matching instead of exact phrases
+        - Make industry/location optional
         """
         
         query = {}
         
-        # Role title (fuzzy match on title field)
+        # 1. ROLE TITLE (lenient word matching)
         if ideal_profile.role_title:
-            # Split into words and search for any
-            role_words = ideal_profile.role_title.lower().split()
-            query["title"] = {
-                "$regex": "|".join(role_words),
+            # Extract meaningful words (ignore short words)
+            role_words = [
+                word for word in ideal_profile.role_title.lower().split()
+                if len(word) > 2  # Skip "ii", "–", "/", etc.
+            ]
+            
+            if role_words:
+                # Match any of these words in title
+                query["title"] = {
+                    "$regex": "|".join(role_words[:5]),  # Use top 5 words
+                    "$options": "i"
+                }
+        
+        # 2. SKILLS (match individual words, not full phrases)
+        if ideal_profile.must_have_skills:
+            skill_patterns = []
+            
+            for skill in ideal_profile.must_have_skills[:8]:  # Top 8 skills
+                # Split multi-word skills into individual words
+                skill_words = skill.lower().split()
+                
+                # Use the most meaningful words (usually nouns)
+                for word in skill_words:
+                    if len(word) > 3:  # Skip short words like "AIF", "CAT"
+                        skill_patterns.append({
+                            "expertise": {
+                                "$regex": f"\\b{word}\\b",  # Word boundary
+                                "$options": "i"
+                            }
+                        })
+            
+            if skill_patterns:
+                query["$or"] = skill_patterns[:10]  # Limit to 10 patterns
+        
+        # 3. INDUSTRY (optional - don't require if not found)
+        # Comment this out for now to make query more lenient
+        # if ideal_profile.industries:
+        #     query["current_industry"] = {
+        #         "$regex": "|".join([ind.lower() for ind in ideal_profile.industries]),
+        #         "$options": "i"
+        #     }
+        
+        # 4. LOCATION (optional)
+        if ideal_profile.locations:
+            query["location"] = {
+                "$regex": "|".join([loc.lower() for loc in ideal_profile.locations]),
                 "$options": "i"
             }
         
-        # Must-have skills (match at least 50% of them)
-        if ideal_profile.must_have_skills:
-            # For sample, we're lenient - match at least 2 skills
-            min_skills = min(2, len(ideal_profile.must_have_skills))
-            
-            query["$or"] = [
-                {
-                    "expertise": {
-                        "$regex": skill,
-                        "$options": "i"
-                    }
-                }
-                for skill in ideal_profile.must_have_skills[:5]  # Top 5 skills
-            ]
-        
-        # Location
-        if ideal_profile.locations:
-            query["location"] = {
-                "$in": [loc.lower() for loc in ideal_profile.locations]
-            }
-        
-        # Industry
-        if ideal_profile.industries:
-            query["current_industry"] = {
-                "$in": [ind.lower() for ind in ideal_profile.industries]
-            }
-        
         return query
-    
-    
     async def _fetch_candidates(
         self,
         query: Dict,
@@ -163,14 +171,17 @@ class SampleProfileGenerator:
         Returns:
             List of candidate dicts
         """
+        if self.profiles is None:
+            logger.error("❌ Profiles collection not available - cannot fetch candidates")
+            return []
         
         try:
             # Execute query
             cursor = self.profiles.find(query).limit(limit)
-            
+            print('cursor 1:',cursor )
             # Convert to list
             candidates = await cursor.to_list(length=limit)
-            
+            print('cursor :',candidates)
             return candidates
         
         except Exception as e:

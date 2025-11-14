@@ -1,7 +1,7 @@
 """
 MongoDB Data Access Layer
 ==========================
-This file handles ALL database operations for MongoDB.
+This file handles ALL database operations for MongoDB using PyMongo Async.
 
 We have two databases:
 1. Profiles DB: Contains 56M candidate profiles (read-only for most operations)
@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
 from pymongo import MongoClient
+from pymongo.asynchronous.mongo_client import AsyncMongoClient
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure, OperationFailure
 
@@ -30,51 +31,56 @@ class MongoDB:
     This class is a singleton - one instance is created at startup and reused.
     """
     def __init__(self):
-        """
-        Initialize MongoDB connections.
+        """Initialize MongoDB connections - will be connected via connect()."""
+        self.profiles_client = None
+        self.main_client = None
+        self.profiles_collection = None
+        self.users_collection = None
+        self.prompts_collection = None
+        self.logs_collection = None
         
-        Creates connections to:
-        - Profiles database (56M candidate profiles)
-        - Main database (users, prompts, logs)
+    async def connect(self):
         """
-        logger.info("Connecting to MongoDB...")
+        Async connection initialization.
+        Call this during FastAPI startup.
+        """
+        logger.info("Connecting to MongoDB (Async)...")
         
         # ====================================================================
         # Profiles Database (56M candidates)
         # ====================================================================
         try:
-            self.profiles_client = MongoClient(
+            self.profiles_client = AsyncMongoClient(
                 settings.PROFILES_DB_URL,
-                serverSelectionTimeoutMS=5000  # 5 second timeout
+                serverSelectionTimeoutMS=5000
             )
             
-            # Test connection
-            self.profiles_client.admin.command('ping')
+            # Test connection 
+            await self.profiles_client.admin.command('ping')
             
             # Get database and collection
             profiles_db = self.profiles_client[settings.PROFILES_DB_NAME]
             self.profiles_collection = profiles_db["profiles"]
             
-            # Count documents (for logging)
-            profile_count = self.profiles_collection.estimated_document_count()
-            logger.info(f"Profiles DB: {settings.PROFILES_DB_NAME} (~{profile_count:,} profiles)")
-
+            # Count documents (now async)
+            profile_count = await self.profiles_collection.estimated_document_count()
+            logger.info(f"✅ Profiles DB: {settings.PROFILES_DB_NAME} (~{profile_count:,} profiles)")
             
         except ConnectionFailure as e:
-            logger.error(f"Failed to connect to Profiles DB: {e}")
+            logger.error(f"❌ Failed to connect to Profiles DB: {e}")
             raise
         
         # ====================================================================
         # Main Database (users, prompts, logs)
         # ====================================================================
         try:
-            self.main_client = MongoClient(
+            self.main_client = AsyncMongoClient(
                 settings.MONGODB_URL,
                 serverSelectionTimeoutMS=5000
             )
             
-            # Test connection
-            self.main_client.admin.command('ping')
+            # Test connection 
+            await self.main_client.admin.command('ping')
             
             # Get database and collections
             main_db = self.main_client[settings.DATABASE_NAME]
@@ -82,25 +88,25 @@ class MongoDB:
             self.prompts_collection = main_db["prompts"]
             self.logs_collection = main_db["user_logs"]
             
-            logger.info(f"Main DB: {settings.DATABASE_NAME}")
+            logger.info(f"✅ Main DB: {settings.DATABASE_NAME}")
             
-            # Create indexes if they don't exist
-            self._ensure_indexes()
+            # Create indexes (now async)
+            await self._ensure_indexes()
             
         except ConnectionFailure as e:
-            logger.error(f"Failed to connect to Main DB: {e}")
+            logger.error(f"❌ Failed to connect to Main DB: {e}")
             raise
     
-    def _ensure_indexes(self):
+    async def _ensure_indexes(self):
         """
         Create necessary indexes on the main database.
         This runs once at startup to ensure indexes exist.
         """
         try:
             # Prompts collection indexes
-            self.prompts_collection.create_index("session_id", unique=True)
-            self.prompts_collection.create_index("prompt_id", unique=True)
-            self.prompts_collection.create_index([("username", 1), ("created_at", -1)])
+            await self.prompts_collection.create_index("session_id", unique=True)
+            await self.prompts_collection.create_index("prompt_id", unique=True)
+            await self.prompts_collection.create_index([("username", 1), ("created_at", -1)])
             
             logger.info("Database indexes verified")
             
@@ -134,7 +140,7 @@ class MongoDB:
             doc_id = await mongodb.save_scorecard(scorecard)
         """
         try:
-            result = self.prompts_collection.insert_one(scorecard)
+            result = await self.prompts_collection.insert_one(scorecard)
             return str(result.inserted_id)
         except Exception as e:
             logger.error(f"Failed to save scorecard: {e}")
@@ -151,7 +157,7 @@ class MongoDB:
             Dict with scorecard data, or None if not found
         """
         try:
-            scorecard = self.prompts_collection.find_one({"session_id": session_id})
+            scorecard = await self.prompts_collection.find_one({"session_id": session_id})
             
             # Convert ObjectId to string for JSON serialization
             if scorecard and "_id" in scorecard:
@@ -181,11 +187,11 @@ class MongoDB:
             List of scorecard documents
         """
         try:
-            cursor = self.prompts_collection.find(
+            cursor = await self.prompts_collection.find(
                 {"username": username}
             ).sort("created_at", -1).skip(skip).limit(limit)
             
-            scorecards = list(cursor)
+            scorecards = await cursor.to_list(length=limit)
             
             # Convert ObjectIds to strings
             for scorecard in scorecards:
@@ -213,7 +219,7 @@ class MongoDB:
             Profile document or None
         """
         try:
-            profile = self.profiles_collection.find_one({"_id": ObjectId(profile_id)})
+            profile = await self.profiles_collection.find_one({"_id": ObjectId(profile_id)})
             
             if profile and "_id" in profile:
                 profile["_id"] = str(profile["_id"])
@@ -239,8 +245,8 @@ class MongoDB:
             object_ids = [ObjectId(pid) for pid in profile_ids]
             
             # Fetch profiles
-            cursor = self.profiles_collection.find({"_id": {"$in": object_ids}})
-            profiles = list(cursor)
+            cursor = await self.profiles_collection.find({"_id": {"$in": object_ids}})
+            profiles = await cursor.to_list(length=None)  # None = no limit
             
             # Convert ObjectIds back to strings
             for profile in profiles:
@@ -268,7 +274,7 @@ class MongoDB:
             User document or None
         """
         try:
-            user = self.users_collection.find_one({"username": username})
+            user = await self.users_collection.find_one({"username": username})
             
             if user and "_id" in user:
                 user["_id"] = str(user["_id"])
@@ -290,7 +296,7 @@ class MongoDB:
             str: The inserted user ID
         """
         try:
-            result = self.users_collection.insert_one(user_data)
+            result = await self.users_collection.insert_one(user_data)
             return str(result.inserted_id)
         except Exception as e:
             logger.error(f"Failed to create user: {e}")
@@ -322,7 +328,7 @@ class MongoDB:
                 "timestamp": datetime.utcnow()
             }
             
-            self.logs_collection.insert_one(log_entry)
+            await self.logs_collection.insert_one(log_entry)
             
         except Exception as e:
             # Don't raise - logging failures shouldn't break the app

@@ -1,14 +1,7 @@
 """
 Search Engine Service
-=====================
-Optimized search for 56M profiles using compound indexes and smart pre-filtering.
-
-Performance strategy:
-1. Use compound indexes to pre-filter (56M → ~10K candidates) - 100ms
-2. Apply text search on pre-filtered set - 200ms
-3. Return top 500 for scoring - 50ms
-
-Total search time: ~350ms (vs 93 seconds without optimization!)
+=====================================
+Optimized search for 56M profiles using async MongoDB operations.
 """
 
 import time
@@ -36,12 +29,13 @@ class SearchEngine:
         Args:
             profiles_collection: MongoDB collection with candidate profiles
         """
-        self.profiles = profiles_collection
+        self.profiles = profiles_collection # Note: index verification can be done during startup
         
-        # Verify indexes exist (just a warning, doesn't create them)
-        self._verify_indexes()
+        # Note: Index verification skipped for async compatibility
+        # Run scripts/create_indexes.py manually to ensure indexes exist
+        # self._verify_indexes()  # Commented out - can't call async from __init__
     
-    def _verify_indexes(self):
+    async def verify_indexes(self):
         """
         Check if required indexes exist.
         
@@ -49,7 +43,7 @@ class SearchEngine:
         but warns if they're missing.
         """
         try:
-            indexes = self.profiles.index_information()
+            indexes = await self.profiles.index_information()
             
             # Check for key indexes
             has_industry_seniority = any(
@@ -65,7 +59,7 @@ class SearchEngine:
         except Exception as e:
             logger.error(f"Could not verify indexes: {e}")
     
-    def search(
+    async def search(
         self,
         industries: List[str] = None,
         seniority_levels: List[str] = None,
@@ -106,12 +100,12 @@ class SearchEngine:
         
         # Step 2: Execute search
         # MongoDB will use indexes to quickly reduce 56M → ~10K candidates
-        cursor = self.profiles.find(query)
+        cursor = self.profiles.find(query) # this is not async as no database ops yet , just a pointer to function that would do it
         
         # Step 3: Apply keyword filtering if provided
         if keywords and keywords.strip():
             # Get a larger set for filtering
-            pre_filtered = list(cursor.limit(limit * 2))
+            pre_filtered = await cursor.limit(limit * 2).to_list(length=limit * 2)
             
             # Filter by keywords in Python (fast on small set)
             results = self._filter_by_keywords(pre_filtered, keywords)
@@ -120,7 +114,7 @@ class SearchEngine:
             results = results[:limit]
         else:
             # No keywords, just use the pre-filtered results
-            results = list(cursor.limit(limit))
+            results = await cursor.limit(limit).to_list(length=limit)
         
         # Calculate search time
         search_time = time.time() - start_time

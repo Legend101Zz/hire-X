@@ -17,27 +17,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from core.dependencies import get_current_username
+from core.dependencies import get_current_username, get_mongodb, get_redis
 from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
 
 router = APIRouter(prefix="/results", tags=["Results"])
-
-
-# ================================================================
-# DEPENDENCIES
-# ================================================================
-
-def get_mongodb() -> MongoDB:
-    """Get MongoDB instance."""
-    # Will be injected by main app
-    raise NotImplementedError("Inject MongoDB dependency")
-
-
-def get_redis() -> RedisCache:
-    """Get Redis cache instance."""
-    # Will be injected by main app
-    raise NotImplementedError("Inject Redis dependency")
 
 
 # ================================================================

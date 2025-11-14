@@ -9,28 +9,24 @@ import uuid
 from datetime import datetime
 from typing import Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
+                     UploadFile)
 
 # ✅ IMPORT ALL REAL DEPENDENCIES
-from core.dependencies import (
-    get_conversation_manager,
-    get_current_username,
-    get_jd_parser,
-    get_workflow  # ✅ ADD THIS
-)
+from core.dependencies import get_workflow  # ✅ ADD THIS
+from core.dependencies import (get_conversation_manager, get_current_username,
+                               get_jd_parser)
 from core.logging_config import get_logger
-from models.conversation_models import (
-    ConversationFinalizeRequest,
-    ConversationFinalizeResponse,
-    ConversationMessageRequest,
-    ConversationMessageResponse,
-    ConversationStartRequest,
-    ConversationStartResponse,
-    ConversationState
-)
+from models.conversation_models import (ConversationFinalizeRequest,
+                                        ConversationFinalizeResponse,
+                                        ConversationMessageRequest,
+                                        ConversationMessageResponse,
+                                        ConversationStartRequest,
+                                        ConversationStartResponse,
+                                        ConversationState)
 from services.conversation_manager import ConversationManager
 from services.jd_parser import JDParser
-from services.scorecard_workflow import ScorecardWorkflow  # ✅ ADD THIS
+from services.scorecard_workflow import ScorecardWorkflow
 
 # ================================================================
 # ROUTER SETUP
@@ -70,12 +66,14 @@ async def start_conversation(
         
         # Parse JD if provided
         jd_data = None
+        logger.debug('request',request)
         if request.jd_file_content and request.jd_file_name:
             jd_data = await jd_parser.parse_jd(
                 file_content=request.jd_file_content,
                 file_name=request.jd_file_name,
                 username=username
             )
+            logger.debug(f'jd_data : {jd_data}')
         
         # Start conversation
         donna_reply, ideal_profile, sample_profile, stage = await conversation_manager.start_conversation(
@@ -120,7 +118,7 @@ async def send_message(
         session_id: Conversation session ID
         request: User's message and optional action
     
-    Returns:
+    Returns: 
         Donna's response and updated profile
     """
     

@@ -88,7 +88,7 @@ class RedisCache:
             # Serialize data to JSON
             json_data = json.dumps(data)
             
-            # Store in Redis with expiration
+            # Store in Redis with expiration (SYNCHRONOUS - so no await)
             self.redis.setex(redis_key, expire_seconds, json_data)
             
         except Exception as e:

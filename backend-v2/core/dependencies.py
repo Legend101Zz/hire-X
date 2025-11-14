@@ -8,14 +8,15 @@ MODIFIED FOR V3: Added enrichment_service and conversation_manager
 
 from typing import Any, Dict
 
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 # Import auth utilities
 from core.auth import verify_token
 from core.logging_config import get_logger
 # Import data layer
 from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from services.ai_parser import AIParser
 from services.availability_checker import AvailabilityChecker
 from services.candidate_scorer import CandidateScorer
@@ -46,7 +47,7 @@ logger = get_logger(__name__)
 # We'll store these in a global dict that's initialized in main.py
 _global_services: Dict[str, Any] = {}
 
-def initialize_services() -> Dict[str, Any]:
+async def initialize_services() -> Dict[str, Any]:
     """
     Initialize all services once at startup.
     
@@ -62,7 +63,16 @@ def initialize_services() -> Dict[str, Any]:
     # DATA LAYER
     # ========================================
     mongodb = MongoDB()
-    logger.info("✅ MongoDB connected successfully")
+    try:
+        await mongodb.connect()  # ✅ Connect before creating dependent services
+        logger.info("✅ MongoDB async connection established")
+    except Exception as e:
+        logger.error(f"❌ MongoDB connection failed: {e}")
+        # Set collections to None for graceful degradation
+        mongodb.profiles_collection = None
+        mongodb.users_collection = None
+        mongodb.prompts_collection = None
+        mongodb.logs_collection = None
     
     redis_cache = RedisCache()
     logger.info("✅ Redis connected successfully")
@@ -71,6 +81,7 @@ def initialize_services() -> Dict[str, Any]:
     # CORE SERVICES
     # ========================================
     search_engine = SearchEngine(mongodb.profiles_collection)
+    await search_engine.verify_indexes()  # ✅ Call async verification
     logger.info("✅ SearchEngine initialized")
     
     scorer = CandidateScorer()
