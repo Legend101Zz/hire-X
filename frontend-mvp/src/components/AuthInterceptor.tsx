@@ -3,12 +3,13 @@
 import React, { useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePathname, useRouter } from "next/navigation";
-import { Sparkles } from "lucide-react"; // Or your preferred loading icon
+import { Sparkles } from "lucide-react";
 
 // --- Config ---
 const PUBLIC_ROUTES = ["/login", "/register"]; // Routes accessible without login
-const API_BASE_URL =
-    process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const AUTH_REDIRECT_ROUTES = ["/login", "/register"]; // Routes that authenticated users should be redirected FROM
+const DEFAULT_AUTHENTICATED_ROUTE = "/search"; // Where to redirect authenticated users trying to access auth pages
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 export default function AuthInterceptor({
     children,
@@ -27,16 +28,27 @@ export default function AuthInterceptor({
         }
 
         const isPublicPage = PUBLIC_ROUTES.includes(pathname);
+        const isAuthPage = AUTH_REDIRECT_ROUTES.includes(pathname);
 
-        // If user is NOT authenticated and is on a PROTECTED page
+        // Case 1: Authenticated user trying to access login/register
+        // Redirect them to the main app
+        if (isAuthenticated && isAuthPage) {
+            console.log("✅ Already authenticated - redirecting to app");
+            router.push(DEFAULT_AUTHENTICATED_ROUTE);
+            return;
+        }
+
+        // Case 2: Unauthenticated user trying to access protected page
+        // Redirect them to login
         if (!isAuthenticated && !isPublicPage) {
-            router.push("/login"); // Redirect to login
+            console.log("🔒 Not authenticated - redirecting to login");
+            router.push("/login");
+            return;
         }
 
-        // (Optional) If user IS authenticated and tries to visit a PUBLIC page
-        if (isAuthenticated && isPublicPage) {
-            router.push("/"); // Redirect to the main app (your search page)
-        }
+        // Case 3: Valid access - do nothing
+        // - Authenticated user on protected page ✅
+        // - Unauthenticated user on public page ✅
     }, [isLoading, isAuthenticated, pathname, router]);
 
     // --- 2. API-Level 401 (Expired Token) Interceptor ---
@@ -72,22 +84,14 @@ export default function AuthInterceptor({
     // While loading, show a full-screen loader
     if (isLoading) {
         return (
-            <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-background">
-                <Sparkles className="h-10 w-10 animate-pulse text-primary" />
-                <p className="text-muted-foreground">Loading Your Session...</p>
+            <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-gray-950">
+                <Sparkles className="h-10 w-10 animate-pulse text-violet-500" />
+                <p className="text-gray-400">Loading Your Session...</p>
             </div>
         );
     }
 
-    // If auth is loaded and user is on a valid page, show the children
-    const isPublicPage = PUBLIC_ROUTES.includes(pathname);
-    if (
-        (!isAuthenticated && isPublicPage) || // Unauthenticated on public page
-        (isAuthenticated && !isPublicPage) // Authenticated on protected page
-    ) {
-        return <>{children}</>;
-    }
-
-    // Otherwise, return null while the redirect effect runs
-    return null;
+    // Show children for all valid cases
+    // The useEffect above handles redirects, so if we reach here, access is valid
+    return <>{children}</>;
 }

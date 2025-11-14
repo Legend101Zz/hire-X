@@ -95,6 +95,7 @@ export default function SearchPage() {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    console.log('heref', file)
     if (file) {
       const validTypes = [
         "application/pdf",
@@ -110,6 +111,7 @@ export default function SearchPage() {
         setError("File size must be less than 10MB");
         return;
       }
+      console.log('file', file)
       setJdFile(file);
       setError(null);
     }

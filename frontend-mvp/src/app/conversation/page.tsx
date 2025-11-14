@@ -1,389 +1,751 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
-import ChatInterface from '@/components/conversation/ChatInterface';
-import IdealProfileCard from '@/components/conversation/IdealProfileCard';
-import SampleProfile from '@/components/conversation/SampleProfile';
-import JDUpload from '@/components/conversation/JDUpload';
-import Header from '@/components/ui/header';
-import Sidebar from '@/components/ui/sidebar';
-import { Sparkles, Upload, MessageSquare, Loader2 } from 'lucide-react';
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Send, Sparkles, Loader2, ThumbsUp, ThumbsDown, History, ChevronUp, } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import BlueprintBackground from "@/components/conversation/BlueprintBackground";
+import DonnaEnhanced from "@/components/conversation/DonnaEnhanced";
+import ResumeProfileCard from "@/components/conversation/ResumeProfileCard";
+import SampleProfileDisplay from "@/components/conversation/SampleProfileDisplay";
+import ChatCard from "@/components/conversation/ChatCard";
+import IntroSequence from "@/components/conversation/IntroSequence";
+import { Suspense } from "react";
+import { Badge } from "@/components/ui/badge";
 
-interface Message {
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
+type BotExpression = "neutral" | "happy" | "thinking" | "excited" | "peek" | "waving";
+type BotPosition = "home" | "chat" | "profile" | "sample" | "intro1" | "intro2" | "intro3";
+
+interface RejectedCandidate {
+    profile: any;
+    reason?: string;
     timestamp: Date;
-    quickReplies?: string[];
 }
 
-interface IdealProfile {
-    role_title?: string;
-    must_have_skills: string[];
-    nice_to_have_skills: string[];
-    seniority?: string;
-    experience_years?: string;
-    industries: string[];
-    locations: string[];
-    company_size?: string;
-    additional_requirements?: string;
+function LoadingFallback() {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-950">
+            <div className="text-center">
+                <Sparkles className="w-12 h-12 text-amber-500 animate-pulse mx-auto mb-4" />
+                <p className="text-amber-300">Loading workspace...</p>
+            </div>
+        </div>
+    );
 }
 
-interface SampleProfileData {
-    name: string;
-    title: string;
-    location: string;
-    company: string;
-    experience_years: number;
-    skills: string[];
-    seniority: string;
-    profile_picture?: string;
-}
+function ConversationWorkspace() {
+    // Show intro
+    const [showIntro, setShowIntro] = useState(true);
 
-export default function ConversationPage() {
-    const router = useRouter();
-
-    // State
-    const [sessionId, setSessionId] = useState<string | null>(null);
-    const [messages, setMessages] = useState<Message[]>([]);
-    const [idealProfile, setIdealProfile] = useState<IdealProfile>({
+    // Profile State
+    const [idealProfile, setIdealProfile] = useState<any>({
+        role_title: "",
         must_have_skills: [],
         nice_to_have_skills: [],
+        seniority: "",
+        experience_years: "",
         industries: [],
-        locations: []
+        locations: [],
     });
-    const [sampleProfile, setSampleProfile] = useState<SampleProfileData | null>(null);
-    const [completeness, setCompleteness] = useState(0);
-    const [isDonnaTyping, setIsDonnaTyping] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
-    const [showJDUpload, setShowJDUpload] = useState(true);
-    const [hasStarted, setHasStarted] = useState(false);
 
-    // Start conversation
-    const startConversation = async (initialMessage?: string) => {
-        setIsLoading(true);
-        setHasStarted(true);
-        setShowJDUpload(false);
+    const [sampleProfile, setSampleProfile] = useState<any>(null);
+    const [showCandidateActions, setShowCandidateActions] = useState(false);
+    const [rejectedCandidates, setRejectedCandidates] = useState<RejectedCandidate[]>([]);
+    const [showHistory, setShowHistory] = useState(false);
+    const [waitingForRejectionReason, setWaitingForRejectionReason] = useState(false);
 
-        try {
-            const token = localStorage.getItem('token');
-            const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+    // Chat State
+    const [inputValue, setInputValue] = useState("");
+    const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
+    const [isTyping, setIsTyping] = useState(false);
 
-            const response = await fetch(`${apiBaseUrl}/conversation/start`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    initial_message: initialMessage || "I'd like to find candidates"
-                })
-            });
+    // Bot State
+    const [botPosition, setBotPosition] = useState<BotPosition>("home");
+    const [botExpression, setBotExpression] = useState<BotExpression>("waving");
+    const [isThinking, setIsThinking] = useState(false);
+    const [speechBubble, setSpeechBubble] = useState("");
+    const [showSpeech, setShowSpeech] = useState(false);
 
-            if (!response.ok) throw new Error('Failed to start conversation');
+    // Highlight State
+    const [highlightedField, setHighlightedField] = useState<string | null>(null);
+    const [updatingField, setUpdatingField] = useState<string | null>(null);
 
-            const data = await response.json();
-            setSessionId(data.session_id);
+    // Progress State
+    const [conversationStage, setConversationStage] = useState(0);
 
-            // Add Donna's greeting
-            setMessages([
-                {
-                    id: '1',
-                    role: 'assistant',
-                    content: data.donna_response || "Hi! I'm Donna, your AI recruitment assistant. Let's find your ideal candidate together. What role are you hiring for?",
-                    timestamp: new Date(),
-                    quickReplies: data.quick_replies || [
-                        'Senior Developer',
-                        'Marketing Manager',
-                        'Sales Executive'
-                    ]
-                }
-            ]);
-        } catch (error) {
-            console.error('Error starting conversation:', error);
-            alert('Failed to start conversation. Please try again.');
-        } finally {
-            setIsLoading(false);
+    // Handle intro completion
+    const handleIntroComplete = () => {
+        setShowIntro(false);
+        setTimeout(() => {
+            showWelcomeSequence();
+        }, 500);
+    };
+
+    // Welcome sequence after intro
+    const showWelcomeSequence = async () => {
+        // Step 1: Fly to profile card
+        setBotPosition("profile");
+        setBotExpression("waving");
+        setSpeechBubble("This is where we'll build your ideal candidate profile together");
+        setShowSpeech(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        // Step 2: Fly to sample card
+        setShowSpeech(false);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        setBotPosition("sample");
+        setSpeechBubble("Here, I'll show you matching candidates in real-time");
+        setShowSpeech(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        // Step 3: Fly to chat
+        setShowSpeech(false);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        setBotPosition("chat");
+        setSpeechBubble("And we'll chat here! Just tell me what you're looking for");
+        setShowSpeech(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        // Step 4: Go home and start
+        setShowSpeech(false);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        setBotPosition("home");
+        setBotExpression("neutral");
+
+        await new Promise((resolve) => setTimeout(resolve, 800));
+
+        showGuidanceMessage("role_title", "Let's get started! What role are you hiring for?");
+    };
+
+    // Handle input focus - Bot peeks
+    const handleInputFocus = () => {
+        if (botPosition === "home") {
+            setBotPosition("chat");
+            setBotExpression("peek");
         }
     };
 
-    // Send message
-    const sendMessage = async (content: string) => {
-        if (!sessionId || !content.trim()) return;
+    // Handle input blur
+    const handleInputBlur = () => {
+        if (botPosition === "chat" && !isTyping) {
+            setTimeout(() => {
+                setBotPosition("home");
+                setBotExpression("neutral");
+            }, 1000);
+        }
+    };
+
+    // Show guidance message
+    const showGuidanceMessage = (fieldId: string, message: string) => {
+        setBotPosition("profile");
+        setHighlightedField(fieldId);
+        setSpeechBubble(message);
+        setShowSpeech(true);
+
+        setTimeout(() => {
+            setShowSpeech(false);
+            setHighlightedField(null);
+            setBotPosition("home");
+        }, 5000);
+    };
+
+    // Handle candidate acceptance
+    const handleAcceptCandidate = async () => {
+        setShowCandidateActions(false);
+        setBotPosition("sample");
+        setBotExpression("excited");
+        setSpeechBubble("Excellent choice! I'll prepare the contact details");
+        setShowSpeech(true);
+
+        // Add message to chat
+        setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: "Great! You've accepted this candidate. I'll prepare their contact information and availability." }
+        ]);
+
+        setTimeout(() => {
+            setShowSpeech(false);
+            setBotPosition("home");
+            setBotExpression("happy");
+            setConversationStage(6); // Move to next stage
+        }, 3000);
+    };
+
+    // Handle candidate rejection
+    const handleRejectCandidate = async () => {
+        setShowCandidateActions(false);
+
+        // Add to rejected history
+        if (sampleProfile) {
+            setRejectedCandidates(prev => [
+                ...prev,
+                { profile: sampleProfile, timestamp: new Date() }
+            ]);
+        }
+
+        setBotPosition("chat");
+        setBotExpression("thinking");
+
+        // Add messages to chat
+        setMessages((prev) => [
+            ...prev,
+            { role: "user", content: "Not this one" },
+            { role: "assistant", content: "I understand. Could you tell me what didn't work about this candidate? This helps me find better matches." }
+        ]);
+
+        setWaitingForRejectionReason(true);
+        setSampleProfile(null);
+
+        setTimeout(() => {
+            setBotPosition("home");
+            setBotExpression("neutral");
+        }, 2000);
+    };
+
+    // Simulate message processing
+    const handleSendMessage = async () => {
+        if (!inputValue.trim()) return;
+
+        const userMessage = inputValue;
+        setInputValue("");
+        setIsTyping(true);
 
         // Add user message
-        const userMessage: Message = {
-            id: Date.now().toString(),
-            role: 'user',
-            content,
-            timestamp: new Date()
-        };
+        setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
-        setMessages((prev) => [...prev, userMessage]);
-        setIsDonnaTyping(true);
-        setIsLoading(true);
+        // Bot flies to chat and thinks
+        setBotPosition("chat");
+        setBotExpression("thinking");
+        setIsThinking(true);
 
-        try {
-            const token = localStorage.getItem('token');
-            const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+        // Simulate processing
+        await new Promise((resolve) => setTimeout(resolve, 1500));
 
-            const response = await fetch(`${apiBaseUrl}/conversation/${sessionId}/message`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ message: content })
-            });
+        // Handle rejection reason
+        if (waitingForRejectionReason) {
+            setWaitingForRejectionReason(false);
 
-            if (!response.ok) throw new Error('Failed to send message');
-
-            const data = await response.json();
-
-            // Add Donna's response
-            const assistantMessage: Message = {
-                id: (Date.now() + 1).toString(),
-                role: 'assistant',
-                content: data.donna_response,
-                timestamp: new Date(),
-                quickReplies: data.quick_replies
-            };
-
-            setMessages((prev) => [...prev, assistantMessage]);
-
-            // Update ideal profile
-            if (data.ideal_profile) {
-                setIdealProfile(data.ideal_profile);
-                setCompleteness(data.completeness || 0);
-            }
-
-            // Update sample profile
-            if (data.sample_profile) {
-                setSampleProfile(data.sample_profile);
-            }
-
-            // If ready to search, redirect
-            if (data.stage === 'ready' || data.completeness >= 100) {
-                // Show final confirmation
-                setTimeout(() => {
-                    handleFinalize();
-                }, 2000);
-            }
-        } catch (error) {
-            console.error('Error sending message:', error);
-            alert('Failed to send message. Please try again.');
-        } finally {
-            setIsDonnaTyping(false);
-            setIsLoading(false);
-        }
-    };
-
-    // Handle JD upload
-    const handleJDUpload = async (file: File) => {
-        setIsLoading(true);
-
-        try {
-            const token = localStorage.getItem('token');
-            const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-
-            // Start conversation first if not started
-            if (!sessionId) {
-                await startConversation('I have a job description to upload');
-            }
-
-            // Upload JD
-            const formData = new FormData();
-            formData.append('file', file);
-
-            const response = await fetch(`${apiBaseUrl}/conversation/${sessionId}/upload-jd`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                },
-                body: formData
-            });
-
-            if (!response.ok) throw new Error('Failed to upload JD');
-
-            const data = await response.json();
-
-            // Update profile with extracted data
-            if (data.ideal_profile) {
-                setIdealProfile(data.ideal_profile);
-                setCompleteness(data.completeness || 0);
-            }
-
-            // Add Donna's response about JD
-            const assistantMessage: Message = {
-                id: Date.now().toString(),
-                role: 'assistant',
-                content: data.donna_response || "Great! I've extracted the key requirements from your JD. Let me verify a few things to make sure we find the perfect candidates.",
-                timestamp: new Date(),
-                quickReplies: data.quick_replies
-            };
-
-            setMessages((prev) => [...prev, assistantMessage]);
-            setShowJDUpload(false);
-            setHasStarted(true);
-        } catch (error) {
-            console.error('Error uploading JD:', error);
-            throw error;
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    // Finalize and start search
-    const handleFinalize = async () => {
-        if (!sessionId) return;
-
-        setIsLoading(true);
-
-        try {
-            const token = localStorage.getItem('token');
-            const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-
-            const response = await fetch(`${apiBaseUrl}/conversation/${sessionId}/finalize`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
+            // Update the last rejected candidate with reason
+            setRejectedCandidates(prev => {
+                const updated = [...prev];
+                if (updated.length > 0) {
+                    updated[updated.length - 1].reason = userMessage;
                 }
+                return updated;
             });
 
-            if (!response.ok) throw new Error('Failed to finalize');
+            const donnaReply = "Thanks for the feedback! Let me search for another candidate with those considerations in mind.";
+            setMessages((prev) => [...prev, { role: "assistant", content: donnaReply }]);
 
-            const data = await response.json();
+            // Generate new sample profile
+            setTimeout(() => {
+                generateSampleProfile();
+            }, 2000);
 
-            // Redirect to results page with progress tracking
-            router.push(`/results/${data.search_session_id}?track=true`);
-        } catch (error) {
-            console.error('Error finalizing:', error);
-            alert('Failed to start search. Please try again.');
-        } finally {
-            setIsLoading(false);
+            setBotPosition("home");
+            setBotExpression("neutral");
+            setIsThinking(false);
+            setIsTyping(false);
+            return;
         }
+
+        // Determine what to update based on stage
+        const updatedProfile = { ...idealProfile };
+        let donnaReply = "";
+        let fieldToUpdate = "";
+
+        switch (conversationStage) {
+            case 0: // Getting role title
+                if (!updatedProfile.role_title) {
+                    updatedProfile.role_title = userMessage.includes("Senior") || userMessage.includes("Junior")
+                        ? userMessage
+                        : "Senior " + userMessage;
+                    fieldToUpdate = "role_title";
+                    donnaReply = `Perfect! Looking for a ${updatedProfile.role_title}. Now, what are the must-have skills?`;
+                }
+                setConversationStage(1);
+                break;
+
+            case 1: // Getting skills
+                const newSkills = userMessage.split(",").map((s) => s.trim());
+                updatedProfile.must_have_skills = [...updatedProfile.must_have_skills, ...newSkills];
+                fieldToUpdate = "must_have_skills";
+                donnaReply = `Great! Added ${newSkills.length} skills. What level of seniority are we looking for?`;
+                setConversationStage(2);
+                break;
+
+            case 2: // Getting seniority
+                updatedProfile.seniority = userMessage;
+                fieldToUpdate = "seniority";
+                donnaReply = `Got it! ${userMessage} level. How many years of experience?`;
+                setConversationStage(3);
+                break;
+
+            case 3: // Getting experience
+                updatedProfile.experience_years = userMessage;
+                fieldToUpdate = "experience_years";
+                donnaReply = "Excellent! Any specific industry experience?";
+                setConversationStage(4);
+                break;
+
+            case 4: // Getting industries
+                updatedProfile.industries = userMessage.split(",").map((s) => s.trim());
+                fieldToUpdate = "industries";
+                donnaReply = "Perfect! Let me find some matching candidates...";
+                setConversationStage(5);
+
+                // Generate sample profile
+                setTimeout(() => {
+                    generateSampleProfile();
+                }, 2000);
+                break;
+
+            default:
+                donnaReply = "That's interesting! Anything else you'd like to add?";
+        }
+
+        // Update profile
+        if (fieldToUpdate) {
+            // Bot flies to field being updated
+            setBotPosition("profile");
+            setUpdatingField(fieldToUpdate);
+            setHighlightedField(fieldToUpdate);
+
+            await new Promise((resolve) => setTimeout(resolve, 800));
+
+            setIdealProfile(updatedProfile);
+            setBotExpression("happy");
+
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+
+            setUpdatingField(null);
+            setHighlightedField(null);
+        }
+
+        // Add Donna's reply
+        setMessages((prev) => [...prev, { role: "assistant", content: donnaReply }]);
+
+        // Return home
+        setTimeout(() => {
+            setBotPosition("home");
+            setBotExpression("neutral");
+            setIsThinking(false);
+            setIsTyping(false);
+        }, 1500);
+    };
+
+    // Generate sample profile
+    const generateSampleProfile = () => {
+        setSampleProfile({
+            profile_id: Date.now().toString(),
+            name: "Alex Johnson",
+            title: idealProfile.role_title,
+            skills: idealProfile.must_have_skills.slice(0, 5),
+            experience_years: parseInt(idealProfile.experience_years.split("-")[0] || "5"),
+            current_company: "Tech Corp",
+            location: "San Francisco, CA",
+            industry: idealProfile.industries[0] || "Technology",
+            match_score: 92,
+        });
+
+        setBotPosition("sample");
+        setBotExpression("excited");
+        setSpeechBubble("Found a great match! What do you think?");
+        setShowSpeech(true);
+        setShowCandidateActions(true);
+
+        setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: "I found a candidate! Does this profile look good to you?" }
+        ]);
+
+        setTimeout(() => {
+            setShowSpeech(false);
+            setBotPosition("home");
+            setBotExpression("happy");
+        }, 3000);
     };
 
     return (
-        <div className="min-h-screen bg-gray-50">
-            <Header />
-            <div className="flex pt-16">
-                <Sidebar />
+        <>
+            {/* Intro Sequence */}
+            <AnimatePresence>
+                {showIntro && <IntroSequence onComplete={handleIntroComplete} />}
+            </AnimatePresence>
 
-                <main className="flex-1 ml-64 p-8">
-                    {!hasStarted ? (
-                        // Welcome Screen
+            {/* Main Workspace */}
+            <div className="min-h-screen relative overflow-hidden">
+                <BlueprintBackground />
+
+                {/* Donna Bot */}
+                <DonnaEnhanced
+                    position={botPosition}
+                    expression={botExpression}
+                    isThinking={isThinking}
+                    speechBubble={speechBubble}
+                    showSpeech={showSpeech}
+                />
+
+                {/* Main Content */}
+                <div className="relative container mx-auto px-8 py-12">
+                    {/* Header */}
+                    <motion.div
+                        initial={{ opacity: 0, y: -30 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="text-center mb-12"
+                    >
                         <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="max-w-4xl mx-auto"
+                            className="inline-flex items-center gap-3 mb-4"
+                            animate={{
+                                textShadow: [
+                                    "0 0 20px rgba(251, 191, 36, 0.5)",
+                                    "0 0 40px rgba(251, 191, 36, 0.8)",
+                                    "0 0 20px rgba(251, 191, 36, 0.5)",
+                                ],
+                            }}
+                            transition={{ duration: 3, repeat: Infinity }}
                         >
-                            {/* Hero */}
-                            <div className="text-center mb-12">
-                                <motion.div
-                                    initial={{ scale: 0 }}
-                                    animate={{ scale: 1 }}
-                                    transition={{ type: 'spring', stiffness: 200 }}
-                                    className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center"
-                                >
-                                    <Sparkles className="w-10 h-10 text-white" />
-                                </motion.div>
-
-                                <h1 className="text-4xl font-bold text-gray-900 mb-4">
-                                    Find Your Ideal Candidate
-                                </h1>
-                                <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-                                    Have a conversation with Donna, our AI assistant, to build your ideal candidate
-                                    profile together. Or upload a job description to get started faster.
-                                </p>
+                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/50">
+                                <Sparkles className="w-6 h-6 text-white" />
                             </div>
-
-                            {/* Options */}
-                            <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
-                                {/* Start Conversation */}
-                                <motion.button
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
-                                    onClick={() => startConversation()}
-                                    disabled={isLoading}
-                                    className="p-8 bg-white rounded-xl border-2 border-violet-200 hover:border-violet-400 hover:shadow-lg transition-all text-left group disabled:opacity-50"
-                                >
-                                    <MessageSquare className="w-12 h-12 text-violet-600 mb-4 group-hover:scale-110 transition-transform" />
-                                    <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                                        Start Conversation
-                                    </h3>
-                                    <p className="text-gray-600">
-                                        Chat with Donna to collaboratively build your ideal candidate profile
-                                    </p>
-                                </motion.button>
-
-                                {/* Upload JD */}
-                                <motion.div
-                                    whileHover={{ scale: 1.02 }}
-                                    className="p-8 bg-white rounded-xl border-2 border-blue-200 hover:border-blue-400 hover:shadow-lg transition-all"
-                                >
-                                    <Upload className="w-12 h-12 text-blue-600 mb-4" />
-                                    <h3 className="text-xl font-semibold text-gray-900 mb-2">Upload JD</h3>
-                                    <p className="text-gray-600 mb-4">
-                                        Upload a job description to automatically extract requirements
-                                    </p>
-                                    <JDUpload onUpload={handleJDUpload} isProcessing={isLoading} />
-                                </motion.div>
-                            </div>
+                            <h1 className="text-5xl font-bold text-white">
+                                Recruiter's Workspace
+                            </h1>
                         </motion.div>
-                    ) : (
-                        // Conversation View
-                        <div className="max-w-7xl mx-auto">
-                            <div className="grid lg:grid-cols-3 gap-6">
-                                {/* Left: Chat */}
-                                <div className="lg:col-span-2 h-[calc(100vh-8rem)]">
-                                    <ChatInterface
-                                        sessionId={sessionId || ''}
-                                        messages={messages}
-                                        onSendMessage={sendMessage}
-                                        isLoading={isLoading}
-                                        isDonnaTyping={isDonnaTyping}
-                                    />
-                                </div>
+                        <p className="text-amber-200 text-lg font-medium">
+                            Build your ideal candidate profile with Donna
+                        </p>
+                    </motion.div>
 
-                                {/* Right: Profile & Sample */}
-                                <div className="space-y-6">
-                                    <IdealProfileCard profile={idealProfile} completeness={completeness} />
-                                    <SampleProfile profile={sampleProfile} isLoading={false} />
+                    {/* Three Premium Cards */}
+                    <div className="grid lg:grid-cols-3 gap-8 mb-8">
+                        {/* Left: Resume Profile */}
+                        <motion.div
+                            initial={{ opacity: 0, x: -50 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.2, type: "spring" }}
+                        >
+                            <ResumeProfileCard
+                                profile={idealProfile}
+                                highlightedField={highlightedField}
+                                updatingField={updatingField}
+                            />
+                        </motion.div>
 
-                                    {/* Search Button */}
-                                    {completeness >= 100 && (
-                                        <motion.button
-                                            initial={{ opacity: 0, y: 20 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            whileHover={{ scale: 1.02 }}
-                                            whileTap={{ scale: 0.98 }}
-                                            onClick={handleFinalize}
-                                            disabled={isLoading}
-                                            className="w-full px-6 py-4 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl hover:from-violet-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-semibold text-lg flex items-center justify-center gap-2 shadow-lg"
-                                        >
-                                            {isLoading ? (
+                        {/* Center: Sample Profile with Actions */}
+                        <motion.div
+                            initial={{ opacity: 0, y: 50 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.4, type: "spring" }}
+                            className="relative"
+                        >
+                            <SampleProfileDisplay
+                                profile={sampleProfile}
+                                isLoading={conversationStage === 5 && !sampleProfile}
+                            />
+
+                            {/* Candidate Actions - Floating over sample profile */}
+                            <AnimatePresence>
+                                {showCandidateActions && sampleProfile && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: 20, scale: 0.9 }}
+                                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                                        exit={{ opacity: 0, y: -20, scale: 0.9 }}
+                                        className="absolute -bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-md px-4"
+                                    >
+                                        <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 rounded-xl border border-slate-700/50 shadow-2xl p-4 backdrop-blur-xl">
+                                            <div className="flex items-center gap-3">
+                                                <Button
+                                                    onClick={handleRejectCandidate}
+                                                    className="flex-1 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white h-12 rounded-lg shadow-lg shadow-red-500/20"
+                                                >
+                                                    <ThumbsDown className="w-5 h-5 mr-2" />
+                                                    Not a fit
+                                                </Button>
+                                                <Button
+                                                    onClick={handleAcceptCandidate}
+                                                    className="flex-1 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white h-12 rounded-lg shadow-lg shadow-emerald-500/20"
+                                                >
+                                                    <ThumbsUp className="w-5 h-5 mr-2" />
+                                                    Looks good!
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </motion.div>
+
+                        {/* Right: Chat */}
+                        <motion.div
+                            initial={{ opacity: 0, x: 50 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.6, type: "spring" }}
+                        >
+                            <ChatCard messages={messages} isTyping={isTyping} />
+                        </motion.div>
+                    </div>
+
+                    {/* Chat Input - Dark Professional Style */}
+                    <motion.div
+                        initial={{ opacity: 0, y: 50 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.8 }}
+                        className="max-w-4xl mx-auto"
+                    >
+                        <div className="relative group">
+                            {/* Ambient glow effect */}
+                            <motion.div
+                                className="absolute -inset-1 bg-gradient-to-r from-violet-500 via-purple-500 to-amber-500 rounded-2xl blur-xl opacity-20 group-hover:opacity-30 transition-opacity"
+                                animate={{
+                                    opacity: [0.15, 0.25, 0.15],
+                                }}
+                                transition={{
+                                    duration: 3,
+                                    repeat: Infinity,
+                                }}
+                            />
+
+                            {/* Main input container */}
+                            <div className="relative bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 rounded-2xl border border-slate-700/50 shadow-2xl backdrop-blur-xl overflow-hidden">
+                                {/* Top gradient line */}
+                                <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-purple-500/50 to-transparent" />
+
+                                <div className="p-3 flex items-center gap-3">
+                                    {/* Input field */}
+                                    <div className="flex-1 relative">
+                                        <Input
+                                            value={inputValue}
+                                            onChange={(e) => setInputValue(e.target.value)}
+                                            onFocus={handleInputFocus}
+                                            onBlur={handleInputBlur}
+                                            onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
+                                            placeholder={waitingForRejectionReason ? "Tell me what didn't work..." : "Type your message to Donna..."}
+                                            disabled={isTyping}
+                                            className="w-full bg-slate-800/50 border-slate-700/50 focus:border-purple-500/50 focus:ring-2 focus:ring-purple-500/20 text-slate-100 placeholder:text-slate-500 rounded-xl px-5 h-14 text-base transition-all duration-300"
+                                        />
+
+                                        {/* Input glow on focus */}
+                                        <motion.div
+                                            className="absolute inset-0 rounded-xl bg-gradient-to-r from-violet-500/10 to-purple-500/10 pointer-events-none opacity-0 group-focus-within:opacity-100 transition-opacity"
+                                        />
+                                    </div>
+
+                                    {/* Send button */}
+                                    <Button
+                                        onClick={handleSendMessage}
+                                        disabled={!inputValue.trim() || isTyping}
+                                        size="lg"
+                                        className="relative h-14 px-8 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 disabled:from-slate-700 disabled:to-slate-700 text-white rounded-xl shadow-lg shadow-purple-500/20 transition-all duration-300 group/btn overflow-hidden"
+                                    >
+                                        {/* Button glow effect */}
+                                        <motion.div
+                                            className="absolute inset-0 bg-gradient-to-r from-violet-400 to-purple-400 opacity-0 group-hover/btn:opacity-20 blur-xl transition-opacity"
+                                        />
+
+                                        {/* Button content */}
+                                        <div className="relative flex items-center gap-2">
+                                            {isTyping ? (
                                                 <>
-                                                    <Loader2 className="w-6 h-6 animate-spin" />
-                                                    Starting Search...
+                                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                                    <span className="font-semibold">Sending</span>
                                                 </>
                                             ) : (
                                                 <>
-                                                    <Sparkles className="w-6 h-6" />
-                                                    Yes, Search for Candidates!
+                                                    <span className="font-semibold">Send</span>
+                                                    <motion.div
+                                                        animate={{ x: [0, 3, 0] }}
+                                                        transition={{ duration: 1.5, repeat: Infinity }}
+                                                    >
+                                                        <Send className="w-5 h-5" />
+                                                    </motion.div>
                                                 </>
                                             )}
-                                        </motion.button>
-                                    )}
+                                        </div>
+                                    </Button>
+                                </div>
+
+                                {/* Bottom info bar */}
+                                <div className="px-5 py-2 bg-slate-950/30 border-t border-slate-800/50 flex items-center justify-between">
+                                    <div className="flex items-center gap-4">
+                                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                                            <kbd className="px-2 py-1 bg-slate-800/60 border border-slate-700/50 rounded text-[10px] font-mono">
+                                                Enter
+                                            </kbd>
+                                            <span>to send</span>
+                                        </div>
+                                        <div className="w-px h-3 bg-slate-700/50" />
+                                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                                            <kbd className="px-2 py-1 bg-slate-800/60 border border-slate-700/50 rounded text-[10px] font-mono">
+                                                Shift + Enter
+                                            </kbd>
+                                            <span>for new line</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Character counter */}
+                                    <motion.div
+                                        className="text-xs text-slate-500"
+                                        animate={{
+                                            color: inputValue.length > 0 ? "rgb(168, 85, 247)" : "rgb(100, 116, 139)",
+                                        }}
+                                    >
+                                        {inputValue.length > 0 && `${inputValue.length} characters`}
+                                    </motion.div>
                                 </div>
                             </div>
                         </div>
+
+                        {/* Status indicator */}
+                        <AnimatePresence>
+                            {isTyping && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: -10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -10 }}
+                                    className="mt-3 flex items-center justify-center gap-2 text-xs text-slate-400"
+                                >
+                                    <motion.div
+                                        className="w-2 h-2 rounded-full bg-purple-500"
+                                        animate={{
+                                            scale: [1, 1.3, 1],
+                                            opacity: [1, 0.5, 1],
+                                        }}
+                                        transition={{ duration: 1.5, repeat: Infinity }}
+                                    />
+                                    <span>Donna is processing your message...</span>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </motion.div>
+                </div>
+
+                {/* Rejected Candidates History - Bottom Left */}
+                <AnimatePresence>
+                    {rejectedCandidates.length > 0 && (
+                        <motion.div
+                            initial={{ opacity: 0, x: -100 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -100 }}
+                            className="fixed bottom-8 left-8 z-40"
+                        >
+                            <div className="relative">
+                                {/* History Toggle Button */}
+                                <motion.button
+                                    onClick={() => setShowHistory(!showHistory)}
+                                    className="relative bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-slate-700/50 rounded-2xl px-6 py-4 shadow-2xl backdrop-blur-xl hover:border-slate-600/50 transition-all"
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.95 }}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                                            <History className="w-5 h-5 text-red-400" />
+                                        </div>
+                                        <div className="text-left">
+                                            <div className="text-sm font-semibold text-slate-200">
+                                                Rejected Profiles
+                                            </div>
+                                            <div className="text-xs text-slate-500">
+                                                {rejectedCandidates.length} candidates
+                                            </div>
+                                        </div>
+                                        <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
+                                            {rejectedCandidates.length}
+                                        </Badge>
+                                        <motion.div
+                                            animate={{ rotate: showHistory ? 180 : 0 }}
+                                            transition={{ duration: 0.3 }}
+                                        >
+                                            <ChevronUp className="w-4 h-4 text-slate-400" />
+                                        </motion.div>
+                                    </div>
+                                </motion.button>
+
+                                {/* History Panel */}
+                                <AnimatePresence>
+                                    {showHistory && (
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 20, height: 0 }}
+                                            animate={{ opacity: 1, y: 0, height: "auto" }}
+                                            exit={{ opacity: 0, y: 20, height: 0 }}
+                                            className="absolute bottom-full left-0 mb-4 w-96 overflow-hidden"
+                                        >
+                                            <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-slate-700/50 rounded-2xl shadow-2xl backdrop-blur-xl max-h-96 overflow-y-auto">
+                                                {/* Header */}
+                                                <div className="px-6 py-4 border-b border-slate-800/50 sticky top-0 bg-slate-950/50 backdrop-blur-sm">
+                                                    <div className="flex items-center justify-between">
+                                                        <h3 className="text-sm font-semibold text-slate-200">
+                                                            Rejected Candidates
+                                                        </h3>
+                                                        <Button
+                                                            onClick={() => setRejectedCandidates([])}
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="text-xs text-slate-500 hover:text-slate-300"
+                                                        >
+                                                            Clear all
+                                                        </Button>
+                                                    </div>
+                                                </div>
+
+                                                {/* List */}
+                                                <div className="p-4 space-y-3">
+                                                    {rejectedCandidates.map((rejected, idx) => (
+                                                        <motion.div
+                                                            key={idx}
+                                                            initial={{ opacity: 0, x: -20 }}
+                                                            animate={{ opacity: 1, x: 0 }}
+                                                            transition={{ delay: idx * 0.05 }}
+                                                            className="p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl hover:border-slate-600/50 transition-all"
+                                                        >
+                                                            <div className="flex items-start justify-between mb-2">
+                                                                <div>
+                                                                    <div className="text-sm font-semibold text-slate-200">
+                                                                        {rejected.profile.name}
+                                                                    </div>
+                                                                    <div className="text-xs text-slate-500">
+                                                                        {rejected.profile.title}
+                                                                    </div>
+                                                                </div>
+                                                                <Badge variant="outline" className="border-red-500/30 text-red-400 text-xs">
+                                                                    {rejected.profile.match_score}%
+                                                                </Badge>
+                                                            </div>
+                                                            {rejected.reason && (
+                                                                <div className="mt-2 text-xs text-slate-400 italic">
+                                                                    "{rejected.reason}"
+                                                                </div>
+                                                            )}
+                                                            <div className="mt-2 text-[10px] text-slate-600">
+                                                                {rejected.timestamp.toLocaleTimeString()}
+                                                            </div>
+                                                        </motion.div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </div>
+                        </motion.div>
                     )}
-                </main>
+                </AnimatePresence>
             </div>
-        </div>
+        </>
+    );
+}
+
+export default function ConversationPage() {
+    return (
+        <Suspense fallback={<LoadingFallback />}>
+            <ConversationWorkspace />
+        </Suspense>
     );
 }
