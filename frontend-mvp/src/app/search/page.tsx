@@ -134,8 +134,6 @@ export default function SearchPage() {
 
     setIsLoading(true);
     setError(null);
-    setIsSearching(true);
-    setSearchError(null);
 
     try {
       let response;
@@ -158,16 +156,12 @@ export default function SearchPage() {
         });
       }
 
-      setSessionId(response.session_id);
-      setIdealProfile(response.ideal_profile);
-
-      router.push(`/results?session=${response.session_id}`);
+      router.push(`/conversation?session=${response.session_id}`);
     } catch (err) {
       const errorMessage =
-        err instanceof Error ? err.message : "Failed to start search";
+        err instanceof Error ? err.message : "An unexpected error occurred";
       setError(errorMessage);
-      setSearchError(errorMessage);
-      setIsSearching(false);
+      console.error("Search error:", err);
     } finally {
       setIsLoading(false);
     }

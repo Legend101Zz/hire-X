@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Sparkles, Loader2, ThumbsUp, ThumbsDown, History, ChevronUp, } from "lucide-react";
+import { Send, Sparkles, Loader2, ThumbsUp, ThumbsDown, History, ChevronUp, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import BlueprintBackground from "@/components/conversation/BlueprintBackground";
@@ -11,8 +12,10 @@ import ResumeProfileCard from "@/components/conversation/ResumeProfileCard";
 import SampleProfileDisplay from "@/components/conversation/SampleProfileDisplay";
 import ChatCard from "@/components/conversation/ChatCard";
 import IntroSequence from "@/components/conversation/IntroSequence";
-import { Suspense } from "react";
 import { Badge } from "@/components/ui/badge";
+import * as conversationApi from "@/utils/api/conversationApiV2";
+import type { IdealProfileCard, SampleProfile, ConversationMessage } from "@/types";
+import { useAuth } from "@/contexts/AuthContext";
 
 type BotExpression = "neutral" | "happy" | "thinking" | "excited" | "peek" | "waving";
 type BotPosition = "home" | "chat" | "profile" | "sample" | "intro1" | "intro2" | "intro3";
@@ -35,21 +38,30 @@ function LoadingFallback() {
 }
 
 function ConversationWorkspace() {
-    // Show intro
-    const [showIntro, setShowIntro] = useState(true);
+    const router = useRouter();
+    const searchParams = useSearchParams();
+    const { token } = useAuth();
+    const sessionId = searchParams.get("session");
+
+    // Show intro only on first visit
+    const [showIntro, setShowIntro] = useState(false);
+    const [isLoadingState, setIsLoadingState] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     // Profile State
-    const [idealProfile, setIdealProfile] = useState<any>({
+    const [idealProfile, setIdealProfile] = useState<IdealProfileCard>({
         role_title: "",
         must_have_skills: [],
         nice_to_have_skills: [],
         seniority: "",
         experience_years: "",
         industries: [],
+        company_size: [],
         locations: [],
+        additional_requirements: "",
     });
 
-    const [sampleProfile, setSampleProfile] = useState<any>(null);
+    const [sampleProfile, setSampleProfile] = useState<SampleProfile | null>(null);
     const [showCandidateActions, setShowCandidateActions] = useState(false);
     const [rejectedCandidates, setRejectedCandidates] = useState<RejectedCandidate[]>([]);
     const [showHistory, setShowHistory] = useState(false);
@@ -57,7 +69,7 @@ function ConversationWorkspace() {
 
     // Chat State
     const [inputValue, setInputValue] = useState("");
-    const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
+    const [messages, setMessages] = useState<ConversationMessage[]>([]);
     const [isTyping, setIsTyping] = useState(false);
 
     // Bot State
@@ -71,10 +83,81 @@ function ConversationWorkspace() {
     const [highlightedField, setHighlightedField] = useState<string | null>(null);
     const [updatingField, setUpdatingField] = useState<string | null>(null);
 
-    // Progress State
-    const [conversationStage, setConversationStage] = useState(0);
+    const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    // Handle intro completion
+    // ================================================================
+    // LOAD CONVERSATION STATE ON MOUNT
+    // ================================================================
+
+    useEffect(() => {
+        const loadConversationState = async () => {
+            if (!sessionId || !token) {
+                setLoadError("Invalid session or missing authentication");
+                setIsLoadingState(false);
+                return;
+            }
+
+            try {
+                console.log("📥 Loading conversation state:", sessionId);
+                const state = await conversationApi.getConversationState(sessionId, token);
+
+                // Set state from backend
+                setIdealProfile(state.ideal_profile || {
+                    role_title: "",
+                    must_have_skills: [],
+                    nice_to_have_skills: [],
+                    seniority: "",
+                    experience_years: "",
+                    industries: [],
+                    company_size: [],
+                    locations: [],
+                    additional_requirements: "",
+                });
+
+                setSampleProfile(state.sample_profile || null);
+
+                // Check if the last message indicates we need clarification
+                const lastMessage = state.messages[state.messages.length - 1];
+                if (lastMessage && lastMessage.role === "assistant") {
+                    if (lastMessage.content.includes("couldn't find any matching candidates")) {
+                        // Donna is asking for clarification
+                        setBotExpression("thinking");
+                        setSpeechBubble("Let's refine the search together!");
+                        setShowSpeech(true);
+                    }
+                }
+
+                setMessages(state.messages || []);
+
+                setIsLoadingState(false);
+
+                // Show intro only if it's a brand new conversation
+                if (!state.messages || state.messages.length === 0) {
+                    setShowIntro(true);
+                } else {
+                    // Skip intro and show welcome if already started
+                    setBotPosition("home");
+                    setBotExpression("happy");
+                }
+            } catch (error) {
+                console.error("Error loading conversation state:", error);
+                setLoadError(error instanceof Error ? error.message : "Failed to load conversation");
+                setIsLoadingState(false);
+            }
+        };
+
+        loadConversationState();
+    }, [sessionId, token]);
+
+    // Auto-scroll messages
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
+
+    // ================================================================
+    // INTRO SEQUENCE
+    // ================================================================
+
     const handleIntroComplete = () => {
         setShowIntro(false);
         setTimeout(() => {
@@ -82,14 +165,12 @@ function ConversationWorkspace() {
         }, 500);
     };
 
-    // Welcome sequence after intro
     const showWelcomeSequence = async () => {
         // Step 1: Fly to profile card
         setBotPosition("profile");
         setBotExpression("waving");
         setSpeechBubble("This is where we'll build your ideal candidate profile together");
         setShowSpeech(true);
-
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
         // Step 2: Fly to sample card
@@ -99,7 +180,6 @@ function ConversationWorkspace() {
         setBotPosition("sample");
         setSpeechBubble("Here, I'll show you matching candidates in real-time");
         setShowSpeech(true);
-
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
         // Step 3: Fly to chat
@@ -109,7 +189,6 @@ function ConversationWorkspace() {
         setBotPosition("chat");
         setSpeechBubble("And we'll chat here! Just tell me what you're looking for");
         setShowSpeech(true);
-
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
         // Step 4: Go home and start
@@ -118,10 +197,6 @@ function ConversationWorkspace() {
 
         setBotPosition("home");
         setBotExpression("neutral");
-
-        await new Promise((resolve) => setTimeout(resolve, 800));
-
-        showGuidanceMessage("role_title", "Let's get started! What role are you hiring for?");
     };
 
     // Handle input focus - Bot peeks
@@ -142,43 +217,137 @@ function ConversationWorkspace() {
         }
     };
 
-    // Show guidance message
-    const showGuidanceMessage = (fieldId: string, message: string) => {
-        setBotPosition("profile");
-        setHighlightedField(fieldId);
-        setSpeechBubble(message);
-        setShowSpeech(true);
+    // ================================================================
+    // SEND MESSAGE
+    // ================================================================
 
-        setTimeout(() => {
-            setShowSpeech(false);
-            setHighlightedField(null);
-            setBotPosition("home");
-        }, 5000);
+    const handleSendMessage = async () => {
+        if (!inputValue.trim() || !sessionId || !token || isTyping) return;
+
+        const userMessage = inputValue.trim();
+        setInputValue("");
+        setIsTyping(true);
+        setBotExpression("thinking");
+        setIsThinking(true);
+
+        // Add user message immediately
+        const newUserMessage: ConversationMessage = {
+            role: "user",
+            content: userMessage,
+            timestamp: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, newUserMessage]);
+
+        // Bot flies to chat and thinks
+        setBotPosition("chat");
+
+        try {
+            // Send message to backend
+            const response = await conversationApi.sendMessage(sessionId, token, {
+                message: userMessage,
+            });
+
+            // Add Donna's response
+            const donnaMessage: ConversationMessage = {
+                role: "assistant",
+                content: response.donna_reply,
+                timestamp: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, donnaMessage]);
+
+            // Update profile and sample
+            setIdealProfile(response.updated_ideal_profile);
+            if (response.updated_sample_profile) {
+                setSampleProfile(response.updated_sample_profile);
+                setShowCandidateActions(true);
+            }
+
+            // Highlight updated fields
+            highlightProfileUpdates(response.updated_ideal_profile);
+
+            setBotExpression("happy");
+        } catch (error) {
+            console.error("Error sending message:", error);
+            const errorMessage: ConversationMessage = {
+                role: "assistant",
+                content: "Sorry, I encountered an error. Please try again.",
+                timestamp: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, errorMessage]);
+            setBotExpression("neutral");
+        } finally {
+            setIsTyping(false);
+            setIsThinking(false);
+            // Return home after a delay
+            setTimeout(() => {
+                setBotPosition("home");
+                setBotExpression("neutral");
+            }, 1500);
+        }
     };
 
-    // Handle candidate acceptance
+    // ================================================================
+    // PROFILE UPDATE HIGHLIGHTING
+    // ================================================================
+
+    const highlightProfileUpdates = (newProfile: IdealProfileCard) => {
+        const fieldsToCheck: (keyof IdealProfileCard)[] = [
+            "role_title",
+            "must_have_skills",
+            "seniority",
+            "experience_years",
+            "industries",
+            "locations",
+        ];
+
+        fieldsToCheck.forEach((field) => {
+            const oldValue = JSON.stringify(idealProfile[field]);
+            const newValue = JSON.stringify(newProfile[field]);
+
+            if (oldValue !== newValue) {
+                setHighlightedField(field);
+                setUpdatingField(field);
+
+                // Donna flies to profile card
+                setBotPosition("profile");
+                setBotExpression("excited");
+
+                setTimeout(() => {
+                    setUpdatingField(null);
+                    setBotPosition("home");
+                    setBotExpression("happy");
+                }, 2000);
+
+                setTimeout(() => {
+                    setHighlightedField(null);
+                }, 4000);
+            }
+        });
+    };
+
+    // ================================================================
+    // CANDIDATE ACTIONS
+    // ================================================================
+
     const handleAcceptCandidate = async () => {
         setShowCandidateActions(false);
         setBotPosition("sample");
         setBotExpression("excited");
-        setSpeechBubble("Excellent choice! I'll prepare the contact details");
+        setSpeechBubble("Excellent choice! Ready to search for more like this?");
         setShowSpeech(true);
 
-        // Add message to chat
         setMessages((prev) => [
             ...prev,
-            { role: "assistant", content: "Great! You've accepted this candidate. I'll prepare their contact information and availability." }
+            { role: "assistant", content: "Great! You've accepted this candidate. Ready to search for more?", timestamp: new Date().toISOString() }
         ]);
 
         setTimeout(() => {
             setShowSpeech(false);
             setBotPosition("home");
             setBotExpression("happy");
-            setConversationStage(6); // Move to next stage
         }, 3000);
     };
 
-    // Handle candidate rejection
     const handleRejectCandidate = async () => {
         setShowCandidateActions(false);
 
@@ -193,11 +362,10 @@ function ConversationWorkspace() {
         setBotPosition("chat");
         setBotExpression("thinking");
 
-        // Add messages to chat
         setMessages((prev) => [
             ...prev,
-            { role: "user", content: "Not this one" },
-            { role: "assistant", content: "I understand. Could you tell me what didn't work about this candidate? This helps me find better matches." }
+            { role: "user", content: "Not this one", timestamp: new Date().toISOString() },
+            { role: "assistant", content: "I understand. Could you tell me what didn't work about this candidate?", timestamp: new Date().toISOString() }
         ]);
 
         setWaitingForRejectionReason(true);
@@ -209,169 +377,26 @@ function ConversationWorkspace() {
         }, 2000);
     };
 
-    // Simulate message processing
-    const handleSendMessage = async () => {
-        if (!inputValue.trim()) return;
+    // ================================================================
+    // RENDER
+    // ================================================================
 
-        const userMessage = inputValue;
-        setInputValue("");
-        setIsTyping(true);
+    if (isLoadingState) {
+        return <LoadingFallback />;
+    }
 
-        // Add user message
-        setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-
-        // Bot flies to chat and thinks
-        setBotPosition("chat");
-        setBotExpression("thinking");
-        setIsThinking(true);
-
-        // Simulate processing
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-
-        // Handle rejection reason
-        if (waitingForRejectionReason) {
-            setWaitingForRejectionReason(false);
-
-            // Update the last rejected candidate with reason
-            setRejectedCandidates(prev => {
-                const updated = [...prev];
-                if (updated.length > 0) {
-                    updated[updated.length - 1].reason = userMessage;
-                }
-                return updated;
-            });
-
-            const donnaReply = "Thanks for the feedback! Let me search for another candidate with those considerations in mind.";
-            setMessages((prev) => [...prev, { role: "assistant", content: donnaReply }]);
-
-            // Generate new sample profile
-            setTimeout(() => {
-                generateSampleProfile();
-            }, 2000);
-
-            setBotPosition("home");
-            setBotExpression("neutral");
-            setIsThinking(false);
-            setIsTyping(false);
-            return;
-        }
-
-        // Determine what to update based on stage
-        const updatedProfile = { ...idealProfile };
-        let donnaReply = "";
-        let fieldToUpdate = "";
-
-        switch (conversationStage) {
-            case 0: // Getting role title
-                if (!updatedProfile.role_title) {
-                    updatedProfile.role_title = userMessage.includes("Senior") || userMessage.includes("Junior")
-                        ? userMessage
-                        : "Senior " + userMessage;
-                    fieldToUpdate = "role_title";
-                    donnaReply = `Perfect! Looking for a ${updatedProfile.role_title}. Now, what are the must-have skills?`;
-                }
-                setConversationStage(1);
-                break;
-
-            case 1: // Getting skills
-                const newSkills = userMessage.split(",").map((s) => s.trim());
-                updatedProfile.must_have_skills = [...updatedProfile.must_have_skills, ...newSkills];
-                fieldToUpdate = "must_have_skills";
-                donnaReply = `Great! Added ${newSkills.length} skills. What level of seniority are we looking for?`;
-                setConversationStage(2);
-                break;
-
-            case 2: // Getting seniority
-                updatedProfile.seniority = userMessage;
-                fieldToUpdate = "seniority";
-                donnaReply = `Got it! ${userMessage} level. How many years of experience?`;
-                setConversationStage(3);
-                break;
-
-            case 3: // Getting experience
-                updatedProfile.experience_years = userMessage;
-                fieldToUpdate = "experience_years";
-                donnaReply = "Excellent! Any specific industry experience?";
-                setConversationStage(4);
-                break;
-
-            case 4: // Getting industries
-                updatedProfile.industries = userMessage.split(",").map((s) => s.trim());
-                fieldToUpdate = "industries";
-                donnaReply = "Perfect! Let me find some matching candidates...";
-                setConversationStage(5);
-
-                // Generate sample profile
-                setTimeout(() => {
-                    generateSampleProfile();
-                }, 2000);
-                break;
-
-            default:
-                donnaReply = "That's interesting! Anything else you'd like to add?";
-        }
-
-        // Update profile
-        if (fieldToUpdate) {
-            // Bot flies to field being updated
-            setBotPosition("profile");
-            setUpdatingField(fieldToUpdate);
-            setHighlightedField(fieldToUpdate);
-
-            await new Promise((resolve) => setTimeout(resolve, 800));
-
-            setIdealProfile(updatedProfile);
-            setBotExpression("happy");
-
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-
-            setUpdatingField(null);
-            setHighlightedField(null);
-        }
-
-        // Add Donna's reply
-        setMessages((prev) => [...prev, { role: "assistant", content: donnaReply }]);
-
-        // Return home
-        setTimeout(() => {
-            setBotPosition("home");
-            setBotExpression("neutral");
-            setIsThinking(false);
-            setIsTyping(false);
-        }, 1500);
-    };
-
-    // Generate sample profile
-    const generateSampleProfile = () => {
-        setSampleProfile({
-            profile_id: Date.now().toString(),
-            name: "Alex Johnson",
-            title: idealProfile.role_title,
-            skills: idealProfile.must_have_skills.slice(0, 5),
-            experience_years: parseInt(idealProfile.experience_years.split("-")[0] || "5"),
-            current_company: "Tech Corp",
-            location: "San Francisco, CA",
-            industry: idealProfile.industries[0] || "Technology",
-            match_score: 92,
-        });
-
-        setBotPosition("sample");
-        setBotExpression("excited");
-        setSpeechBubble("Found a great match! What do you think?");
-        setShowSpeech(true);
-        setShowCandidateActions(true);
-
-        setMessages((prev) => [
-            ...prev,
-            { role: "assistant", content: "I found a candidate! Does this profile look good to you?" }
-        ]);
-
-        setTimeout(() => {
-            setShowSpeech(false);
-            setBotPosition("home");
-            setBotExpression("happy");
-        }, 3000);
-    };
+    if (loadError) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-950">
+                <div className="text-center">
+                    <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+                    <h2 className="text-xl font-semibold text-white mb-2">Error Loading Conversation</h2>
+                    <p className="text-gray-400 mb-4">{loadError}</p>
+                    <Button onClick={() => router.push("/search")}>Back to Search</Button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <>
@@ -424,7 +449,7 @@ function ConversationWorkspace() {
                         </p>
                     </motion.div>
 
-                    {/* Three Premium Cards */}
+                    {/* Three Premium Cards - ORIGINAL LAYOUT */}
                     <div className="grid lg:grid-cols-3 gap-8 mb-8">
                         {/* Left: Resume Profile */}
                         <motion.div
@@ -433,7 +458,7 @@ function ConversationWorkspace() {
                             transition={{ delay: 0.2, type: "spring" }}
                         >
                             <ResumeProfileCard
-                                profile={idealProfile}
+                                idealProfile={idealProfile}
                                 highlightedField={highlightedField}
                                 updatingField={updatingField}
                             />
@@ -448,7 +473,7 @@ function ConversationWorkspace() {
                         >
                             <SampleProfileDisplay
                                 profile={sampleProfile}
-                                isLoading={conversationStage === 5 && !sampleProfile}
+                                isLoading={isTyping && !sampleProfile}
                             />
 
                             {/* Candidate Actions - Floating over sample profile */}
@@ -489,11 +514,11 @@ function ConversationWorkspace() {
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.6, type: "spring" }}
                         >
-                            <ChatCard messages={messages} isTyping={isTyping} />
+                            <ChatCard messages={messages} isTyping={isTyping} isCollapsed={false} />
                         </motion.div>
                     </div>
 
-                    {/* Chat Input - Dark Professional Style */}
+                    {/* Chat Input - Dark Professional Style - BOTTOM */}
                     <motion.div
                         initial={{ opacity: 0, y: 50 }}
                         animate={{ opacity: 1, y: 0 }}
