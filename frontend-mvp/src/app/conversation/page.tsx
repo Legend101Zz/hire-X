@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import * as conversationApi from "@/utils/api/conversationApiV2";
 import type { IdealProfileCard, SampleProfile, ConversationMessage } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
+import WizardGuide from "@/components/conversation/WizardGuide";
 
 type BotExpression = "neutral" | "happy" | "thinking" | "excited" | "peek" | "waving";
 type BotPosition = "home" | "chat" | "profile" | "sample" | "intro1" | "intro2" | "intro3";
@@ -25,6 +26,8 @@ interface RejectedCandidate {
     reason?: string;
     timestamp: Date;
 }
+
+const WIZARD_SHOWN_KEY = "neuraleap_wizard_shown";
 
 function LoadingFallback() {
     return (
@@ -42,6 +45,9 @@ function ConversationWorkspace() {
     const searchParams = useSearchParams();
     const { token } = useAuth();
     const sessionId = searchParams.get("session");
+
+    const [showWizard, setShowWizard] = useState(false);
+    const [wizardChecked, setWizardChecked] = useState(false);
 
     // Show intro only on first visit
     const [showIntro, setShowIntro] = useState(false);
@@ -85,11 +91,38 @@ function ConversationWorkspace() {
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    useEffect(() => {
+        const hasSeenWizard = localStorage.getItem(WIZARD_SHOWN_KEY);
+        if (!hasSeenWizard) {
+            setShowWizard(true);
+        }
+        setWizardChecked(true);
+    }, []);
+
+
+    // ================================================================
+    // WIZARD HANDLERS
+    // ================================================================
+    const handleWizardComplete = () => {
+        localStorage.setItem(WIZARD_SHOWN_KEY, "true");
+        setShowWizard(false);
+        // Optionally show intro sequence after wizard
+        // setShowIntro(true);
+    };
+
+    const handleWizardSkip = () => {
+        localStorage.setItem(WIZARD_SHOWN_KEY, "true");
+        setShowWizard(false);
+    };
+
     // ================================================================
     // LOAD CONVERSATION STATE ON MOUNT
     // ================================================================
 
     useEffect(() => {
+        // Don't load state until wizard check is complete
+        if (!wizardChecked) return;
+
         const loadConversationState = async () => {
             if (!sessionId || !token) {
                 setLoadError("Invalid session or missing authentication");
@@ -147,7 +180,7 @@ function ConversationWorkspace() {
         };
 
         loadConversationState();
-    }, [sessionId, token]);
+    }, [sessionId, token, wizardChecked, showWizard]);
 
     // Auto-scroll messages
     useEffect(() => {
@@ -380,6 +413,20 @@ function ConversationWorkspace() {
     // ================================================================
     // RENDER
     // ================================================================
+
+    // Show wizard first if not seen before
+    if (!wizardChecked || (wizardChecked && showWizard)) {
+        return (
+            <AnimatePresence>
+                {showWizard && (
+                    <WizardGuide
+                        onComplete={handleWizardComplete}
+                        onSkip={handleWizardSkip}
+                    />
+                )}
+            </AnimatePresence>
+        );
+    }
 
     if (isLoadingState) {
         return <LoadingFallback />;

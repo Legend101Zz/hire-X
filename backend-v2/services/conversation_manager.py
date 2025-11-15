@@ -547,14 +547,29 @@ Extract new information and return updated fields as JSON."""
         
         profile = state.ideal_profile
         
-        return bool(
-            profile.role_title and
-            len(profile.must_have_skills) >= 3 and
-            profile.seniority and
-            profile.experience_years
+        # Minimum requirements for a basic search
+        has_minimum = bool(
+            profile.role_title and 
+            len(profile.must_have_skills) >= 1
         )
-    
-    
+        
+        # Good-to-have but not required for simple searches
+        has_context = bool(
+            profile.seniority or 
+            profile.experience_years or
+            profile.industries or
+            profile.locations
+        )
+        
+        # If user provided comprehensive initial query, allow immediate search
+        # Otherwise, gather at least some context
+        if state.turn_count == 1 and has_minimum:
+            # First message with basics = allow search
+            return True
+        
+        # For multi-turn conversations, require some additional context
+        return has_minimum and has_context
+
     def _get_suggestions(self, stage: str, profile: IdealProfileCard) -> List[str]:
         """Get suggestions based on current stage."""
         
