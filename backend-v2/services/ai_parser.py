@@ -44,6 +44,84 @@ class AIParser:
         if not self.api_key:
             logger.warning("WARNING: OPENROUTER_API_KEY not set!")
             logger.warning ("AI parsing will not work without an API key")
+            
+    async def call_llm(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str = None,
+        temperature: float = 0.1,
+        max_tokens: int = 2000,
+        response_format: str = "json"
+    ) -> str:
+        """
+        Generic LLM calling method for any prompt.
+        
+        This is used by QueryDebugger and other services that need
+        to call the LLM with custom prompts.
+        
+        Args:
+            system_prompt: System instructions for the LLM
+            user_prompt: User's actual prompt
+            model: Model to use (defaults to config model)
+            temperature: Temperature for response randomness
+            max_tokens: Maximum tokens in response
+            response_format: "json" or "text"
+        
+        Returns:
+            LLM's response as string
+        
+        Example:
+            response = await ai_parser.call_llm(
+                system_prompt="You are a query analyzer...",
+                user_prompt="Analyze this query: {...}",
+                model="anthropic/claude-3.5-sonnet"
+            )
+        """
+        
+        logger.info(f"Calling LLM with model: {model or self.model}")
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://neuraleap.com",
+                "X-Title": "Neuraleap Hiring Platform"
+            }
+            
+            data = {
+                "model": model or self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens
+            }
+            
+            # Add response format if JSON requested
+            if response_format == "json":
+                data["response_format"] = {"type": "json_object"}
+            
+            response = requests.post(
+                self.api_url,
+                headers=headers,
+                json=data,
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            
+            result = response.json()
+            ai_response = result["choices"][0]["message"]["content"]
+            
+            logger.info(f"✅ LLM response received ({len(ai_response)} chars)")
+            
+            return ai_response
+            
+        except Exception as e:
+            logger.error(f"❌ LLM call failed: {e}")
+            raise
     
     async def parse_prompt(self, prompt: str) -> Dict[str, Any]:
         """
@@ -87,7 +165,7 @@ class AIParser:
             system_prompt = self._create_system_prompt()
             
             # Call OpenRouter API
-            response = self._call_openrouter(system_prompt, prompt)
+            response = self.call_llm(system_prompt, prompt)
             
             # Parse the AI's response
             parsed_data = self._extract_json_from_response(response)
@@ -143,47 +221,25 @@ Return ONLY the JSON, no explanation."""
     
     def _call_openrouter(self, system_prompt: str, user_prompt: str) -> str:
         """
-        Call the OpenRouter API.
+        Call the OpenRouter API (legacy method for parse_prompt).
         
-        Args:
-            system_prompt: Instructions for the AI
-            user_prompt: The user's hiring requirements
-            
-        Returns:
-            str: AI's response
+        Now wraps the generic call_llm method.
         """
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://neuraleap.com",
-            "X-Title": "Neuraleap Hiring Platform"
-        }
-        
-        data = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.1,  # Low temperature for consistent parsing
-            "max_tokens": 1000
-        }
-        
-        response = requests.post(
-            self.api_url,
-            headers=headers,
-            json=data,
-            timeout=30
-        )
-        
-        response.raise_for_status()
-        
-        result = response.json()
-        ai_response = result["choices"][0]["message"]["content"]
-        
-        return ai_response
-    
+        import asyncio
+
+        # Use the new generic method
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Already in async context
+            return asyncio.create_task(
+                self.call_llm(system_prompt, user_prompt)
+            )
+        else:
+            # Not in async context
+            return loop.run_until_complete(
+                self.call_llm(system_prompt, user_prompt)
+            )
+            
     def _extract_json_from_response(self, response: str) -> Dict[str, Any]:
         """
         Extract JSON from AI response.

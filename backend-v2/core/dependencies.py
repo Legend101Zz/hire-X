@@ -25,9 +25,11 @@ from services.conversation_manager import ConversationManager
 from services.enrichment_service import EnrichmentService
 from services.jd_parser import JDParser
 from services.model_config_manager import ModelConfigManager
+from services.query_debugger import QueryDebugger
 from services.response_likelihood_scorer import ResponseLikelihoodScorer
 from services.salary_estimator import SalaryEstimator
 from services.sample_profile_generator import SampleProfileGenerator
+from services.sample_profile_generator_v2 import SampleProfileGeneratorV2
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
 from services.skill_validator import SkillValidator
@@ -131,11 +133,22 @@ async def initialize_services() -> Dict[str, Any]:
     )
     logger.info("✅ SampleProfileGenerator initialized")
     
+    # Add Query Debugger
+    query_debugger = QueryDebugger(ai_parser=ai_parser)
+    logger.info("✅ QueryDebugger initialized")
+
+    # Add Sample Generator V2 (with debugging)
+    sample_generator_v2 = SampleProfileGeneratorV2(
+        profiles_collection=mongodb.profiles_collection,
+        ai_parser=ai_parser  # Not AIService
+    )
+    logger.info("✅ SampleProfileGeneratorV2 initialized")
+        
     # Conversation Manager
     conversation_manager = ConversationManager(
         redis_cache=redis_cache,
         model_config_manager=model_config_manager,
-        sample_profile_generator=sample_generator
+        sample_profile_generator=sample_generator_v2
     )
     logger.info("✅ ConversationManager initialized")
     
@@ -179,8 +192,9 @@ async def initialize_services() -> Dict[str, Any]:
         # Phase 2B Services (Conversation)
         "jd_parser": jd_parser,
         "sample_generator": sample_generator,
+        "sample_generator_v2": sample_generator_v2,  # Add V2
+        "query_debugger": query_debugger,  # Add debugger
         "conversation_manager": conversation_manager,
-        
         # Workflow Orchestrator
         "workflow": workflow
     }
@@ -279,6 +293,14 @@ def get_jd_parser() -> JDParser:
 def get_sample_generator() -> SampleProfileGenerator:
     """Get the sample profile generator."""
     return _global_services["sample_generator"]
+
+def get_sample_generator_v2() -> SampleProfileGeneratorV2:
+    """Get the V2 sample generator with debugging."""
+    return _global_services["sample_generator_v2"]
+
+def get_query_debugger() -> QueryDebugger:
+    """Get the query debugger."""
+    return _global_services["query_debugger"]
 
 
 def get_current_username(

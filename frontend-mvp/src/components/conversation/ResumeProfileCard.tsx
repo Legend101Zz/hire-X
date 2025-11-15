@@ -18,20 +18,53 @@ import {
     Plus,
     Edit3,
 } from "lucide-react";
+import { IdealProfileCard } from "@/types";
 
 interface ResumeProfileCardProps {
-    profile: any;
+    idealProfile: IdealProfileCard | null | undefined;
     highlightedField?: string | null;
     updatingField?: string | null;
 }
 
 export default function ResumeProfileCard({
-    profile,
-    highlightedField = null,
-    updatingField = null,
+    idealProfile,
+    highlightedField,
+    updatingField,
 }: ResumeProfileCardProps) {
-    const completionScore = calculateCompletion(profile);
-    const filledFields = countFilledFields(profile);
+    //: Default empty profile if undefined
+    const profile = idealProfile || {
+        role_title: "",
+        must_have_skills: [],
+        nice_to_have_skills: [],
+        seniority: "",
+        experience_years: "",
+        industries: [],
+        company_size: [],
+        locations: [],
+        additional_requirements: "",
+    };
+    // Calculate completion percentage - NOW USING profile instead of idealProfile
+    const calculateCompletion = () => {
+        const fields = [
+            profile.role_title,
+            profile.must_have_skills.length > 0,
+            profile.seniority,
+            profile.experience_years,
+            profile.industries.length > 0,
+            profile.locations.length > 0,
+        ];
+        const filled = fields.filter(Boolean).length;
+        return Math.round((filled / fields.length) * 100);
+    };
+
+    const completionScore = calculateCompletion();
+    const filledFields = [
+        profile.role_title,
+        profile.seniority,
+        profile.experience_years,
+        profile.must_have_skills?.length >= 1,
+        profile.industries?.length > 0,
+    ].filter(Boolean).length;
 
     return (
         <Card className="relative bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-slate-700/50 shadow-2xl overflow-hidden h-full backdrop-blur-xl">
@@ -285,10 +318,10 @@ function DataField({
         <motion.div
             id={`field-${id}`}
             className={`relative group transition-all duration-300 ${highlighted
-                    ? "bg-amber-500/10 border border-amber-500/30 shadow-lg shadow-amber-500/10"
-                    : value
-                        ? "bg-slate-800/40 border border-slate-700/50 hover:border-slate-600/50"
-                        : "bg-slate-800/20 border border-slate-700/30 border-dashed"
+                ? "bg-amber-500/10 border border-amber-500/30 shadow-lg shadow-amber-500/10"
+                : value
+                    ? "bg-slate-800/40 border border-slate-700/50 hover:border-slate-600/50"
+                    : "bg-slate-800/20 border border-slate-700/30 border-dashed"
                 } rounded-lg p-3.5 backdrop-blur-sm`}
             animate={{
                 scale: highlighted ? 1.02 : 1,
@@ -362,10 +395,10 @@ function SkillsDataSection({ id, skills, highlighted, updating }: any) {
         <motion.div
             id={`field-${id}`}
             className={`relative transition-all duration-300 ${highlighted
-                    ? "bg-amber-500/10 border border-amber-500/30 shadow-lg shadow-amber-500/10"
-                    : skills?.length > 0
-                        ? "bg-gradient-to-br from-violet-500/10 to-purple-500/10 border border-violet-500/20"
-                        : "bg-slate-800/20 border border-slate-700/30 border-dashed"
+                ? "bg-amber-500/10 border border-amber-500/30 shadow-lg shadow-amber-500/10"
+                : skills?.length > 0
+                    ? "bg-gradient-to-br from-violet-500/10 to-purple-500/10 border border-violet-500/20"
+                    : "bg-slate-800/20 border border-slate-700/30 border-dashed"
                 } rounded-lg p-4 backdrop-blur-sm`}
             animate={{
                 scale: highlighted ? 1.01 : 1,
@@ -475,10 +508,10 @@ function MultiValueField({ id, icon: Icon, label, values, highlighted, updating,
         <motion.div
             id={`field-${id}`}
             className={`relative transition-all duration-300 ${highlighted
-                    ? "bg-amber-500/10 border border-amber-500/30 shadow-lg shadow-amber-500/10"
-                    : values?.length > 0
-                        ? `bg-gradient-to-br ${colors.glow} border ${colors.border}`
-                        : "bg-slate-800/20 border border-slate-700/30 border-dashed"
+                ? "bg-amber-500/10 border border-amber-500/30 shadow-lg shadow-amber-500/10"
+                : values?.length > 0
+                    ? `bg-gradient-to-br ${colors.glow} border ${colors.border}`
+                    : "bg-slate-800/20 border border-slate-700/30 border-dashed"
                 } rounded-lg p-3.5 backdrop-blur-sm`}
             animate={{
                 scale: highlighted ? 1.01 : 1,

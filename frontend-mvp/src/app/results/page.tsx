@@ -20,6 +20,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { EnrichedCandidate, ProgressResponse } from "@/types";
+import { useConversationWebSocket } from "@/hooks/useConversationWebSocket";
+
 
 function ResultsPageContent() {
   const router = useRouter();
@@ -40,6 +42,25 @@ function ResultsPageContent() {
   const [selectedCandidate, setSelectedCandidate] =
     useState<EnrichedCandidate | null>(null);
   const [shortlistedIds, setShortlistedIds] = useState<string[]>([]);
+  const [searchProgress, setSearchProgress] = useState({
+    status: 'searching',
+    message: 'Searching...',
+    progress: 0
+  });
+
+  const { isConnected } = useConversationWebSocket(
+    sessionId,
+    (update) => {
+      setSearchProgress(update);
+    },
+    (results) => {
+      // Search completed
+      console.log("Search completed:", results);
+    },
+    (error) => {
+      console.error("Search error:", error);
+    }
+  );
 
   // Redirect to login if not authenticated
   useEffect(() => {

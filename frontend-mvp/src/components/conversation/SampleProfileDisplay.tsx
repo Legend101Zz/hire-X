@@ -42,8 +42,11 @@ export default function SampleProfileDisplay({
         return (
             <Card className="bg-gray-900/50 border-gray-800 backdrop-blur-sm p-6 text-center">
                 <User className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                <p className="text-sm text-gray-400">
-                    No sample profile yet. Keep chatting with Donna!
+                <p className="text-sm text-gray-400 mb-2">
+                    No sample profile yet
+                </p>
+                <p className="text-xs text-gray-500">
+                    Keep chatting with Donna to find matching candidates!
                 </p>
             </Card>
         );

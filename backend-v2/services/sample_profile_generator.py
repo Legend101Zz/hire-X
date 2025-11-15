@@ -22,6 +22,8 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from pymongo.asynchronous.collection import AsyncCollection
+
 from core.logging_config import get_logger
 from models.conversation_models import IdealProfileCard, SampleProfile
 
@@ -34,7 +36,7 @@ class SampleProfileGenerator:
     
     def __init__(
         self,
-        profiles_collection,
+        profiles_collection: AsyncCollection,
         ai_scorer
     ):
         """
@@ -68,24 +70,45 @@ class SampleProfileGenerator:
             SampleProfile or None if no matches
         """
         
-        # Build MongoDB query
-        query = self._build_query(ideal_profile)
-        print('query',query)
-        # Fetch candidates
-        candidates = await self._fetch_candidates(query, limit=5)
-        print('candidates',candidates)
-        if not candidates:
+        try:
+            # ✅ CHECK: Profiles collection available?
+            if self.profiles_collection is None:
+                logger.warning("⚠️ Profiles collection not available - skipping sample generation")
+                return None
+            
+            # Build search query from ideal profile
+            query = self._build_query(ideal_profile)
+            
+            logger.info(f"Fetching sample candidates with query: {query}")
+            
+            # Fetch candidates from database
+            cursor = self.profiles_collection.find(query).limit(count)
+            candidates = await cursor.to_list(length=count)
+            
+            logger.info(f"Found {len(candidates)} sample candidates")
+            
+            if not candidates:
+                logger.warning("No sample candidates found matching criteria")
+                return None
+            
+            # Convert first candidate to SampleProfile
+            candidate = candidates[0]
+            
+            return SampleProfile(
+                profile_id=str(candidate.get("_id", "")),
+                name=candidate.get("name", "Sample Candidate"),
+                title=candidate.get("title", ideal_profile.role_title),
+                skills=self._extract_skills(candidate),
+                experience_years=self._extract_experience(candidate),
+                current_company=candidate.get("current_company", "Unknown"),
+                location=candidate.get("location", "India"),
+                industry=candidate.get("industry", "Technology"),
+                match_score=85  # Placeholder score
+            )
+        
+        except Exception as e:
+            logger.error(f"Error generating sample profile: {e}")
             return None
-        
-        # Score candidates (quick scoring)
-        scored = await self._score_candidates(candidates, ideal_profile)
-        
-        # Return top candidate
-        if scored:
-            top_candidate = scored[0]
-            return self._to_sample_profile(top_candidate)
-        
-        return None
     
     
     # ================================================================
