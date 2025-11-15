@@ -17,6 +17,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from core.logging_config import get_logger
 from data.redis_cache import RedisCache
 from models.conversation_models import (ConversationMessage, ConversationStage,
                                         ConversationState, IdealProfileCard,
@@ -25,7 +26,7 @@ from services.conversation_prompts import ConversationPrompts
 from services.model_config_manager import ModelConfigManager
 from services.sample_profile_generator import SampleProfileGenerator
 
-
+logger = get_logger(__name__)
 class ConversationManager:
     """
     Manages conversation flow and state for Donna.
@@ -111,18 +112,42 @@ class ConversationManager:
         # If JD provided, pre-fill profile
         if jd_data:
             state.ideal_profile = self._jd_to_profile(jd_data)
-            print('jd_to_profile',state.ideal_profile)
+            logger.info(f'JD to profile: {state.ideal_profile}')
             state.jd_uploaded = True
             state.stage = ConversationStage.REVIEW
             donna_reply = self.prompts.get_greeting_with_jd()
-            print('donna_reply',donna_reply)
-            # Generate sample profile
+            logger.info(f'Donna reply: {donna_reply}')
+            
+            # ✅ FIX: Handle V2 generator's dictionary response
+            sample_profile = None
             if self._has_minimum_info(state.ideal_profile):
-                sample_profile = await self.sample_generator.generate_sample(
-                    state.ideal_profile
-                )
-                state.sample_profile = sample_profile
-                print('sample-profile',state.sample_profile)
+                try:
+                    # V2 returns a dict, not a SampleProfile object
+                    result = await self.sample_generator.generate_sample(
+                        state.ideal_profile
+                    )
+                    
+                    # Extract the actual sample profile from the result dict
+                    if isinstance(result, dict):
+                        sample_profile = result.get("sample_profile")
+                        
+                        # If needs clarification, adjust the response
+                        if result.get("needs_clarification"):
+                            logger.warning("Sample generation needs clarification")
+                            # Optionally append clarifying questions to donna_reply
+                            questions = result.get("clarifying_questions", [])
+                            if questions:
+                                donna_reply += f"\n\n{questions[0]}"
+                    else:
+                        # Fallback for old generator (returns SampleProfile directly)
+                        sample_profile = result
+                    
+                    state.sample_profile = sample_profile
+                    logger.info(f'Sample profile: {sample_profile}')
+                    
+                except Exception as e:
+                    logger.error(f"Failed to generate sample profile: {e}")
+                    sample_profile = None
             else:
                 sample_profile = None
         
@@ -196,7 +221,7 @@ class ConversationManager:
             role="user",
             content=user_message
         ))
-        state.turn_csount += 1
+        state.turn_count += 1
         state.stage_turn_count += 1
         
         # Handle special actions
@@ -208,13 +233,26 @@ class ConversationManager:
         
         elif action == "show_sample":
             # Generate sample profile
-            sample_profile = await self.sample_generator.generate_sample(
+            result= await self.sample_generator.generate_sample(
                 state.ideal_profile
             )
-            state.sample_profile = sample_profile
-            donna_reply = self.prompts.present_sample_profile()
-            suggestions = ["Yes, looks good!", "No, adjust criteria"]
-        
+            # Handle V2 response
+            if isinstance(result, dict):
+                sample_profile = result.get("sample_profile")
+                if result.get("needs_clarification"):
+                    # Ask clarifying questions instead
+                    donna_reply = result["clarifying_questions"][0] if result["clarifying_questions"] else "Could you provide more details?"
+                    suggestions = ["Tell me more", "Try different criteria"]
+                else:
+                    state.sample_profile = sample_profile
+                    donna_reply = self.prompts.present_sample_profile()
+                    suggestions = ["Yes, looks good!", "No, adjust criteria"]
+            else:
+                # Old generator response
+                state.sample_profile = result
+                donna_reply = self.prompts.present_sample_profile()
+                suggestions = ["Yes, looks good!", "No, adjust criteria"]
+            
         # Regular message processing
         else:
             # Extract info from user message

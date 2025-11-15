@@ -52,7 +52,9 @@ class MongoDB:
         try:
             self.profiles_client = AsyncMongoClient(
                 settings.PROFILES_DB_URL,
-                serverSelectionTimeoutMS=5000
+                 serverSelectionTimeoutMS=5000,
+                socketTimeoutMS=60000,  # Add 60 second socket timeout
+                maxPoolSize=50
             )
             
             # Test connection 
@@ -87,11 +89,16 @@ class MongoDB:
             self.users_collection = main_db["users"]
             self.prompts_collection = main_db["prompts"]
             self.logs_collection = main_db["user_logs"]
+            self.sessions_collection = main_db["sessions"]
+            self.user_history_collection = main_db["user_history"]
             
             logger.info(f"✅ Main DB: {settings.DATABASE_NAME}")
             
             # Create indexes (now async)
-            await self._ensure_indexes()
+            indexes_ok = await self._ensure_indexes()
+            if not indexes_ok:
+                logger.warning("⚠️ Some indexes are missing - search may be slow")
+                logger.warning("💡 Run: python scripts/create_indexes.py")
             
         except ConnectionFailure as e:
             logger.error(f"❌ Failed to connect to Main DB: {e}")
@@ -107,11 +114,54 @@ class MongoDB:
             await self.prompts_collection.create_index("session_id", unique=True)
             await self.prompts_collection.create_index("prompt_id", unique=True)
             await self.prompts_collection.create_index([("username", 1), ("created_at", -1)])
-            
-            logger.info("Database indexes verified")
-            
         except OperationFailure as e:
             logger.error(f"Could not create indexes: {e}")
+            
+        if self.profiles_collection is None:
+            logger.warning("⚠️ Profiles collection not available")
+            return False
+        
+        try:
+            # Quick check - just get index names
+            cursor = await self.profiles_collection.list_indexes()
+            existing_indexes = await cursor.to_list(None)
+            existing_names = {idx["name"] for idx in existing_indexes}
+            
+            # Required indexes
+            required = {
+                "text_search_idx",      # or "idx_text_search" if that's your text index name
+                "exp_location_idx",
+                "industry_idx",
+                "exp_title_idx"
+            }
+            
+            # Check if text index exists (might have different name)
+            has_text_index = any(
+                "text" in name.lower() or idx.get("weights")
+                for name, idx in zip(existing_names, existing_indexes)
+            )
+            
+            # Remove text index from required if it exists with any name
+            if has_text_index:
+                required.discard("text_search_idx")
+                logger.info("✅ Text search index found")
+            
+            # Check for missing indexes
+            missing = required - existing_names
+            
+            if missing:
+                logger.warning(f"⚠️ Missing indexes: {missing}")
+                logger.warning("Run 'python scripts/create_indexes.py' to create them")
+                return False
+            
+            logger.info(f"✅ All conversation indexes verified ({len(required)} indexes)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error verifying indexes: {e}")
+            return False
+            
+            
     
     # ========================================================================
     # Scorecard Operations
@@ -203,7 +253,7 @@ class MongoDB:
         except Exception as e:
             logger.error(f"Failed to get user scorecards: {e}")
             return []
-    
+      
     # ========================================================================
     # Profile Operations (56M Profiles)
     # ========================================================================

@@ -70,14 +70,14 @@ CRITICAL RULES:
     @staticmethod
     def get_greeting_with_jd() -> str:
         """Greeting when JD is uploaded."""
-        return """Perfect! I've analyzed your JD. Let me show you what I found. 📋
+        return """Perfect! I've analyzed your JD. Let me show you what I found. 
 
 Does this match what you're looking for?"""
     
     @staticmethod
     def get_greeting_without_jd() -> str:
         """Greeting when starting fresh."""
-        return """Hi! Let's find your ideal candidate. 👋
+        return """Hi! Let's find your ideal candidate. 
 
 What role are you hiring for?"""
     
