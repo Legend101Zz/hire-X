@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Conversation API functions for backend-v2 (Donna AI)
  */
@@ -5,7 +6,6 @@
 import { apiCall, handleApiResponse } from "../api";
 import type {
   StartConversationRequest,
-  StartConversationResponse,
   SendMessageRequest,
   SampleProfile,
   ConversationState,
@@ -196,6 +196,66 @@ export const deleteConversation = async (
 ): Promise<{ message: string }> => {
   const response = await apiCall(`/conversation/${sessionId}`, {
     method: "DELETE",
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Generate samples using CrewAI intelligent search
+ */
+export const intelligentSearch = async (
+  token: string,
+  idealProfile: any,
+  count: number = 5
+): Promise<{
+  success: boolean;
+  candidates: any[];
+  metadata: {
+    iterations: number;
+    final_query: any;
+    crew_output: string;
+  };
+}> => {
+  const response = await apiCall("/intelligent-search/generate-samples", {
+    method: "POST",
+    body: JSON.stringify({
+      ideal_profile: idealProfile,
+      count: count,
+    }),
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Refine search based on user feedback (CrewAI)
+ */
+export const refineSearch = async (
+  token: string,
+  idealProfile: any,
+  feedback: string,
+  previousQuery: any,
+  count: number = 5
+): Promise<{
+  success: boolean;
+  candidates: any[];
+  metadata: {
+    iterations: number;
+    final_query: any;
+    refinement_applied: boolean;
+  };
+}> => {
+  const response = await apiCall("/intelligent-search/refine-search", {
+    method: "POST",
+    body: JSON.stringify({
+      ideal_profile: idealProfile,
+      user_feedback: feedback,
+      previous_query: previousQuery,
+      count: count,
+    }),
     token,
   });
 

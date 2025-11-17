@@ -22,6 +22,7 @@ import {
   Rocket,
   ChevronDown,
   ChevronUp,
+
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,8 @@ export default function SearchPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+
+  const [useIntelligentSearch, setUseIntelligentSearch] = useState(true);
 
   // Validate input
   useEffect(() => {
@@ -389,7 +392,7 @@ export default function SearchPage() {
                         <div className="p-4 bg-primary/5 border border-primary/10 rounded-lg space-y-3">
                           <Label className="text-base font-semibold flex items-center gap-2">
                             <Sparkles className="w-4 h-4 text-primary" />
-                            What's not good? How should we improve it?
+                            What&apos;s not good? How should we improve it?
                           </Label>
 
                           <Textarea
@@ -521,7 +524,7 @@ export default function SearchPage() {
                         Pro Tip
                       </p>
                       <p className="text-muted-foreground text-xs mt-1">
-                        The more specific your JD, the better matches you'll get. Include required skills, experience level, and key responsibilities.
+                        The more specific your JD, the better matches you&apos;ll get. Include required skills, experience level, and key responsibilities.
                       </p>
                     </div>
                   </motion.div>
@@ -731,22 +734,22 @@ export default function SearchPage() {
                           >
                             <div
                               className={`p-4 rounded-lg border-2 transition-all duration-300 ${filters.locationEnabled
-                                  ? "bg-primary/5 border-primary/30"
-                                  : "bg-muted/30 border-border/50 opacity-60"
+                                ? "bg-primary/5 border-primary/30"
+                                : "bg-muted/30 border-border/50 opacity-60"
                                 }`}
                             >
                               <div className="flex items-center justify-between mb-3">
                                 <div className="flex items-center gap-2">
                                   <div
                                     className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${filters.locationEnabled
-                                        ? "bg-primary/20"
-                                        : "bg-muted"
+                                      ? "bg-primary/20"
+                                      : "bg-muted"
                                       }`}
                                   >
                                     <MapPin
                                       className={`w-4 h-4 transition-colors ${filters.locationEnabled
-                                          ? "text-primary"
-                                          : "text-muted-foreground"
+                                        ? "text-primary"
+                                        : "text-muted-foreground"
                                         }`}
                                     />
                                   </div>
@@ -770,8 +773,8 @@ export default function SearchPage() {
                                         opacity: filters.locationEnabled ? 1 : 0.5,
                                       }}
                                       className={`text-xs font-bold px-2 py-1 rounded-full ${filters.locationEnabled
-                                          ? "bg-primary/20 text-primary"
-                                          : "bg-muted text-muted-foreground"
+                                        ? "bg-primary/20 text-primary"
+                                        : "bg-muted text-muted-foreground"
                                         }`}
                                     >
                                       {filters.locationEnabled ? "ON" : "OFF"}
@@ -879,6 +882,89 @@ export default function SearchPage() {
                               />
                             </div>
                           </motion.div>
+
+                          {/* Intelligent Search Toggle */}
+                          <motion.div
+                            initial={{ y: -20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ delay: 0.3 }}
+                            className="md:col-span-2"
+                          >
+                            <div
+                              className={`p-4 rounded-lg border-2 transition-all duration-300 ${useIntelligentSearch
+                                ? "bg-purple-500/5 border-purple-500/30"
+                                : "bg-muted/30 border-border/50"
+                                }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <div
+                                    className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${useIntelligentSearch ? "bg-purple-500/20" : "bg-muted"
+                                      }`}
+                                  >
+                                    <Brain
+                                      className={`w-5 h-5 transition-colors ${useIntelligentSearch
+                                        ? "text-purple-500"
+                                        : "text-muted-foreground"
+                                        }`}
+                                    />
+                                  </div>
+                                  <div className="flex-1">
+                                    <Label className="text-sm font-semibold flex items-center gap-2">
+                                      Intelligent AI Search
+                                      <Badge variant="outline" className="text-xs border-purple-500/30 text-purple-400">
+                                        BETA
+                                      </Badge>
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                      {useIntelligentSearch
+                                        ? "Multi-agent system will optimize your search"
+                                        : "Use standard search algorithm"}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-3">
+                                  <motion.div
+                                    animate={{
+                                      scale: useIntelligentSearch ? 1 : 0.9,
+                                      opacity: useIntelligentSearch ? 1 : 0.5,
+                                    }}
+                                    className={`text-xs font-bold px-2 py-1 rounded-full ${useIntelligentSearch
+                                      ? "bg-purple-500/20 text-purple-400"
+                                      : "bg-muted text-muted-foreground"
+                                      }`}
+                                  >
+                                    {useIntelligentSearch ? "ON" : "OFF"}
+                                  </motion.div>
+                                  <Switch
+                                    checked={useIntelligentSearch}
+                                    onCheckedChange={setUseIntelligentSearch}
+                                    disabled={isLoading}
+                                  />
+                                </div>
+                              </div>
+
+                              {useIntelligentSearch && (
+                                <motion.div
+                                  initial={{ opacity: 0, y: -10 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  className="mt-3 flex items-start gap-2 p-3 bg-purple-500/10 border border-purple-500/20 rounded-md"
+                                >
+                                  <Sparkles className="w-4 h-4 text-purple-400 flex-shrink-0 mt-0.5" />
+                                  <div className="text-xs">
+                                    <p className="text-purple-400 font-semibold mb-1">How it works:</p>
+                                    <ul className="space-y-1 text-purple-300/80">
+                                      <li>• JD Analyst understands your requirements deeply</li>
+                                      <li>• Query Strategist builds optimal database queries</li>
+                                      <li>• Search Validator ensures quality results</li>
+                                    </ul>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </div>
+                          </motion.div>
+
                         </motion.div>
                       )}
                     </AnimatePresence>
@@ -911,8 +997,8 @@ export default function SearchPage() {
                       onClick={handleSearch}
                       disabled={!isValidInput || isLoading}
                       className={`w-full h-14 text-base font-bold relative overflow-hidden group transition-all duration-300 ${isValidInput
-                          ? "bg-yellow-500 hover:bg-yellow-600 text-black shadow-lg shadow-yellow-500/50"
-                          : "bg-muted text-muted-foreground cursor-not-allowed"
+                        ? "bg-yellow-500 hover:bg-yellow-600 text-black shadow-lg shadow-yellow-500/50"
+                        : "bg-muted text-muted-foreground cursor-not-allowed"
                         }`}
                     >
                       {isLoading ? (

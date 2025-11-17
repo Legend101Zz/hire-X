@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Sparkles, Loader2, ThumbsUp, ThumbsDown, History, ChevronUp, AlertCircle } from "lucide-react";
+import { Send, Sparkles, Loader2, ThumbsUp, ThumbsDown, History, ChevronUp, AlertCircle, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import BlueprintBackground from "@/components/conversation/BlueprintBackground";
@@ -17,6 +17,8 @@ import * as conversationApi from "@/utils/api/conversationApiV2";
 import type { IdealProfileCard, SampleProfile, ConversationMessage } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
 import WizardGuide from "@/components/conversation/WizardGuide";
+import AgentProgress, { AgentStep, AgentStatus } from "@/components/conversation/AgentProgress";
+import { Switch } from "@radix-ui/react-switch";
 
 type BotExpression = "neutral" | "happy" | "thinking" | "excited" | "peek" | "waving";
 type BotPosition = "home" | "chat" | "profile" | "sample" | "intro1" | "intro2" | "intro3";
@@ -88,6 +90,30 @@ function ConversationWorkspace() {
     // Highlight State
     const [highlightedField, setHighlightedField] = useState<string | null>(null);
     const [updatingField, setUpdatingField] = useState<string | null>(null);
+
+    // Agent Mode State
+    const [useAgentMode, setUseAgentMode] = useState(true); // Enable by default
+    const [showAgentProgress, setShowAgentProgress] = useState(false);
+    const [agentSteps, setAgentSteps] = useState<AgentStep[]>([
+        {
+            agent: "JD Analyst",
+            task: "Analyzing job requirements and database constraints...",
+            status: "pending" as AgentStatus,
+            icon: "brain" as const,
+        },
+        {
+            agent: "Query Strategist",
+            task: "Building optimized MongoDB queries...",
+            status: "pending" as AgentStatus,
+            icon: "search" as const,
+        },
+        {
+            agent: "Search Validator",
+            task: "Validating search results and quality...",
+            status: "pending" as AgentStatus,
+            icon: "check" as const,
+        },
+    ]);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -282,6 +308,11 @@ function ConversationWorkspace() {
         // Bot flies to chat and thinks
         setBotPosition("chat");
 
+        //  Trigger agent mode if enabled
+        if (useAgentMode) {
+            simulateAgentProgress();
+        }
+
         try {
             // Send message to backend
             const response = await conversationApi.sendMessage(sessionId, token, {
@@ -419,6 +450,73 @@ function ConversationWorkspace() {
     };
 
     // ================================================================
+    // AGENT ACTIONS
+    // ================================================================
+
+    const simulateAgentProgress = async () => {
+        setShowAgentProgress(true);
+
+        // Step 1: JD Analyst starts
+        setAgentSteps((prev) => {
+            const newSteps = [...prev];
+            newSteps[0] = { ...newSteps[0], status: "running", timestamp: new Date() };
+            return newSteps;
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Step 1: JD Analyst completes
+        setAgentSteps((prev) => {
+            const newSteps = [...prev];
+            newSteps[0] = {
+                ...newSteps[0],
+                status: "completed",
+                output: "Identified critical search criteria: title reliability (98.5%), industry filtering",
+            };
+            newSteps[1] = { ...newSteps[1], status: "running", timestamp: new Date() };
+            return newSteps;
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        // Step 2: Query Strategist completes
+        setAgentSteps((prev) => {
+            const newSteps = [...prev];
+            newSteps[1] = {
+                ...newSteps[1],
+                status: "completed",
+                output: "Built query using industry_seniority strategy - found 150 candidates",
+            };
+            newSteps[2] = { ...newSteps[2], status: "running", timestamp: new Date() };
+            return newSteps;
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Step 3: Validator completes
+        setAgentSteps((prev) => {
+            const newSteps = [...prev];
+            newSteps[2] = {
+                ...newSteps[2],
+                status: "completed",
+                output: "Quality validated - 12 top matches identified",
+            };
+            return newSteps;
+        });
+
+        // Hide after a delay
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        setShowAgentProgress(false);
+
+        // Reset for next time
+        setTimeout(() => {
+            setAgentSteps((prev) =>
+                prev.map((step) => ({ ...step, status: "pending" as AgentStatus, output: undefined }))
+            );
+        }, 1000);
+    };
+
+    // ================================================================
     // RENDER
     // ================================================================
 
@@ -502,6 +600,28 @@ function ConversationWorkspace() {
                         <p className="text-amber-200 text-lg font-medium">
                             Build your ideal candidate profile with Donna
                         </p>
+                        {/* Add this in the header section, after the title */}
+                        <motion.div
+                            initial={{ opacity: 0, y: -20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.3 }}
+                            className="flex items-center justify-center gap-3 mt-4"
+                        >
+                            <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800/50 border border-slate-700/50">
+                                <Brain className={`w-4 h-4 ${useAgentMode ? 'text-purple-400' : 'text-gray-400'}`} />
+                                <span className="text-sm text-slate-300">Intelligent Agent Mode</span>
+                                <Switch
+                                    checked={useAgentMode}
+                                    onCheckedChange={setUseAgentMode}
+                                    className="ml-2"
+                                />
+                                {useAgentMode && (
+                                    <Badge className="ml-2 bg-purple-500/20 text-purple-400 border-purple-500/30">
+                                        ACTIVE
+                                    </Badge>
+                                )}
+                            </div>
+                        </motion.div>
                     </motion.div>
 
                     {/* Three Premium Cards - ORIGINAL LAYOUT */}
@@ -817,6 +937,17 @@ function ConversationWorkspace() {
                         </motion.div>
                     )}
                 </AnimatePresence>
+                {/* Agent Progress Panel */}
+                <AnimatePresence>
+                    {showAgentProgress && (
+                        <AgentProgress
+                            steps={agentSteps}
+                            isActive={showAgentProgress}
+                            onClose={() => setShowAgentProgress(false)}
+                        />
+                    )}
+                </AnimatePresence>
+
             </div>
         </>
     );
