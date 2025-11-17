@@ -152,10 +152,18 @@ function ConversationWorkspace() {
                 // Check if the last message indicates we need clarification
                 const lastMessage = state.messages[state.messages.length - 1];
                 if (lastMessage && lastMessage.role === "assistant") {
-                    if (lastMessage.content.includes("couldn't find any matching candidates")) {
+                    if (lastMessage.content.includes("couldn't find any matching candidates") ||
+                        lastMessage.content.includes("couldn't find matching candidates")) {
                         // Donna is asking for clarification
                         setBotExpression("thinking");
+                        setBotPosition("chat"); // Move to chat area
                         setSpeechBubble("Let's refine the search together!");
+                        setShowSpeech(true);
+                    } else if (state.sample_profile) {
+                        // Sample found - show it
+                        setBotExpression("excited");
+                        setBotPosition("sample");
+                        setSpeechBubble("Here's a great match!");
                         setShowSpeech(true);
                     }
                 }

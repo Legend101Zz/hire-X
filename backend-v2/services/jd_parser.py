@@ -139,6 +139,96 @@ class JDParser:
             raise ValueError(f"Failed to extract PDF: {str(e)}")
     
     
+    async def parse_jd_text(
+        self,
+        jd_text: str,
+        username: str
+    ) -> Dict:
+        """
+        Parse JD from plain text (not a file).
+        
+        Args:
+            jd_text: JD text content
+            username: Username for model config
+        
+        Returns:
+            Parsed JD data
+        """
+        
+        system_prompt = """You are a job description analyzer.
+
+    Extract structured information from the job description and return ONLY a JSON object.
+
+    Required JSON structure:
+    {
+        "role_title": string (job title),
+        "required_skills": array of strings (must-have technical skills),
+        "preferred_skills": array of strings (nice-to-have skills),
+        "seniority": string (Junior/Mid/Senior/Lead),
+        "experience_years": string (e.g. "5+", "3-5"),
+        "responsibilities": string (key responsibilities),
+        "qualifications": string (required qualifications),
+        "industries": array of strings (target industries if mentioned),
+        "company_size": array of strings (if mentioned)
+    }
+
+    Rules:
+    - Extract actual skills mentioned (e.g. "React", "Python", "AWS")
+    - Distinguish between required vs preferred skills
+    - Be specific with seniority and experience
+    - If not mentioned, use empty string or empty array
+    - Return ONLY valid JSON, no explanations"""
+        
+        user_prompt = f"Job Description:\n\n{jd_text}\n\nExtract structured data as JSON:"
+        
+        model_config = await self.model_config.get_user_config(username)
+        
+        response = await self.model_config.call_model(
+            model_config=model_config,
+            model_purpose="extraction",
+            system_prompt=system_prompt,
+            user_message=user_prompt,
+            temperature=0.3,
+            username=username
+        )
+        
+        try:
+            clean_response = response.strip()
+            if clean_response.startswith("```json"):
+                clean_response = clean_response[7:]
+            if clean_response.startswith("```"):
+                clean_response = clean_response[3:]
+            if clean_response.endswith("```"):
+                clean_response = clean_response[:-3]
+            clean_response = clean_response.strip()
+            
+            # Parse cleaned JSON
+            parsed_data = json.loads(clean_response)
+            
+            # VALIDATE STRUCTURE (ensure all required fields exist)
+            required_fields = [
+                "role_title", "required_skills", "preferred_skills",
+                "seniority", "experience_years", "responsibilities",
+                "qualifications", "industries", "company_size"
+            ]
+            
+            for field in required_fields:
+                if field not in parsed_data:
+                    # Use empty array for list fields, empty string for others
+                    if field in ["required_skills", "preferred_skills", "industries", "company_size"]:
+                        parsed_data[field] = []
+                    else:
+                        parsed_data[field] = ""
+            
+            logger.info(f"Parsed JD text successfully")
+            return parsed_data
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JD text: {e}")
+            logger.error(f"Raw response: {response[:500]}")  # Log first 500 chars for debugging
+            # FALLBACK: Use regex extraction as last resort
+            return self._fallback_extraction(jd_text)
+    
     def _extract_from_docx(self, file_bytes: bytes) -> str:
         """
         Extract text from DOCX file.

@@ -34,6 +34,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Textarea
+} from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/contexts/AuthContext";
@@ -61,6 +64,17 @@ export default function SearchPage() {
   const [error, setError] = useState<string | null>(null);
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [isValidInput, setIsValidInput] = useState(false);
+
+  // JD Generation states
+  const [jdGenerationMode, setJdGenerationMode] = useState(false);
+  const [generatedJD, setGeneratedJD] = useState("");
+  const [jdSessionId, setJdSessionId] = useState("");
+  const [originalQuery, setOriginalQuery] = useState("");
+  const [retryCount, setRetryCount] = useState(0);
+  const [refineFeedback, setRefineFeedback] = useState("");
+  const [showRefineInput, setShowRefineInput] = useState(false);
+  const MAX_RETRIES = 2;
+
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -136,8 +150,7 @@ export default function SearchPage() {
     setError(null);
 
     try {
-      let response;
-
+      // If JD file uploaded, proceed normally
       if (searchMode === "jd" && jdFile) {
         const reader = new FileReader();
         reader.readAsDataURL(jdFile);
@@ -146,17 +159,25 @@ export default function SearchPage() {
         });
         const base64 = (reader.result as string).split(",")[1];
 
-        response = await conversationApi.startConversation(token, {
+        const response = await conversationApi.startConversation(token, {
           jd_file_content: base64,
           jd_file_name: jdFile.name,
         });
-      } else {
-        response = await conversationApi.startConversation(token, {
-          initial_message: query,
-        });
+
+        router.push(`/conversation?session=${response.session_id}`);
       }
 
-      router.push(`/conversation?session=${response.session_id}`);
+      // If text search, generate JD first
+      else {
+        setOriginalQuery(query);
+
+        const jdResponse = await conversationApi.generateJD(token, query);
+
+        setGeneratedJD(jdResponse.jd_text);
+        setJdSessionId(jdResponse.session_id);
+        setJdGenerationMode(true);  // Show JD review UI
+        setRetryCount(0);
+      }
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "An unexpected error occurred";
@@ -165,6 +186,73 @@ export default function SearchPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleRefineJD = async () => {
+    if (!refineFeedback.trim()) {
+      setError("Please provide feedback on what to improve");
+      return;
+    }
+
+    if (retryCount >= MAX_RETRIES) {
+      setError("Maximum refinement attempts reached");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const refineResponse = await conversationApi.refineJD(token!, {
+        session_id: jdSessionId,
+        original_query: originalQuery,
+        previous_jd: generatedJD,
+        feedback: refineFeedback,
+        retry_count: retryCount,
+      });
+
+      setGeneratedJD(refineResponse.jd_text);
+      setRetryCount(refineResponse.retry_count);
+      setRefineFeedback("");
+      setShowRefineInput(false);
+
+      if (refineResponse.max_retries_reached) {
+        setError("Maximum refinements reached. Proceeding with current JD.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Refinement failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Proceed with generated JD
+  const handleProceedWithJD = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await conversationApi.startConversationWithJD(
+        token!,
+        generatedJD
+      );
+
+      router.push(`/conversation?session=${response.session_id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start conversation");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // NEW: Cancel JD generation
+  const handleCancelJDGeneration = () => {
+    setJdGenerationMode(false);
+    setGeneratedJD("");
+    setJdSessionId("");
+    setRetryCount(0);
+    setRefineFeedback("");
+    setShowRefineInput(false);
   };
 
   const exampleQueries = [
@@ -210,469 +298,686 @@ export default function SearchPage() {
           </p>
         </motion.div>
 
-        {/* Main Search Card */}
-        <motion.div
-          ref={cardRef}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.2 }}
-          className="max-w-4xl mx-auto"
-        >
-          <Card
-            className="shadow-2xl border-border/50 backdrop-blur-xl bg-card/80 spotlight"
-            style={
-              {
-                "--mouse-x": `${mousePosition.x}px`,
-                "--mouse-y": `${mousePosition.y}px`,
-              } as React.CSSProperties
-            }
-          >
-            <CardContent className="p-8 space-y-6">
-              {/* Search Mode Toggle */}
-              <div className="flex items-center justify-center gap-2 p-1 bg-muted/50 rounded-lg w-fit mx-auto">
-                <Button
-                  variant={searchMode === "text" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => setSearchMode("text")}
-                  className="gap-2"
-                >
-                  <Search className="w-4 h-4" />
-                  Text Search
-                </Button>
-                <Button
-                  variant={searchMode === "jd" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => setSearchMode("jd")}
-                  className="gap-2"
-                >
-                  <Upload className="w-4 h-4" />
-                  Upload JD
-                </Button>
-              </div>
-
-              <AnimatePresence mode="wait">
-                {searchMode === "text" ? (
-                  <motion.div
-                    key="text"
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 20 }}
-                    className="space-y-4"
-                  >
-                    <div className="space-y-2">
-                      <Label
-                        htmlFor="search"
-                        className="text-base font-semibold"
-                      >
-                        Describe your ideal candidate
-                      </Label>
-                      <div className="relative group">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground group-focus-within:text-primary transition-colors" />
-                        <Input
-                          id="search"
-                          value={query}
-                          onChange={(e) => setQuery(e.target.value)}
-                          onKeyDown={(e) =>
-                            e.key === "Enter" && isValidInput && handleSearch()
-                          }
-                          placeholder="e.g., Senior React Developer with 5+ years experience in fintech..."
-                          className="pl-12 h-14 text-lg border-2 focus:border-primary transition-all"
-                          disabled={isLoading}
-                        />
-                        {query.trim() && (
-                          <motion.div
-                            initial={{ scale: 0 }}
-                            animate={{ scale: 1 }}
-                            className="absolute right-4 top-1/2 -translate-y-1/2"
-                          >
-                            <CheckCircle2 className="w-5 h-5 text-green-500" />
-                          </motion.div>
-                        )}
-                      </div>
+        {/* Main Content - Conditional based on mode */}
+        <AnimatePresence mode="wait">
+          {jdGenerationMode ? (
+            // JD Review & Refinement UI
+            <motion.div
+              key="jd-review"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.5 }}
+              className="max-w-4xl mx-auto space-y-6"
+            >
+              <Card className="shadow-2xl border-border/50 backdrop-blur-xl bg-card/80">
+                <CardContent className="p-8 space-y-6">
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold flex items-center gap-2">
+                        <FileCheck className="w-6 h-6 text-primary" />
+                        Generated Job Description
+                      </h2>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Review and edit the JD, or ask AI to refine it
+                      </p>
                     </div>
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="jd"
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    className="space-y-4"
-                  >
-                    <div className="space-y-2">
-                      <Label className="text-base font-semibold">
-                        Upload Job Description
-                      </Label>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".pdf,.doc,.docx,.txt"
-                        onChange={handleFileSelect}
-                        className="hidden"
-                      />
-
-                      {!jdFile ? (
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          disabled={isLoading}
-                          className="w-full h-32 border-2 border-dashed border-border hover:border-primary rounded-lg flex flex-col items-center justify-center gap-2 transition-all hover:bg-primary/5 group"
-                        >
-                          <Upload className="w-8 h-8 text-muted-foreground group-hover:text-primary transition-colors" />
-                          <p className="text-sm font-medium">
-                            Click to upload or drag and drop
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            PDF, DOC, DOCX, or TXT (max 10MB)
-                          </p>
-                        </button>
-                      ) : (
-                        <motion.div
-                          initial={{ scale: 0.9, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          className="p-4 bg-green-500/10 border-2 border-green-500/30 rounded-lg flex items-center justify-between"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center">
-                              <FileCheck className="w-5 h-5 text-green-500" />
-                            </div>
-                            <div>
-                              <p className="font-medium flex items-center gap-2">
-                                {jdFile.name}
-                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {(jdFile.size / 1024).toFixed(2)} KB
-                              </p>
-                            </div>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setJdFile(null)}
-                            disabled={isLoading}
-                            className="hover:bg-destructive/10 hover:text-destructive"
-                          >
-                            <X className="w-4 h-4" />
-                          </Button>
-                        </motion.div>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Advanced Filters Toggle */}
-              <div className="space-y-4">
-                <Button
-                  variant="ghost"
-                  onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-                  className="w-full justify-between hover:bg-muted/50 group"
-                  disabled={isLoading}
-                >
-                  <div className="flex items-center gap-2">
-                    <SlidersHorizontal className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
-                    <span className="font-semibold text-sm">
-                      Advanced Filters
-                    </span>
                     <Badge
-                      variant="secondary"
-                      className="text-xs group-hover:bg-primary/10 group-hover:text-primary transition-colors"
+                      variant={retryCount >= MAX_RETRIES ? "destructive" : "secondary"}
+                      className="text-sm px-3 py-1"
                     >
-                      Optional
+                      {retryCount}/{MAX_RETRIES} refinements used
                     </Badge>
                   </div>
-                  <motion.div
-                    animate={{ rotate: showAdvancedFilters ? 180 : 0 }}
-                    transition={{ duration: 0.3 }}
-                  >
-                    <ChevronDown className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
-                  </motion.div>
-                </Button>
 
-                {/* Collapsible Advanced Filters */}
-                <AnimatePresence>
-                  {showAdvancedFilters && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                      className="overflow-hidden space-y-4"
-                    >
-                      <Separator />
+                  <Separator />
 
-                      {/* Location Filter with Visual Toggle */}
+                  {/* JD Text Area */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-base font-semibold flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-primary" />
+                        Job Description
+                      </Label>
+                      <span className="text-xs text-muted-foreground">
+                        {generatedJD.length} characters
+                      </span>
+                    </div>
+
+                    <Textarea
+                      value={generatedJD}
+                      onChange={(e) => setGeneratedJD(e.target.value)}
+                      className="min-h-[400px] font-mono text-sm resize-none focus:ring-2 focus:ring-primary/20 transition-all"
+                      placeholder="Generated JD will appear here..."
+                      disabled={isLoading}
+                    />
+
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                      <span>You can directly edit the text above</span>
+                    </div>
+                  </div>
+
+                  {/* Error Message */}
+                  <AnimatePresence>
+                    {error && (
                       <motion.div
-                        initial={{ y: -20, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        transition={{ delay: 0.1 }}
-                        className="relative"
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3"
                       >
-                        <div
-                          className={`p-4 rounded-lg border-2 transition-all duration-300 ${filters.locationEnabled
-                            ? "bg-primary/5 border-primary/30"
-                            : "bg-muted/30 border-border/50 opacity-60"
-                            }`}
-                        >
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <div
-                                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${filters.locationEnabled
-                                  ? "bg-primary/20"
-                                  : "bg-muted"
-                                  }`}
-                              >
-                                <MapPin
-                                  className={`w-4 h-4 transition-colors ${filters.locationEnabled
-                                    ? "text-primary"
-                                    : "text-muted-foreground"
-                                    }`}
-                                />
-                              </div>
-                              <div>
-                                <Label className="text-sm font-semibold">
-                                  Location Filter
-                                </Label>
-                                <p className="text-xs text-muted-foreground">
-                                  {filters.locationEnabled
-                                    ? "Location filtering enabled"
-                                    : "Candidates from all locations"}
-                                </p>
-                              </div>
-                            </div>
+                        <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                        <p className="text-destructive text-sm font-medium">{error}</p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-                            <div className="flex items-center gap-3">
-                              <div className="flex items-center gap-2">
-                                <motion.div
-                                  animate={{
-                                    scale: filters.locationEnabled ? 1 : 0.9,
-                                    opacity: filters.locationEnabled ? 1 : 0.5,
-                                  }}
-                                  className={`text-xs font-bold px-2 py-1 rounded-full ${filters.locationEnabled
-                                    ? "bg-primary/20 text-primary"
-                                    : "bg-muted text-muted-foreground"
-                                    }`}
-                                >
-                                  {filters.locationEnabled ? "ON" : "OFF"}
-                                </motion.div>
-                                <Switch
-                                  checked={filters.locationEnabled}
-                                  onCheckedChange={(checked) =>
-                                    setFilters({
-                                      ...filters,
-                                      locationEnabled: checked,
-                                    })
-                                  }
-                                  disabled={isLoading}
-                                />
-                              </div>
-                            </div>
+                  {/* Refinement Input Section */}
+                  <AnimatePresence>
+                    {showRefineInput && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className="space-y-3 overflow-hidden"
+                      >
+                        <Separator />
+
+                        <div className="p-4 bg-primary/5 border border-primary/10 rounded-lg space-y-3">
+                          <Label className="text-base font-semibold flex items-center gap-2">
+                            <Sparkles className="w-4 h-4 text-primary" />
+                            What's not good? How should we improve it?
+                          </Label>
+
+                          <Textarea
+                            value={refineFeedback}
+                            onChange={(e) => setRefineFeedback(e.target.value)}
+                            className="min-h-[120px] resize-none focus:ring-2 focus:ring-primary/20"
+                            placeholder="e.g., 'Too vague about technical skills, need more specific requirements for React and Node.js...'"
+                            disabled={isLoading}
+                          />
+
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={handleRefineJD}
+                              disabled={isLoading || !refineFeedback.trim()}
+                              className="flex-1 bg-primary hover:bg-primary/90"
+                            >
+                              {isLoading ? (
+                                <span className="flex items-center gap-2">
+                                  <motion.div
+                                    animate={{ rotate: 360 }}
+                                    transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                  >
+                                    <Sparkles className="w-4 h-4" />
+                                  </motion.div>
+                                  Refining JD...
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-2">
+                                  <Sparkles className="w-4 h-4" />
+                                  Refine JD ({MAX_RETRIES - retryCount} left)
+                                </span>
+                              )}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                setShowRefineInput(false);
+                                setRefineFeedback("");
+                              }}
+                              disabled={isLoading}
+                            >
+                              Cancel
+                            </Button>
                           </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-                          <AnimatePresence>
-                            {filters.locationEnabled && (
+                  <Separator />
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-3">
+                    <motion.div
+                      className="flex-1"
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      <Button
+                        onClick={handleProceedWithJD}
+                        disabled={isLoading || !generatedJD.trim()}
+                        className="w-full h-12 bg-green-500 hover:bg-green-600 text-white font-bold shadow-lg shadow-green-500/20"
+                      >
+                        <CheckCircle2 className="w-5 h-5 mr-2" />
+                        Looks Good, Proceed
+                      </Button>
+                    </motion.div>
+
+                    <motion.div
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      <Button
+                        variant="outline"
+                        onClick={() => setShowRefineInput(!showRefineInput)}
+                        disabled={isLoading || retryCount >= MAX_RETRIES}
+                        className="h-12 px-6 border-2"
+                      >
+                        <Sparkles className="w-5 h-5 mr-2" />
+                        {retryCount >= MAX_RETRIES ? "Max Retries" : "Refine JD"}
+                      </Button>
+                    </motion.div>
+
+                    <motion.div
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      <Button
+                        variant="ghost"
+                        onClick={handleCancelJDGeneration}
+                        disabled={isLoading}
+                        className="h-12 px-6"
+                      >
+                        <X className="w-5 h-5 mr-2" />
+                        Cancel
+                      </Button>
+                    </motion.div>
+                  </div>
+
+                  {/* Max Retries Warning */}
+                  {retryCount >= MAX_RETRIES && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/20 flex items-start gap-3"
+                    >
+                      <AlertCircle className="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-yellow-600 dark:text-yellow-400 text-sm font-semibold">
+                          Maximum refinements reached
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          You can still manually edit the JD above, or proceed with the current version.
+                        </p>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* Info Card */}
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.3 }}
+                    className="p-4 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-start gap-3"
+                  >
+                    <AlertCircle className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                      <p className="text-blue-600 dark:text-blue-400 font-medium">
+                        Pro Tip
+                      </p>
+                      <p className="text-muted-foreground text-xs mt-1">
+                        The more specific your JD, the better matches you'll get. Include required skills, experience level, and key responsibilities.
+                      </p>
+                    </div>
+                  </motion.div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          ) : (
+            // Normal Search UI
+            <motion.div
+              key="search"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.5 }}
+              className="max-w-4xl mx-auto"
+            >
+              <Card
+                ref={cardRef}
+                className="shadow-2xl border-border/50 backdrop-blur-xl bg-card/80 spotlight"
+                style={
+                  {
+                    "--mouse-x": `${mousePosition.x}px`,
+                    "--mouse-y": `${mousePosition.y}px`,
+                  } as React.CSSProperties
+                }
+              >
+                <CardContent className="p-8 space-y-6">
+                  {/* Search Mode Toggle */}
+                  <div className="flex items-center justify-center gap-2 p-1 bg-muted/50 rounded-lg w-fit mx-auto">
+                    <Button
+                      variant={searchMode === "text" ? "default" : "ghost"}
+                      size="sm"
+                      onClick={() => setSearchMode("text")}
+                      className="gap-2"
+                    >
+                      <Search className="w-4 h-4" />
+                      Text Search
+                    </Button>
+                    <Button
+                      variant={searchMode === "jd" ? "default" : "ghost"}
+                      size="sm"
+                      onClick={() => setSearchMode("jd")}
+                      className="gap-2"
+                    >
+                      <Upload className="w-4 h-4" />
+                      Upload JD
+                    </Button>
+                  </div>
+
+                  <AnimatePresence mode="wait">
+                    {searchMode === "text" ? (
+                      <motion.div
+                        key="text"
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 20 }}
+                        className="space-y-4"
+                      >
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="search"
+                            className="text-base font-semibold"
+                          >
+                            Describe your ideal candidate
+                          </Label>
+                          <div className="relative group">
+                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                            <Input
+                              id="search"
+                              value={query}
+                              onChange={(e) => setQuery(e.target.value)}
+                              onKeyDown={(e) =>
+                                e.key === "Enter" && isValidInput && handleSearch()
+                              }
+                              placeholder="e.g., Senior React Developer with 5+ years experience in fintech..."
+                              className="pl-12 h-14 text-lg border-2 focus:border-primary transition-all"
+                              disabled={isLoading}
+                            />
+                            {query.trim() && (
                               <motion.div
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: "auto", opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                transition={{ duration: 0.2 }}
-                                className="overflow-hidden"
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                className="absolute right-4 top-1/2 -translate-y-1/2"
                               >
-                                <Input
-                                  value={filters.location}
-                                  onChange={(e) =>
-                                    setFilters({
-                                      ...filters,
-                                      location: e.target.value,
-                                    })
-                                  }
-                                  placeholder="e.g., Bangalore, Remote, United States..."
-                                  disabled={isLoading}
-                                  className="h-10"
-                                />
+                                <CheckCircle2 className="w-5 h-5 text-green-500" />
                               </motion.div>
                             )}
-                          </AnimatePresence>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="jd"
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -20 }}
+                        className="space-y-4"
+                      >
+                        <div className="space-y-2">
+                          <Label className="text-base font-semibold">
+                            Upload Job Description
+                          </Label>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".pdf,.doc,.docx,.txt"
+                            onChange={handleFileSelect}
+                            className="hidden"
+                          />
 
-                          {/* Info Tooltip */}
-                          {!filters.locationEnabled && (
-                            <motion.div
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              className="mt-3 flex items-start gap-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded-md"
+                          {!jdFile ? (
+                            <button
+                              onClick={() => fileInputRef.current?.click()}
+                              disabled={isLoading}
+                              className="w-full h-32 border-2 border-dashed border-border hover:border-primary rounded-lg flex flex-col items-center justify-center gap-2 transition-all hover:bg-primary/5 group"
                             >
-                              <AlertCircle className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
-                              <p className="text-xs text-blue-600 dark:text-blue-400">
-                                Location filter is OFF by default. Candidates may be willing to relocate.
+                              <Upload className="w-8 h-8 text-muted-foreground group-hover:text-primary transition-colors" />
+                              <p className="text-sm font-medium">
+                                Click to upload or drag and drop
                               </p>
+                              <p className="text-xs text-muted-foreground">
+                                PDF, DOC, DOCX, or TXT (max 10MB)
+                              </p>
+                            </button>
+                          ) : (
+                            <motion.div
+                              initial={{ scale: 0.9, opacity: 0 }}
+                              animate={{ scale: 1, opacity: 1 }}
+                              className="p-4 bg-green-500/10 border-2 border-green-500/30 rounded-lg flex items-center justify-between"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center">
+                                  <FileCheck className="w-5 h-5 text-green-500" />
+                                </div>
+                                <div>
+                                  <p className="font-medium flex items-center gap-2">
+                                    {jdFile.name}
+                                    <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {(jdFile.size / 1024).toFixed(2)} KB
+                                  </p>
+                                </div>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setJdFile(null)}
+                                disabled={isLoading}
+                                className="hover:bg-destructive/10 hover:text-destructive"
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
                             </motion.div>
                           )}
                         </div>
                       </motion.div>
+                    )}
+                  </AnimatePresence>
 
-                      {/* Other Filters */}
-                      <motion.div
-                        initial={{ y: -20, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        transition={{ delay: 0.2 }}
-                        className="grid md:grid-cols-2 gap-4"
-                      >
-                        <div className="space-y-2">
-                          <Label className="flex items-center gap-2 text-sm">
-                            <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center">
-                              <Briefcase className="w-3.5 h-3.5 text-muted-foreground" />
-                            </div>
-                            Seniority Level
-                          </Label>
-                          <Input
-                            value={filters.seniority}
-                            onChange={(e) =>
-                              setFilters({
-                                ...filters,
-                                seniority: e.target.value,
-                              })
-                            }
-                            placeholder="e.g., Senior, Mid-level..."
-                            disabled={isLoading}
-                            className="h-10"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label className="flex items-center gap-2 text-sm">
-                            <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center">
-                              <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
-                            </div>
-                            Industry
-                          </Label>
-                          <Input
-                            value={filters.industry}
-                            onChange={(e) =>
-                              setFilters({
-                                ...filters,
-                                industry: e.target.value,
-                              })
-                            }
-                            placeholder="e.g., Fintech, Healthcare..."
-                            disabled={isLoading}
-                            className="h-10"
-                          />
-                        </div>
-                      </motion.div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-
-              {/* Error Message */}
-              <AnimatePresence>
-                {error && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3"
-                  >
-                    <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
-                    <p className="text-destructive text-sm font-medium">
-                      {error}
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Enhanced Search Button */}
-              <motion.div
-                whileHover={{ scale: isValidInput ? 1.02 : 1 }}
-                whileTap={{ scale: isValidInput ? 0.98 : 1 }}
-              >
-                <Button
-                  size="lg"
-                  onClick={handleSearch}
-                  disabled={!isValidInput || isLoading}
-                  className={`w-full h-14 text-base font-bold relative overflow-hidden group transition-all duration-300 ${isValidInput
-                    ? "bg-yellow-500 hover:bg-yellow-600 text-black shadow-lg shadow-yellow-500/50"
-                    : "bg-muted text-muted-foreground cursor-not-allowed"
-                    }`}
-                >
-                  {isLoading ? (
-                    <motion.div
-                      className="flex items-center gap-3"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
+                  {/* Advanced Filters Toggle */}
+                  <div className="space-y-4">
+                    <Button
+                      variant="ghost"
+                      onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                      className="w-full justify-between hover:bg-muted/50 group"
+                      disabled={isLoading}
                     >
+                      <div className="flex items-center gap-2">
+                        <SlidersHorizontal className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                        <span className="font-semibold text-sm">
+                          Advanced Filters
+                        </span>
+                        <Badge
+                          variant="secondary"
+                          className="text-xs group-hover:bg-primary/10 group-hover:text-primary transition-colors"
+                        >
+                          Optional
+                        </Badge>
+                      </div>
                       <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{
-                          duration: 1,
-                          repeat: Infinity,
-                          ease: "linear",
-                        }}
+                        animate={{ rotate: showAdvancedFilters ? 180 : 0 }}
+                        transition={{ duration: 0.3 }}
                       >
-                        <Sparkles className="w-5 h-5" />
+                        <ChevronDown className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
                       </motion.div>
-                      <span>Searching 56M+ Profiles...</span>
-                      <motion.div
-                        animate={{
-                          scale: [1, 1.2, 1],
-                          opacity: [0.5, 1, 0.5],
-                        }}
-                        transition={{
-                          duration: 1.5,
-                          repeat: Infinity,
-                        }}
-                        className="flex gap-1"
-                      >
-                        {[0, 1, 2].map((i) => (
-                          <div
-                            key={i}
-                            className="w-1.5 h-1.5 bg-black rounded-full"
-                            style={{ animationDelay: `${i * 0.2}s` }}
-                          />
-                        ))}
-                      </motion.div>
-                    </motion.div>
-                  ) : (
-                    <>
-                      <span className="flex items-center gap-2 relative z-10">
-                        {isValidInput ? (
-                          <>
-                            <Zap className="w-5 h-5 group-hover:animate-pulse" />
-                            Find Candidates
-                            <CheckCircle2 className="w-5 h-5" />
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className="w-5 h-5" />
-                            {searchMode === "text"
-                              ? "Enter search query"
-                              : "Upload job description"}
-                          </>
-                        )}
-                      </span>
-                      {isValidInput && (
+                    </Button>
+
+                    {/* Collapsible Advanced Filters */}
+                    <AnimatePresence>
+                      {showAdvancedFilters && (
                         <motion.div
-                          className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
-                          animate={{
-                            x: ["-100%", "100%"],
-                          }}
-                          transition={{
-                            duration: 2,
-                            repeat: Infinity,
-                            ease: "linear",
-                          }}
-                        />
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.3 }}
+                          className="overflow-hidden space-y-4"
+                        >
+                          <Separator />
+
+                          {/* Location Filter */}
+                          <motion.div
+                            initial={{ y: -20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ delay: 0.1 }}
+                            className="relative"
+                          >
+                            <div
+                              className={`p-4 rounded-lg border-2 transition-all duration-300 ${filters.locationEnabled
+                                  ? "bg-primary/5 border-primary/30"
+                                  : "bg-muted/30 border-border/50 opacity-60"
+                                }`}
+                            >
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-2">
+                                  <div
+                                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${filters.locationEnabled
+                                        ? "bg-primary/20"
+                                        : "bg-muted"
+                                      }`}
+                                  >
+                                    <MapPin
+                                      className={`w-4 h-4 transition-colors ${filters.locationEnabled
+                                          ? "text-primary"
+                                          : "text-muted-foreground"
+                                        }`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-sm font-semibold">
+                                      Location Filter
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                      {filters.locationEnabled
+                                        ? "Location filtering enabled"
+                                        : "Candidates from all locations"}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-3">
+                                  <div className="flex items-center gap-2">
+                                    <motion.div
+                                      animate={{
+                                        scale: filters.locationEnabled ? 1 : 0.9,
+                                        opacity: filters.locationEnabled ? 1 : 0.5,
+                                      }}
+                                      className={`text-xs font-bold px-2 py-1 rounded-full ${filters.locationEnabled
+                                          ? "bg-primary/20 text-primary"
+                                          : "bg-muted text-muted-foreground"
+                                        }`}
+                                    >
+                                      {filters.locationEnabled ? "ON" : "OFF"}
+                                    </motion.div>
+                                    <Switch
+                                      checked={filters.locationEnabled}
+                                      onCheckedChange={(checked) =>
+                                        setFilters({
+                                          ...filters,
+                                          locationEnabled: checked,
+                                        })
+                                      }
+                                      disabled={isLoading}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              <AnimatePresence>
+                                {filters.locationEnabled && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: "auto", opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="overflow-hidden"
+                                  >
+                                    <Input
+                                      value={filters.location}
+                                      onChange={(e) =>
+                                        setFilters({
+                                          ...filters,
+                                          location: e.target.value,
+                                        })
+                                      }
+                                      placeholder="e.g., Bangalore, Remote, United States..."
+                                      disabled={isLoading}
+                                      className="h-10"
+                                    />
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+
+                              {!filters.locationEnabled && (
+                                <motion.div
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 1 }}
+                                  className="mt-3 flex items-start gap-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded-md"
+                                >
+                                  <AlertCircle className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                                  <p className="text-xs text-blue-600 dark:text-blue-400">
+                                    Location filter is OFF by default. Candidates may be willing to relocate.
+                                  </p>
+                                </motion.div>
+                              )}
+                            </div>
+                          </motion.div>
+
+                          {/* Other Filters */}
+                          <motion.div
+                            initial={{ y: -20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ delay: 0.2 }}
+                            className="grid md:grid-cols-2 gap-4"
+                          >
+                            <div className="space-y-2">
+                              <Label className="flex items-center gap-2 text-sm">
+                                <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center">
+                                  <Briefcase className="w-3.5 h-3.5 text-muted-foreground" />
+                                </div>
+                                Seniority Level
+                              </Label>
+                              <Input
+                                value={filters.seniority}
+                                onChange={(e) =>
+                                  setFilters({
+                                    ...filters,
+                                    seniority: e.target.value,
+                                  })
+                                }
+                                placeholder="e.g., Senior, Mid-level..."
+                                disabled={isLoading}
+                                className="h-10"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label className="flex items-center gap-2 text-sm">
+                                <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center">
+                                  <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
+                                </div>
+                                Industry
+                              </Label>
+                              <Input
+                                value={filters.industry}
+                                onChange={(e) =>
+                                  setFilters({
+                                    ...filters,
+                                    industry: e.target.value,
+                                  })
+                                }
+                                placeholder="e.g., Fintech, Healthcare..."
+                                disabled={isLoading}
+                                className="h-10"
+                              />
+                            </div>
+                          </motion.div>
+                        </motion.div>
                       )}
-                    </>
-                  )}
-                </Button>
-              </motion.div>
-            </CardContent>
-          </Card>
-        </motion.div>
+                    </AnimatePresence>
+                  </div>
+
+                  {/* Error Message */}
+                  <AnimatePresence>
+                    {error && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3"
+                      >
+                        <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                        <p className="text-destructive text-sm font-medium">
+                          {error}
+                        </p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Enhanced Search Button */}
+                  <motion.div
+                    whileHover={{ scale: isValidInput ? 1.02 : 1 }}
+                    whileTap={{ scale: isValidInput ? 0.98 : 1 }}
+                  >
+                    <Button
+                      size="lg"
+                      onClick={handleSearch}
+                      disabled={!isValidInput || isLoading}
+                      className={`w-full h-14 text-base font-bold relative overflow-hidden group transition-all duration-300 ${isValidInput
+                          ? "bg-yellow-500 hover:bg-yellow-600 text-black shadow-lg shadow-yellow-500/50"
+                          : "bg-muted text-muted-foreground cursor-not-allowed"
+                        }`}
+                    >
+                      {isLoading ? (
+                        <motion.div
+                          className="flex items-center gap-3"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                        >
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{
+                              duration: 1,
+                              repeat: Infinity,
+                              ease: "linear",
+                            }}
+                          >
+                            <Sparkles className="w-5 h-5" />
+                          </motion.div>
+                          <span>
+                            {searchMode === "text" ? "Generating JD..." : "Processing..."}
+                          </span>
+                        </motion.div>
+                      ) : (
+                        <>
+                          <span className="flex items-center gap-2 relative z-10">
+                            {isValidInput ? (
+                              <>
+                                <Zap className="w-5 h-5 group-hover:animate-pulse" />
+                                {searchMode === "text" ? "Generate JD" : "Find Candidates"}
+                                <CheckCircle2 className="w-5 h-5" />
+                              </>
+                            ) : (
+                              <>
+                                <AlertCircle className="w-5 h-5" />
+                                {searchMode === "text"
+                                  ? "Enter search query"
+                                  : "Upload job description"}
+                              </>
+                            )}
+                          </span>
+                          {isValidInput && (
+                            <motion.div
+                              className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
+                              animate={{
+                                x: ["-100%", "100%"],
+                              }}
+                              transition={{
+                                duration: 2,
+                                repeat: Infinity,
+                                ease: "linear",
+                              }}
+                            />
+                          )}
+                        </>
+                      )}
+                    </Button>
+                  </motion.div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Example Queries */}
-        {searchMode === "text" && (
+        {searchMode === "text" && !jdGenerationMode && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -704,53 +1009,23 @@ export default function SearchPage() {
             </div>
           </motion.div>
         )}
-
-        {/* Job Search Pipeline Visualization */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.6 }}
-          className="max-w-5xl mx-auto mt-20"
-        >
-          <div className="text-center mb-12">
-            <motion.h2
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.7 }}
-              className="text-3xl font-bold mb-3"
-            >
-              Your AI-Powered Hiring Pipeline
-            </motion.h2>
-            <motion.p
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.8 }}
-              className="text-muted-foreground"
-            >
-              Watch as AI transforms your search into perfect matches
-            </motion.p>
-          </div>
-
-
-
-        </motion.div>
       </div>
 
       <style jsx>{`
-        @keyframes gradient {
-          0%,
-          100% {
-            background-position: 0% 50%;
-          }
-          50% {
-            background-position: 100% 50%;
-          }
+      @keyframes gradient {
+        0%,
+        100% {
+          background-position: 0% 50%;
         }
-        .animate-gradient {
-          background-size: 200% auto;
-          animation: gradient 3s linear infinite;
+        50% {
+          background-position: 100% 50%;
         }
-      `}</style>
+      }
+      .animate-gradient {
+        background-size: 200% auto;
+        animation: gradient 3s linear infinite;
+      }
+    `}</style>
     </div>
   );
 }

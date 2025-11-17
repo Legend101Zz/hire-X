@@ -120,6 +120,74 @@ export const uploadJD = async (
 };
 
 /**
+ * Generate JD from search query
+ */
+export const generateJD = async (
+  token: string,
+  searchQuery: string
+): Promise<{
+  jd_text: string;
+  session_id: string;
+}> => {
+  const response = await apiCall("/conversation/generate-jd", {
+    method: "POST",
+    body: JSON.stringify({ search_query: searchQuery }),
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Refine JD based on feedback
+ */
+export const refineJD = async (
+  token: string,
+  data: {
+    session_id: string;
+    original_query: string;
+    previous_jd: string;
+    feedback: string;
+    retry_count: number;
+  }
+): Promise<{
+  jd_text: string;
+  retry_count: number;
+  max_retries_reached: boolean;
+}> => {
+  const response = await apiCall("/conversation/refine-jd", {
+    method: "POST",
+    body: JSON.stringify(data),
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Start conversation with generated JD text
+ */
+export const startConversationWithJD = async (
+  token: string,
+  jdText: string
+): Promise<{
+  session_id: string;
+  donna_greeting: string;
+  ideal_profile: IdealProfileCard;
+  sample_profile: SampleProfile | null;
+  suggested_next_steps: string[];
+  stage: string;
+}> => {
+  const response = await apiCall("/conversation/start", {
+    method: "POST",
+    body: JSON.stringify({ jd_text: jdText }),
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
  * Delete/reset conversation
  */
 export const deleteConversation = async (

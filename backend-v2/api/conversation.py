@@ -12,10 +12,8 @@ from typing import Dict, Optional
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
                      UploadFile)
 
-# ✅ IMPORT ALL REAL DEPENDENCIES
-from core.dependencies import get_workflow  # ✅ ADD THIS
 from core.dependencies import (get_conversation_manager, get_current_username,
-                               get_jd_parser)
+                               get_jd_generator, get_jd_parser, get_workflow)
 from core.logging_config import get_logger
 from models.conversation_models import (ConversationFinalizeRequest,
                                         ConversationFinalizeResponse,
@@ -23,8 +21,10 @@ from models.conversation_models import (ConversationFinalizeRequest,
                                         ConversationMessageResponse,
                                         ConversationStartRequest,
                                         ConversationStartResponse,
-                                        ConversationState)
+                                        GenerateJDRequest, GenerateJDResponse,
+                                        RefineJDRequest, RefineJDResponse)
 from services.conversation_manager import ConversationManager
+from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.scorecard_workflow import ScorecardWorkflow
 
@@ -51,8 +51,9 @@ async def start_conversation(
     Start a new conversation with Donna.
     
     Can optionally include:
-    - Initial message
-    - Uploaded JD file (base64 encoded)
+    - initial_message (free text)
+    - jd_file_content (uploaded file, base64)
+    - jd_text (generated/edited JD text) 
     
     Returns:
         Donna's greeting and initial profile card
@@ -66,14 +67,21 @@ async def start_conversation(
         
         # Parse JD if provided
         jd_data = None
-        logger.debug('request',request)
+        
         if request.jd_file_content and request.jd_file_name:
             jd_data = await jd_parser.parse_jd(
                 file_content=request.jd_file_content,
                 file_name=request.jd_file_name,
                 username=username
             )
-            logger.debug(f'jd_data : {jd_data}')
+            logger.debug(f'JD data from file: {jd_data}')
+        elif request.jd_text:  
+            # Generated/edited JD text
+            jd_data = await jd_parser.parse_jd_text(
+                jd_text=request.jd_text,
+                username=username
+            )
+            logger.debug(f'JD data from text: {jd_data}')
         
         # Start conversation
         donna_reply, ideal_profile, sample_profile, stage = await conversation_manager.start_conversation(
@@ -198,17 +206,17 @@ async def get_conversation(
 
 
 # ================================================================
-# FINALIZE CONVERSATION - ✅ COMPLETE IMPLEMENTATION
+# FINALIZE CONVERSATION 
 # ================================================================
 
 @router.post("/{session_id}/finalize", response_model=ConversationFinalizeResponse)
 async def finalize_conversation(
     session_id: str,
     request: ConversationFinalizeRequest,
-    background_tasks: BackgroundTasks,  # ✅ ADD THIS
+    background_tasks: BackgroundTasks,  
     username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
-    workflow: ScorecardWorkflow = Depends(get_workflow)  # ✅ ADD THIS
+    workflow: ScorecardWorkflow = Depends(get_workflow) 
 ):
     """
     Finalize conversation and trigger search.
@@ -240,7 +248,7 @@ async def finalize_conversation(
         if request.final_profile_adjustments:
             state.ideal_profile = request.final_profile_adjustments
         
-        # ✅ VALIDATE PROFILE
+        # VALIDATE PROFILE
         if not state.ideal_profile.role_title:
             raise HTTPException(status_code=400, detail="Role title is required")
         
@@ -371,6 +379,130 @@ async def upload_jd(
         logger.error(f"Error uploading JD: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ================================================================
+# GENERATE JD FROM SEARCH QUERY 
+# ================================================================
+
+@router.post("/generate-jd", response_model=GenerateJDResponse)
+async def generate_jd(
+    request: GenerateJDRequest,
+    username: str = Depends(get_current_username),
+    jd_generator: JDGeneratorService = Depends(get_jd_generator),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """
+    Generate a JD from user's search query.
+    
+    This is called when user enters text search (not uploading JD).
+    LLM generates a comprehensive JD that user can review/edit.
+    """
+    
+    try:
+        logger.info(f"Generating JD for query: {request.search_query[:50]}...")
+        
+        # Generate session ID for tracking this JD generation
+        session_id = f"jdgen_{uuid.uuid4().hex}"
+        
+        # Generate JD
+        jd_text = await jd_generator.generate_jd(
+            search_query=request.search_query,
+            username=username
+        )
+        
+        # Store in Redis for refinement tracking
+        await conversation_manager.redis.store_session_data(
+            session_id,
+            "jd_generation",
+            {
+                "original_query": request.search_query,
+                "current_jd": jd_text,
+                "retry_count": 0,
+                "username": username
+            },
+            expire_seconds=1800  # 30 minutes
+        )
+        
+        return GenerateJDResponse(
+            jd_text=jd_text,
+            session_id=session_id
+        )
+    
+    except Exception as e:
+        logger.error(f"Error generating JD: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================================================
+# REFINE JD BASED ON FEEDBACK 
+# ================================================================
+
+@router.post("/refine-jd", response_model=RefineJDResponse)
+async def refine_jd(
+    request: RefineJDRequest,
+    username: str = Depends(get_current_username),
+    jd_generator: JDGeneratorService = Depends(get_jd_generator),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """
+    Refine JD based on user feedback.
+    
+    User can refine up to 2 times. After that, we proceed with what we have.
+    """
+    
+    try:
+        # Load JD generation session
+        jd_data = await conversation_manager.redis.get_session_data(
+            request.session_id,
+            "jd_generation"
+        )
+        
+        if not jd_data:
+            raise HTTPException(status_code=404, detail="JD generation session not found")
+        
+        # Check retry count
+        current_retry = jd_data.get("retry_count", 0)
+        
+        if current_retry >= JDGeneratorService.MAX_RETRIES:
+            return RefineJDResponse(
+                jd_text=jd_data["current_jd"],
+                retry_count=current_retry,
+                max_retries_reached=True
+            )
+        
+        logger.info(f"Refining JD (attempt {current_retry + 1}/{JDGeneratorService.MAX_RETRIES})")
+        
+        # Refine JD
+        refined_jd, max_reached = await jd_generator.refine_jd(
+            original_query=jd_data["original_query"],
+            previous_jd=request.previous_jd,
+            feedback=request.feedback,
+            retry_count=current_retry,
+            username=username
+        )
+        
+        # Update session data
+        jd_data["current_jd"] = refined_jd
+        jd_data["retry_count"] = current_retry + 1
+        
+        await conversation_manager.redis.store_session_data(
+            request.session_id,
+            "jd_generation",
+            jd_data,
+            expire_seconds=1800
+        )
+        
+        return RefineJDResponse(
+            jd_text=refined_jd,
+            retry_count=current_retry + 1,
+            max_retries_reached=max_reached
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error refining JD: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ================================================================
 # RESET CONVERSATION
