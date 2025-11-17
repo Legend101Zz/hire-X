@@ -23,6 +23,7 @@ from services.candidate_scorer import CandidateScorer
 # Import all V3 services
 from services.conversation_manager import ConversationManager
 from services.enrichment_service import EnrichmentService
+from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.model_config_manager import ModelConfigManager
 from services.query_debugger import QueryDebugger
@@ -94,6 +95,10 @@ async def initialize_services() -> Dict[str, Any]:
     
     model_config_manager = ModelConfigManager(redis_cache)
     logger.info("✅ ModelConfigManager initialized")
+    
+    jd_generator = JDGeneratorService(model_config_manager)
+    logger.info("✅ JDGeneratorService initialized")
+    
     
     web_search = WebSearchWrapper(redis_cache,model_config_manager)
     logger.info("✅ WebSearchWrapper initialized")
@@ -191,6 +196,7 @@ async def initialize_services() -> Dict[str, Any]:
         
         # Phase 2B Services (Conversation)
         "jd_parser": jd_parser,
+        "jd_generator": jd_generator,
         "sample_generator": sample_generator,
         "sample_generator_v2": sample_generator_v2,  # Add V2
         "query_debugger": query_debugger,  # Add debugger
@@ -301,6 +307,11 @@ def get_sample_generator_v2() -> SampleProfileGeneratorV2:
 def get_query_debugger() -> QueryDebugger:
     """Get the query debugger."""
     return _global_services["query_debugger"]
+
+async def get_jd_generator(
+) :
+    """Get JD generator service."""
+    return _global_services["jd_generator"]
 
 
 def get_current_username(

@@ -191,10 +191,12 @@ class ConversationStartRequest(BaseModel):
     Can optionally include:
     - Initial message from user
     - Uploaded JD file (as base64)
+    - Generated JD text 
     """
     initial_message: Optional[str] = Field(None, description="Initial user message")
     jd_file_content: Optional[str] = Field(None, description="Base64 encoded PDF/DOCX")
     jd_file_name: Optional[str] = Field(None, description="Filename of uploaded JD")
+    jd_text: Optional[str] = Field(None, description="Generated/edited JD text")
     model_configuration: Optional[Dict[str, str]] = Field(None, description="Optional model config")
 
 
@@ -246,3 +248,29 @@ class ConversationFinalizeResponse(BaseModel):
     search_triggered: bool = Field(..., description="Was search triggered?")
     message: str = Field(..., description="Status message")
     estimated_candidates: Optional[int] = Field(None, description="Estimated result count")
+    
+class GenerateJDRequest(BaseModel):
+    """Request to generate JD from search query"""
+    search_query: str = Field(..., min_length=10, description="User's search query")
+
+
+class GenerateJDResponse(BaseModel):
+    """Generated JD response"""
+    jd_text: str = Field(..., description="Generated job description text")
+    session_id: str = Field(..., description="JD generation session ID for tracking")
+
+
+class RefineJDRequest(BaseModel):
+    """Request to refine JD based on feedback"""
+    session_id: str = Field(..., description="JD generation session ID")
+    original_query: str = Field(..., description="Original search query")
+    previous_jd: str = Field(..., description="Previous JD version")
+    feedback: str = Field(..., min_length=10, description="User's feedback on what's wrong")
+    retry_count: int = Field(ge=0, le=2, description="Current retry count")
+
+
+class RefineJDResponse(BaseModel):
+    """Refined JD response"""
+    jd_text: str = Field(..., description="Refined job description text")
+    retry_count: int = Field(..., description="Updated retry count")
+    max_retries_reached: bool = Field(..., description="Have we hit max retries?")
