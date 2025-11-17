@@ -23,14 +23,16 @@ from services.candidate_scorer import CandidateScorer
 # Import all V3 services
 from services.conversation_manager import ConversationManager
 from services.enrichment_service import EnrichmentService
+from services.intelligent_search_crew import IntelligentSearchCrew
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.model_config_manager import ModelConfigManager
 from services.query_debugger import QueryDebugger
 from services.response_likelihood_scorer import ResponseLikelihoodScorer
 from services.salary_estimator import SalaryEstimator
-from services.sample_profile_generator import SampleProfileGenerator
-from services.sample_profile_generator_v2 import SampleProfileGeneratorV2
+# from services.sample_profile_generator import SampleProfileGenerator
+# from services.sample_profile_generator_v2 import SampleProfileGeneratorV2
+from services.sample_profile_generator_v3 import SampleProfileGeneratorV3
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
 from services.skill_validator import SkillValidator
@@ -132,27 +134,31 @@ async def initialize_services() -> Dict[str, Any]:
     logger.info("✅ JDParser initialized")
     
     # Sample Profile Generator
-    sample_generator = SampleProfileGenerator(
-        profiles_collection=mongodb.profiles_collection,
-        ai_scorer=scorer
-    )
-    logger.info("✅ SampleProfileGenerator initialized")
+    try:
+        from core.config import Settings
+        settings = Settings()
+        
+        sample_generator_v3 = SampleProfileGeneratorV3(
+            profiles_collection=mongodb.profiles_collection,
+            openrouter_api_key=settings.OPENROUTER_API_KEY,
+            model_name=settings.AI_MODEL_NAME
+        )
+        logger.info("✅ SampleProfileGeneratorV3 (CrewAI) initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ CrewAI initialization failed: {e}. V3 generator unavailable.")
+        sample_generator_v3 = None
     
     # Add Query Debugger
     query_debugger = QueryDebugger()
     logger.info("✅ QueryDebugger initialized")
 
-    # Add Sample Generator V2 (with debugging)
-    sample_generator_v2 = SampleProfileGeneratorV2(
-        profiles_collection=mongodb.profiles_collection,
-    )
-    logger.info("✅ SampleProfileGeneratorV2 initialized")
+
         
     # Conversation Manager
     conversation_manager = ConversationManager(
         redis_cache=redis_cache,
         model_config_manager=model_config_manager,
-        sample_profile_generator=sample_generator_v2
+        sample_profile_generator=sample_generator_v3
     )
     logger.info("✅ ConversationManager initialized")
     
@@ -196,8 +202,7 @@ async def initialize_services() -> Dict[str, Any]:
         # Phase 2B Services (Conversation)
         "jd_parser": jd_parser,
         "jd_generator": jd_generator,
-        "sample_generator": sample_generator,
-        "sample_generator_v2": sample_generator_v2,  # Add V2
+        "sample_generator_v3": sample_generator_v3, 
         "query_debugger": query_debugger,  # Add debugger
         "conversation_manager": conversation_manager,
         # Workflow Orchestrator
@@ -295,13 +300,28 @@ def get_jd_parser() -> JDParser:
     return _global_services["jd_parser"]
 
 
-def get_sample_generator() -> SampleProfileGenerator:
-    """Get the sample profile generator."""
-    return _global_services["sample_generator"]
+# def get_sample_generator() -> SampleProfileGenerator:
+#     """Get the sample profile generator."""
+#     return _global_services["sample_generator"]
 
-def get_sample_generator_v2() -> SampleProfileGeneratorV2:
-    """Get the V2 sample generator with debugging."""
-    return _global_services["sample_generator_v2"]
+# def get_sample_generator_v2() -> SampleProfileGeneratorV2:
+#     """Get the V2 sample generator with debugging."""
+#     return _global_services["sample_generator_v2"]
+
+def get_sample_generator_v3() -> SampleProfileGeneratorV3:
+    """
+    Get the V3 sample generator with CrewAI.
+    
+    Raises:
+        HTTPException: If V3 generator not available
+    """
+    generator = _global_services.get("sample_generator_v3")
+    if generator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="CrewAI-based search is currently unavailable"
+        )
+    return generator
 
 def get_query_debugger() -> QueryDebugger:
     """Get the query debugger."""
@@ -311,6 +331,7 @@ async def get_jd_generator(
 ) :
     """Get JD generator service."""
     return _global_services["jd_generator"]
+
 
 
 def get_current_username(

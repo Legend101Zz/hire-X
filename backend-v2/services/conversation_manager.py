@@ -1,13 +1,16 @@
 """
-Conversation Manager
-===================
+Conversation Manager V3
+=======================
 Manages conversation state and flow for Donna (AI assistant).
+
+UPDATED FOR V3: Integrates with IntelligentSearchCrew for multi-agent search.
 
 This service:
 - Tracks conversation state (greeting → skills → experience → preferences → ready)
 - Decides what questions to ask next
 - Determines when enough information is gathered
 - Builds ideal profile progressively
+- Uses CrewAI multi-agent system for intelligent candidate search
 - Updates sample profile as conversation progresses
 
 This is the brain of the conversational interface!
@@ -24,12 +27,16 @@ from models.conversation_models import (ConversationMessage, ConversationStage,
                                         SampleProfile)
 from services.conversation_prompts import ConversationPrompts
 from services.model_config_manager import ModelConfigManager
-from services.sample_profile_generator import SampleProfileGenerator
+from services.sample_profile_generator_v3 import SampleProfileGeneratorV3
 
 logger = get_logger(__name__)
+
+
 class ConversationManager:
     """
     Manages conversation flow and state for Donna.
+    
+    V3 Enhancement: Integrates with CrewAI intelligent search system.
     
     State Machine:
     greeting → skills → experience → preferences → review → ready
@@ -60,9 +67,9 @@ class ConversationManager:
     
     def __init__(
         self,
-        redis_cache:RedisCache,
-        model_config_manager:ModelConfigManager,
-        sample_profile_generator:SampleProfileGenerator
+        redis_cache: RedisCache,
+        model_config_manager: ModelConfigManager,
+        sample_profile_generator: SampleProfileGeneratorV3  # ⭐ V3 generator
     ):
         """
         Initialize conversation manager.
@@ -70,12 +77,14 @@ class ConversationManager:
         Args:
             redis_cache: Redis cache for session storage
             model_config_manager: Model configuration manager
-            sample_profile_generator: Sample profile generator
+            sample_profile_generator: V3 Sample profile generator with CrewAI
         """
         self.redis = redis_cache
         self.model_config = model_config_manager
-        self.sample_generator = sample_profile_generator
+        self.sample_generator = sample_profile_generator  # V3 with CrewAI
         self.prompts = ConversationPrompts()
+        
+        logger.info("✅ ConversationManager initialized with CrewAI V3 generator")
     
     
     # ================================================================
@@ -116,57 +125,70 @@ class ConversationManager:
             state.jd_uploaded = True
             state.stage = ConversationStage.REVIEW
             
-            # ✅ FIX: Generate sample FIRST, then decide greeting based on result
+            # ✅ Generate sample using CrewAI V3
             sample_profile = None
             donna_reply = ""
             
             if self._has_minimum_info(state.ideal_profile):
                 try:
-                    result = await self.sample_generator.generate_sample(
-                        state.ideal_profile
+                    # ⭐ Call V3 generator with CrewAI
+                    logger.info("🤖 Starting CrewAI intelligent search...")
+                    result = await self.sample_generator.generate_samples(
+                        ideal_profile=state.ideal_profile.dict(),
+                        count=1
                     )
                     
-                    if isinstance(result, dict):
-                        sample_profile = result.get("sample_profile")
+                    if result.get("success"):
+                        candidates = result.get("candidates", [])
                         
-                        # ✅ CRITICAL FIX: Choose greeting based on whether sample was found
-                        if result.get("needs_clarification") or sample_profile is None:
-                            logger.warning("Sample generation needs clarification")
+                        if candidates:
+                            # Convert first candidate to SampleProfile
+                            sample_profile = self._candidate_to_sample(candidates[0])
+                            state.sample_profile = sample_profile
                             
-                            # Use clarification greeting instead of success greeting
+                            # Store metadata for frontend
+                            state.last_search_metadata = {
+                                "iterations": result.get("metadata", {}).get("iterations", 0),
+                                "final_query": result.get("metadata", {}).get("final_query", {}),
+                                "agent_mode": True
+                            }
+                            
+                            donna_reply = self.prompts.get_greeting_with_jd()
+                            logger.info(f'✅ CrewAI found candidate in {result["metadata"]["iterations"]} iterations')
+                        else:
+                            # No candidates found
+                            logger.warning("⚠️ CrewAI couldn't find matching candidates")
                             donna_reply = """I've analyzed your JD and extracted the requirements. 
 
-        However, I couldn't find matching candidates with the current criteria. Let's refine the search together!"""
-                            
-                            # Add specific clarifying questions
-                            questions = result.get("clarifying_questions", [])
-                            if questions:
-                                donna_reply += f"\n\n{questions[0]}"
-                        else:
-                            # Sample found - use success greeting
-                            donna_reply = self.prompts.get_greeting_with_jd()
-                            state.sample_profile = sample_profile
-                            logger.info(f'Sample profile: {sample_profile}')
+However, I couldn't find matching candidates with the current criteria. Let's refine the search together!
+
+Could you tell me:
+- What alternative job titles should I search for?
+- Are there specific companies or industries you're targeting?
+- What locations are you open to?"""
                     else:
-                        # Old generator fallback
-                        sample_profile = result
-                        donna_reply = self.prompts.get_greeting_with_jd()
+                        # Search failed
+                        error = result.get("error", "Unknown error")
+                        logger.error(f"❌ CrewAI search failed: {error}")
+                        donna_reply = """I've analyzed your JD but encountered some difficulty finding matching candidates. 
+
+Could you tell me more about what you're looking for? For example:
+- What alternative job titles should I search for?
+- Are there specific companies or industries you're targeting?
+- What locations are you open to?"""
                         
                 except Exception as e:
                     logger.error(f"Failed to generate sample profile: {e}")
                     sample_profile = None
                     donna_reply = """I've analyzed your JD but encountered some difficulty finding matching candidates. 
 
-        Could you tell me more about what you're looking for? For example:
-        - What alternative job titles should I search for?
-        - Are there specific companies or industries you're targeting?
-        - What locations are you open to?"""
+Could you tell me more about what you're looking for?"""
             else:
                 # Not enough info in JD
                 sample_profile = None
                 donna_reply = """I've analyzed your JD, but I need a bit more information to find great matches.
 
-        What role are you looking to fill?"""
+What role are you looking to fill?"""
         
         # If initial message provided, process it
         elif initial_message:
@@ -249,36 +271,19 @@ class ConversationManager:
             suggestions = []
         
         elif action == "show_sample":
-            # Generate sample profile
-            result= await self.sample_generator.generate_sample(
-                state.ideal_profile
-            )
-            # Handle V2 response
-            if isinstance(result, dict):
-                sample_profile = result.get("sample_profile")
-                if result.get("needs_clarification"):
-                    # Ask clarifying questions instead
-                    donna_reply = result["clarifying_questions"][0] if result["clarifying_questions"] else "Could you provide more details?"
-                    suggestions = ["Tell me more", "Try different criteria"]
-                else:
-                    state.sample_profile = sample_profile
-                    donna_reply = self.prompts.present_sample_profile()
-                    suggestions = ["Yes, looks good!", "No, adjust criteria"]
-            else:
-                # Old generator response
-                state.sample_profile = result
-                donna_reply = self.prompts.present_sample_profile()
-                suggestions = ["Yes, looks good!", "No, adjust criteria"]
-            
+            # ⭐ Generate sample using CrewAI V3
+            donna_reply, suggestions = await self._generate_sample_with_crew(state)
+        
         # Regular message processing
         else:
             # Extract info from user message
             extracted = await self._extract_info_from_message(
                 user_message,
                 state.ideal_profile,
-                username=None
+                username=state.username
             )
-            # NEW: Detect if user wants to see sample
+            
+            # Detect if user wants to see sample
             user_wants_sample = self._detect_sample_request(user_message, state.stage)
             
             # Check what changed BEFORE merging
@@ -293,77 +298,32 @@ class ConversationManager:
                 extracted
             )
             
-            # ✅ NEW: Auto-regenerate sample if significant changes detected
+            # ✅ Auto-regenerate sample if significant changes or user requested
             if (user_wants_sample or significant_changes) and self._has_minimum_info(state.ideal_profile):
                 if user_wants_sample:
                     logger.info("🎯 User requested sample generation")
                 else:
                     logger.info(f"🔄 Significant changes detected: {significant_changes}")
                 
-                logger.info("🔄 Generating sample profile...")
+                # Generate sample using CrewAI
+                donna_reply, suggestions = await self._generate_sample_with_crew(state)
                 
-                try:
-                    result = await self.sample_generator.generate_sample(
-                        state.ideal_profile
-                    )
-                    
-                    if isinstance(result, dict):
-                        new_sample = result.get("sample_profile")
-                        
-                        if result.get("needs_clarification"):
-                            # No sample found - ask for clarification
-                            state.sample_profile = None
-                            questions = result.get("clarifying_questions", [])
-                            clarification_msg = questions[0] if questions else "Could you provide more details about what you're looking for?"
-                            
-                            # Override donna_reply with clarification
-                            donna_reply = clarification_msg
-                            suggestions = ["Try different keywords", "Adjust criteria"]
-                            
-                            # Skip normal question flow
-                            state.messages.append(ConversationMessage(
-                                role="assistant",
-                                content=donna_reply
-                            ))
-                            state.updated_at = datetime.utcnow().isoformat()
-                            await self._save_state(state)
-                            
-                            return (
-                                donna_reply,
-                                state.ideal_profile,
-                                state.sample_profile,
-                                state.stage,
-                                state.ready_to_search,
-                                suggestions
-                            )
-                        
-                        elif new_sample:
-                            # Sample found!
-                            state.sample_profile = new_sample
-                            logger.info("✅ Sample profile generated")
-                            
-                            # Show the sample with appropriate message
-                            donna_reply = self.prompts.present_sample_profile()
-                            suggestions = ["Yes, looks good!", "No, adjust criteria"]
-                            
-                            state.messages.append(ConversationMessage(
-                                role="assistant",
-                                content=donna_reply
-                            ))
-                            state.updated_at = datetime.utcnow().isoformat()
-                            await self._save_state(state)
-                            
-                            return (
-                                donna_reply,
-                                state.ideal_profile,
-                                state.sample_profile,
-                                state.stage,
-                                state.ready_to_search,
-                                suggestions
-                            )
-                            
-                except Exception as e:
-                    logger.error(f"Failed to generate sample: {e}")
+                # Early return after sample generation
+                state.messages.append(ConversationMessage(
+                    role="assistant",
+                    content=donna_reply
+                ))
+                state.updated_at = datetime.utcnow().isoformat()
+                await self._save_state(state)
+                
+                return (
+                    donna_reply,
+                    state.ideal_profile,
+                    state.sample_profile,
+                    state.stage,
+                    state.ready_to_search,
+                    suggestions
+                )
             
             # Decide next question and stage
             donna_reply, new_stage = await self._decide_next_question(state)
@@ -399,6 +359,204 @@ class ConversationManager:
             state.ready_to_search,
             suggestions
         )
+    
+    
+    # ================================================================
+    # CREWAI INTEGRATION METHODS
+    # ================================================================
+    
+    async def _generate_sample_with_crew(
+        self,
+        state: ConversationState
+    ) -> Tuple[str, List[str]]:
+        """
+        Generate sample using CrewAI intelligent search.
+        
+        Args:
+            state: Current conversation state
+            
+        Returns:
+            Tuple of (donna_reply, suggestions)
+        """
+        logger.info("🤖 Starting CrewAI intelligent search...")
+        
+        try:
+            # Call CrewAI V3 generator
+            result = await self.sample_generator.generate_samples(
+                ideal_profile=state.ideal_profile.dict(),
+                count=1
+            )
+            
+            if result.get("success"):
+                candidates = result.get("candidates", [])
+                metadata = result.get("metadata", {})
+                
+                if candidates:
+                    # Success! Convert to SampleProfile
+                    sample_profile = self._candidate_to_sample(candidates[0])
+                    state.sample_profile = sample_profile
+                    
+                    # Store search metadata
+                    state.last_search_metadata = {
+                        "iterations": metadata.get("iterations", 0),
+                        "final_query": metadata.get("final_query", {}),
+                        "crew_output": metadata.get("crew_output", ""),
+                        "agent_mode": True
+                    }
+                    
+                    donna_reply = f"""Great news! I found a matching candidate. 
+
+This search used our intelligent AI agent system, which analyzed your requirements through {metadata.get('iterations', 0)} iterations to find the best match.
+
+{self.prompts.present_sample_profile()}"""
+                    
+                    suggestions = ["Yes, looks good!", "No, adjust criteria", "Show more like this"]
+                    logger.info(f"✅ CrewAI found candidate in {metadata.get('iterations', 0)} iterations")
+                    
+                else:
+                    # No candidates found
+                    state.sample_profile = None
+                    donna_reply = """I couldn't find matching candidates with the current criteria. 
+
+The AI agents tried multiple query strategies but didn't find good matches. Let's refine the search:
+
+Could you tell me:
+- Should I broaden the search criteria?
+- Are there alternative job titles to consider?
+- What other industries or locations should I include?"""
+                    
+                    suggestions = ["Broaden criteria", "Try different keywords", "Adjust requirements"]
+                    logger.warning("⚠️ CrewAI couldn't find candidates")
+                    
+            else:
+                # Search failed
+                error = result.get("error", "Unknown error")
+                logger.error(f"❌ CrewAI search failed: {error}")
+                
+                state.sample_profile = None
+                donna_reply = """I encountered an issue while searching for candidates.
+
+Let me try with simpler criteria. Could you tell me more about:
+- The most critical skills required?
+- Alternative job titles that might work?
+- Any flexibility on experience level or location?"""
+                
+                suggestions = ["Tell me more", "Simplify criteria"]
+                
+        except Exception as e:
+            logger.error(f"Failed to generate sample with CrewAI: {e}")
+            
+            state.sample_profile = None
+            donna_reply = """I encountered an issue while searching. Let me ask you directly:
+
+What are the absolute must-have requirements for this role?"""
+            
+            suggestions = ["Tell me more", "Try again"]
+        
+        return donna_reply, suggestions
+    
+    
+    async def refine_sample_with_feedback(
+        self,
+        session_id: str,
+        feedback: str
+    ) -> Tuple[str, Optional[SampleProfile]]:
+        """
+        Refine sample search based on user feedback.
+        
+        Uses CrewAI's refine_search capability.
+        
+        Args:
+            session_id: Session identifier
+            feedback: User's feedback on why previous sample wasn't good
+            
+        Returns:
+            Tuple of (donna_reply, new_sample_profile)
+        """
+        state = await self._load_state(session_id)
+        if not state:
+            raise ValueError(f"No conversation found for session {session_id}")
+        
+        logger.info(f"🔄 Refining search with feedback: {feedback}")
+        
+        try:
+            # Get previous query from metadata
+            previous_query = state.last_search_metadata.get("final_query", {})
+            
+            # Call V3 refine_search
+            result = await self.sample_generator.refine_search(
+                ideal_profile=state.ideal_profile.dict(),
+                user_feedback=feedback,
+                previous_query=previous_query,
+                count=1
+            )
+            
+            if result.get("success"):
+                candidates = result.get("candidates", [])
+                
+                if candidates:
+                    sample_profile = self._candidate_to_sample(candidates[0])
+                    state.sample_profile = sample_profile
+                    
+                    # Update metadata
+                    state.last_search_metadata = {
+                        "iterations": result.get("metadata", {}).get("iterations", 0),
+                        "refinement_applied": True,
+                        "agent_mode": True
+                    }
+                    
+                    donna_reply = f"""I've refined the search based on your feedback!
+
+Here's a new candidate that better matches what you're looking for.
+
+Is this closer to what you need?"""
+                    
+                    await self._save_state(state)
+                    return donna_reply, sample_profile
+                    
+            # If we get here, refinement didn't work
+            donna_reply = """I'm still having trouble finding the right match.
+
+Could you be more specific about what's missing or what needs to change?"""
+            
+            return donna_reply, None
+            
+        except Exception as e:
+            logger.error(f"Failed to refine search: {e}")
+            return "I encountered an issue refining the search. Let's try a different approach.", None
+    
+    
+    def _candidate_to_sample(self, candidate: Dict) -> SampleProfile:
+        """
+        Convert candidate dict from CrewAI to SampleProfile.
+        
+        Args:
+            candidate: Candidate dictionary from search
+            
+        Returns:
+            SampleProfile object
+        """
+        return SampleProfile(
+            name=f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip(),
+            title=candidate.get("title", "Not specified"),
+            location=candidate.get("location", "Not specified"),
+            experience_years=candidate.get("experience_years", 0),
+            current_company=candidate.get("current_company", "Not specified"),
+            skills=candidate.get("expertise", [])[:5] if candidate.get("expertise") else [],
+            match_score=85,  # You can calculate this based on match criteria
+            match_reasoning="Found via intelligent AI agent search",
+            linkedin_url=candidate.get("linkedin_url", ""),
+            summary=self._generate_candidate_summary(candidate)
+        )
+    
+    
+    def _generate_candidate_summary(self, candidate: Dict) -> str:
+        """Generate a short summary for the candidate."""
+        title = candidate.get("title", "Professional")
+        years = candidate.get("experience_years", 0)
+        industry = candidate.get("current_industry", "their field")
+        
+        return f"{title} with {years}+ years of experience in {industry}."
     
     
     # ================================================================
@@ -455,6 +613,7 @@ class ConversationManager:
         
         return False
     
+    
     async def _extract_info_from_message(
         self,
         message: str,
@@ -469,6 +628,7 @@ class ConversationManager:
         Args:
             message: User's message
             current_profile: Current profile state
+            username: Username for model config
         
         Returns:
             Updated IdealProfileCard with extracted info
@@ -516,11 +676,12 @@ Extract new information and return updated fields as JSON."""
             # If LLM didn't return valid JSON, return unchanged profile
             return current_profile
     
+    
     def _detect_significant_changes(
-    self,
-    old_profile: IdealProfileCard,
-    new_profile: IdealProfileCard
-) -> List[str]:
+        self,
+        old_profile: IdealProfileCard,
+        new_profile: IdealProfileCard
+    ) -> List[str]:
         """
         Detect significant changes that warrant sample regeneration.
         
@@ -758,6 +919,7 @@ Extract new information and return updated fields as JSON."""
         # For multi-turn conversations, require some additional context
         return has_minimum and has_context
 
+    
     def _get_suggestions(self, stage: str, profile: IdealProfileCard) -> List[str]:
         """Get suggestions based on current stage."""
         

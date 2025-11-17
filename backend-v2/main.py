@@ -23,7 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 # Import API routes
-from api import auth, configuration, conversation, enriched_results, scorecard
+from api import (auth, configuration, conversation, enriched_results,
+                 intelligent_search, scorecard)
 # Import core components
 from core.config import settings
 from core.dependencies import initialize_services
@@ -170,6 +171,7 @@ app.include_router(
     tags=["Results"]
 )
 
+app.include_router(intelligent_search.router)
 
 # ============================================================================
 # Development Server

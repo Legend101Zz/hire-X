@@ -38,7 +38,7 @@ class Settings:
     # ========================================================================
     
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-    AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "openai/gpt-4o-mini")
+    AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "anthropic/claude-sonnet-4-20250514")
     # ========================================================================
     # MongoDB - Main Database (Users, Prompts, Logs)
     # ========================================================================
