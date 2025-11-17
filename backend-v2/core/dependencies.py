@@ -139,13 +139,12 @@ async def initialize_services() -> Dict[str, Any]:
     logger.info("✅ SampleProfileGenerator initialized")
     
     # Add Query Debugger
-    query_debugger = QueryDebugger(ai_parser=ai_parser)
+    query_debugger = QueryDebugger()
     logger.info("✅ QueryDebugger initialized")
 
     # Add Sample Generator V2 (with debugging)
     sample_generator_v2 = SampleProfileGeneratorV2(
         profiles_collection=mongodb.profiles_collection,
-        ai_parser=ai_parser  # Not AIService
     )
     logger.info("✅ SampleProfileGeneratorV2 initialized")
         

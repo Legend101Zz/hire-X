@@ -1,176 +1,155 @@
 """
-Query Debugger V3
-================
-With schema awareness.
+Query Debugger V4 - Database-Aware
+===================================
 """
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-from services.ai_parser import AIParser
 from services.query_builder import QueryBuilder, QueryStrategy
 
 
 class QueryDebugger:
-    """Debugs MongoDB queries with schema awareness."""
+    """Debugs queries with real database knowledge."""
     
-    DEBUGGER_PROMPT = """You are a MongoDB query debugging assistant for a recruitment platform.
-
-**DATABASE SCHEMA:**
-```
-{
-  "title": "string",                    // Job title (INDEXED)
-  "experience_years": "number",         // Years of experience (INDEXED) - can be missing
-  "location": "string",                 // City, Country (INDEXED) - can be "NA"
-  "current_industry": "string",         // Industry (INDEXED) - can be "NA"
-  "seniority_level": "string",          // Seniority (INDEXED) - can be "NA"
-  "expertise": "string",                // Skills (NOT INDEXED) - comma-separated, can be "NA"
-  "experience": "array",                // Work history - can be ['NA'] or empty
-  "education": "array",                 // Education history - can be ['NA'] or empty
-  "summary": "string",                  // Profile summary - often "NA"
-  "functional_area": "string",          // Functional area (e.g., "it", "sales")
-}
-```
-
-**IMPORTANT NOTES:**
-- Many fields can be "NA" or missing
-- Only title, experience_years, location, current_industry, seniority_level are indexed
-- Queries on expertise (skills) are SLOW - use sparingly
-- Text search index was removed (too slow)
-
-**AVAILABLE QUERY STRATEGIES:**
-1. EXACT - All filters (experience + location + industry + title + skills)
-2. RELAXED_LOCATION - Remove location filter
-3. RELAXED_INDUSTRY - Remove industry filter  
-4. TITLE_ONLY - Just title keywords
-5. MINIMAL - Single title keyword only
-
-**YOUR TASK:**
-Analyze why a query returned few/no results and suggest next strategy.
-
-Respond with JSON:
-```json
-{
-    "diagnosis": "Why query failed",
-    "likely_issues": ["issue1", "issue2"],
-    "next_strategy": "STRATEGY_NAME",
-    "ask_user": false,
-    "clarifying_questions": ["question1", "question2"]
-}
-```
-
-**ANALYSIS GUIDELINES:**
-- If experience_years filter returns 0: likely too strict or field missing
-- If location/industry filter fails: might be "NA" in database
-- If title keywords fail: keywords might not match database titles
-- If 3+ strategies tried: ask user for clarification
-
-Now analyze this query:"""
+    # Database stats
+    DB_STATS = {
+        "total_docs": 58_918_216,
+        "title_valid": 58_013_325,  # 98.5%
+        "seniority_valid": 32_417_410,  # 55%
+        "industry_valid": 40_461_430,  # 69%
+        "expertise_valid": 23_361_660,  # 40% (NOT INDEXED!)
+        "location_valid": 47_283_614,  # 80%
+    }
     
-    def __init__(self, ai_parser: AIParser):
-        self.ai = ai_parser
-    
-    async def analyze_query(
+    def analyze_query(
         self,
         ideal_profile: Dict[str, Any],
         query: Dict[str, Any],
         strategy: QueryStrategy,
         result_count: int,
-        query_builder: QueryBuilder
+        query_time_ms: int
     ) -> Dict[str, Any]:
-        """Analyze query and suggest improvements."""
+        """Analyze query performance and suggest improvements."""
         
-        query_description = query_builder.describe_query(query)
+        # Check for problems
+        issues = []
         
-        user_prompt = f"""
-**Ideal Profile:**
-{json.dumps(ideal_profile, indent=2)}
-
-**Query Strategy Used:** {strategy}
-
-**MongoDB Query:**
-{json.dumps(query, indent=2)}
-
-**Query Description:** {query_description}
-
-**Results Found:** {result_count}
-
-**Analysis:**
-"""
+        # 1. Timeout issues
+        if query_time_ms > 2000:
+            issues.append("Query too slow (>2s)")
+            issues.append("Likely not using indexes properly")
         
-        try:
-            response = await self.ai.call_llm(
-                system_prompt=self.DEBUGGER_PROMPT,
-                user_prompt=user_prompt,
-                model="anthropic/claude-sonnet-4",
-                response_format="json"
-            )
-            
-            analysis = json.loads(response)
-            
-            return {
-                "diagnosis": analysis.get("diagnosis", "Unknown"),
-                "likely_issues": analysis.get("likely_issues", []),
-                "next_strategy": analysis.get("next_strategy", "RELAXED_LOCATION"),
-                "ask_user": analysis.get("ask_user", False),
-                "clarifying_questions": analysis.get("clarifying_questions", [])
-            }
+        # 2. Check if querying expertise (BAD)
+        if "expertise" in str(query):
+            issues.append("Querying expertise field (not indexed, 60% NA)")
+            issues.append("This will cause full collection scan")
         
-        except Exception as e:
-            print(f"Error in query debugger: {e}")
-            return self._fallback_analysis(strategy, result_count)
-    
-    def _fallback_analysis(self, strategy: QueryStrategy, result_count: int) -> Dict[str, Any]:
-        """Fallback if LLM fails."""
+        # 3. Check regex complexity
+        if "$regex" in str(query):
+            regex_patterns = self._extract_regex_patterns(query)
+            for pattern in regex_patterns:
+                if "|" in pattern:
+                    issues.append(f"Multi-term regex: {pattern} (can't use index)")
         
+        # 4. Zero results
         if result_count == 0:
-            if strategy == QueryStrategy.EXACT:
-                return {
-                    "diagnosis": "Exact match too strict",
-                    "likely_issues": ["Too many filters"],
-                    "next_strategy": "RELAXED_LOCATION",
-                    "ask_user": False,
-                    "clarifying_questions": []
-                }
-            elif strategy == QueryStrategy.MINIMAL:
-                return {
-                    "diagnosis": "Even minimal query returns nothing",
-                    "likely_issues": ["Title keywords don't match database"],
-                    "next_strategy": None,
-                    "ask_user": True,
-                    "clarifying_questions": [
-                        "Could you describe the role with different keywords?",
-                        "What alternative job titles should I search for?"
-                    ]
-                }
-            else:
-                # Try next strategy
-                strategies = [
-                    QueryStrategy.EXACT,
-                    QueryStrategy.RELAXED_LOCATION,
-                    QueryStrategy.RELAXED_INDUSTRY,
-                    QueryStrategy.TITLE_ONLY,
-                    QueryStrategy.MINIMAL
-                ]
-                
-                try:
-                    current_idx = strategies.index(strategy)
-                    if current_idx < len(strategies) - 1:
-                        next_strategy = strategies[current_idx + 1]
-                        return {
-                            "diagnosis": f"{strategy} too strict",
-                            "likely_issues": ["Need to relax constraints"],
-                            "next_strategy": next_strategy.value,
-                            "ask_user": False,
-                            "clarifying_questions": []
-                        }
-                except:
-                    pass
+            issues.append("No matching documents found")
+            
+            # Diagnose why
+            if "current_industry" in str(query):
+                industries = ideal_profile.get("industries", [])
+                issues.append(f"Industry filter might be too specific: {industries}")
+            
+            if "seniority_level" in str(query):
+                issues.append("Seniority filter present (55% of docs have valid seniority)")
+        
+        # Suggest next strategy
+        next_strategy = self._suggest_next_strategy(strategy, result_count, issues)
+        
+        # Should ask user?
+        ask_user = (strategy == QueryStrategy.MINIMAL and result_count == 0)
         
         return {
-            "diagnosis": "Query returned no actionable results",
-            "likely_issues": [],
-            "next_strategy": None,
-            "ask_user": True,
-            "clarifying_questions": ["Could you provide more details?"]
+            "diagnosis": self._create_diagnosis(issues, result_count, query_time_ms),
+            "likely_issues": issues,
+            "next_strategy": next_strategy.value if next_strategy else None,
+            "ask_user": ask_user,
+            "clarifying_questions": self._generate_questions(ideal_profile, issues)
         }
+    
+    def _extract_regex_patterns(self, query: Dict) -> List[str]:
+        """Extract regex patterns from query."""
+        patterns = []
+        query_str = json.dumps(query)
+        
+        import re
+        regex_matches = re.findall(r'"\\$regex":\s*"([^"]+)"', query_str)
+        patterns.extend(regex_matches)
+        
+        return patterns
+    
+    def _suggest_next_strategy(
+        self,
+        current: QueryStrategy,
+        result_count: int,
+        issues: List[str]
+    ) -> Optional[QueryStrategy]:
+        """Suggest next strategy to try."""
+        
+        if result_count > 0:
+            return None  # Success!
+        
+        strategies_order = [
+            QueryStrategy.INDUSTRY_SENIORITY,
+            QueryStrategy.INDUSTRY_ONLY,
+            QueryStrategy.SENIORITY_ONLY,
+            QueryStrategy.TITLE_WORDS,
+            QueryStrategy.MINIMAL
+        ]
+        
+        try:
+            current_idx = strategies_order.index(current)
+            if current_idx < len(strategies_order) - 1:
+                return strategies_order[current_idx + 1]
+        except ValueError:
+            pass
+        
+        return None
+    
+    def _create_diagnosis(
+        self,
+        issues: List[str],
+        result_count: int,
+        query_time_ms: int
+    ) -> str:
+        """Create human-readable diagnosis."""
+        
+        if result_count == 0:
+            return "Query returned no results - filters too strict"
+        elif query_time_ms > 2000:
+            return f"Query too slow ({query_time_ms}ms) - not using indexes"
+        elif len(issues) > 0:
+            return issues[0]
+        else:
+            return "Query executed successfully"
+    
+    def _generate_questions(
+        self,
+        profile: Dict,
+        issues: List[str]
+    ) -> List[str]:
+        """Generate clarifying questions."""
+        
+        questions = []
+        
+        if "expertise" in str(issues):
+            questions.append("Should I relax skill requirements?")
+        
+        if "Industry" in str(issues):
+            questions.append("Should I search across all industries?")
+        
+        if "Seniority" in str(issues):
+            questions.append("Should I include other seniority levels?")
+        
+        return questions[:3]

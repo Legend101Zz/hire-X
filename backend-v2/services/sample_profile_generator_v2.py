@@ -1,40 +1,44 @@
 """
-Sample Profile Generator V2 - Working Version
+Sample Profile Generator V3 - Fast & Accurate
 ==============================================
 """
 
-import logging
-from typing import Any, Dict, List, Optional
+import json
+import time
+from typing import Any, Dict, List
 
-from pymongo.asynchronous.collection import AsyncCollection
+from pymongo.asynchronous.mongo_client import AsyncMongoClient
 
+from core.logging_config import get_logger
 from models.conversation_models import IdealProfileCard, SampleProfile
-from services.ai_parser import AIParser
 from services.query_builder import QueryBuilder, QueryStrategy
-from services.query_debugger import QueryDebugger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SampleProfileGeneratorV2:
-    """V2 sample generator."""
-    
-    MAX_ATTEMPTS = 5
+    """Generates sample profiles using proper indexes."""
     
     def __init__(
         self,
-        profiles_collection: AsyncCollection, 
-        ai_parser: AIParser 
+        profiles_collection:  AsyncMongoClient
     ):
         self.profiles_collection = profiles_collection
-        self.debugger = QueryDebugger(ai_parser)
     
     async def generate_sample(
         self,
         ideal_profile: IdealProfileCard,
         limit: int = 1
     ) -> Dict[str, Any]:
-        """Generate sample profile."""
+        """
+        Generate sample profile with proper indexing.
+        
+        Strategy:
+        1. Try indexed queries first (fast)
+        2. Fetch 50 candidates
+        3. Filter must-have skills in Python
+        4. Score and return best
+        """
         
         if self.profiles_collection is None:
             logger.warning("Profiles collection not available")
@@ -54,49 +58,73 @@ class SampleProfileGeneratorV2:
         # Track attempts
         query_log = []
         
-        # Try strategies in order
+        # Strategies that use indexes
         strategies = [
-            QueryStrategy.EXACT,
-            QueryStrategy.RELAXED_LOCATION,
-            QueryStrategy.TITLE_SKILLS,
-            QueryStrategy.TITLE_ONLY,
+            QueryStrategy.INDUSTRY_SENIORITY,  # Best: uses compound index
+            QueryStrategy.INDUSTRY_ONLY,
+            QueryStrategy.SENIORITY_ONLY,
+            QueryStrategy.TITLE_WORDS,
             QueryStrategy.MINIMAL
         ]
         
         for attempt, strategy in enumerate(strategies):
-            logger.info(f"🔍 Attempt {attempt + 1}: {strategy}")
+            logger.info(f"🔍 Attempt {attempt + 1}: {strategy.value}")
             
             # Build query
             query = builder.build(strategy)
             query_desc = builder.describe_query(query)
             
+            # ✅ Log query for debugging
             logger.info(f"📋 Query: {query_desc}")
+            logger.info(f"🔎 MongoDB: {json.dumps(query, indent=2)}")
             
-            # Execute query
             try:
-                cursor = self.profiles_collection.find(query).limit(limit * 5).max_time_ms(10000)
+                # ✅ Fetch candidates with TIMEOUT
+                fetch_limit = 50  # Reasonable number for filtering
                 
-                candidates = await cursor.to_list(length=limit * 5)
-                result_count = len(candidates)
+                cursor = self.profiles_collection.find(query) \
+                    .limit(fetch_limit) \
+                    .max_time_ms(2000)  # 2 second timeout
                 
-                logger.info(f"✅ Found {result_count} candidates")
+                start_time = time.time()
+                candidates = await cursor.to_list(length=fetch_limit)
+                query_time = time.time() - start_time
+                
+                logger.info(f"✅ Found {len(candidates)} in {query_time:.2f}s")
                 
                 # Log attempt
                 query_log.append({
                     "attempt": attempt + 1,
-                    "strategy": strategy,
+                    "strategy": strategy.value,
                     "query": query_desc,
-                    "results": result_count
+                    "time_ms": round(query_time * 1000),
+                    "results_raw": len(candidates)
                 })
                 
-                # If we found results, return best one
-                if result_count > 0:
-                    # Quick score candidates
-                    scored = self._quick_score_candidates(candidates, profile_dict)
-                    
-                    # Return top candidate
-                    best = scored[0] if scored else candidates[0]
+                if len(candidates) == 0:
+                    logger.warning(f"⚠️ No results with {strategy.value}")
+                    continue
+                
+                # ✅ Filter by must-have skills in Python
+                must_have = profile_dict.get("must_have_skills", [])
+                filtered = self._filter_by_must_have_skills(candidates, must_have)
+                
+                logger.info(f"📊 After must-have filter: {len(filtered)} candidates")
+                query_log[-1]["results_filtered"] = len(filtered)
+                
+                if len(filtered) == 0:
+                    logger.warning("⚠️ No candidates with must-have skills")
+                    continue
+                
+                # ✅ Score candidates
+                scored = self._score_candidates(filtered, profile_dict)
+                
+                # ✅ Check if best score meets threshold
+                best = scored[0]
+                if best["match_score"] >= 40.0:  # Lower threshold (40%)
                     sample = self._convert_to_sample(best, profile_dict)
+                    
+                    logger.info(f"🎯 Best: {sample.get('name')} ({best['match_score']:.1f}%)")
                     
                     return {
                         "sample_profile": sample,
@@ -104,136 +132,184 @@ class SampleProfileGeneratorV2:
                         "needs_clarification": False,
                         "clarifying_questions": []
                     }
-                
-                # No results - try next strategy
-                logger.warning(f"⚠️ No results with {strategy}")
+                else:
+                    logger.warning(f"⚠️ Best score {best['match_score']:.1f}% below 40%")
             
             except Exception as e:
-                logger.error(f"❌ Query error: {e}")
+                error_msg = str(e)
+                logger.error(f"❌ Query error: {error_msg}")
+                
                 query_log.append({
                     "attempt": attempt + 1,
-                    "strategy": strategy,
+                    "strategy": strategy.value,
                     "query": query_desc,
-                    "error": str(e)
+                    "error": error_msg
                 })
+                
+                # If timeout, continue to next strategy
+                if "time limit" in error_msg.lower() or "timeout" in error_msg.lower():
+                    logger.warning("⏱️ Timeout - trying next strategy")
+                    continue
         
-        # Exhausted all strategies
+        # All strategies failed
         logger.warning("🚫 All strategies exhausted")
         
         return {
             "sample_profile": None,
             "query_log": query_log,
             "needs_clarification": True,
-            "clarifying_questions": [
-                "I couldn't find matching candidates. Could you try different keywords?",
-                "What alternative job titles should I search for?",
-                "Should I search in different locations or industries?"
-            ]
+            "clarifying_questions": self._generate_clarifying_questions(profile_dict, query_log)
         }
     
-    def _quick_score_candidates(
+    def _filter_by_must_have_skills(
         self,
         candidates: List[Dict],
-        ideal_profile: Dict
+        must_have_skills: List[str]
     ) -> List[Dict]:
-        """Quick score and sort candidates."""
+        """Filter candidates by must-have skills in Python."""
+        
+        if not must_have_skills:
+            return candidates
+        
+        filtered = []
+        top_skills = must_have_skills[:4]  # Top 4 skills
+        min_required = max(1, len(top_skills) // 2)  # At least 1, or 50%
         
         for candidate in candidates:
-            score = 0
+            expertise = candidate.get("expertise", "").lower()
+            title = candidate.get("title", "").lower()
+            searchable = f"{expertise} {title}"
             
-            # Title match (50 points)
-            if ideal_profile.get("role_title"):
-                title = candidate.get("title", "").lower()
-                role = ideal_profile["role_title"].lower()
-                
-                # Check word overlap
-                title_words = set(title.split())
-                role_words = set(role.split())
-                overlap = title_words & role_words
-                
-                if overlap:
-                    score += 50 * (len(overlap) / len(role_words))
+            matches = 0
+            matched = []
             
-            # Skills match (30 points)
-            if ideal_profile.get("must_have_skills"):
+            for skill in top_skills:
+                # Handle variations (Next.js → next, nextjs)
+                skill_variations = [
+                    skill.lower(),
+                    skill.lower().replace(".", ""),
+                    skill.lower().replace(" ", ""),
+                    skill.lower().split(".")[0],  # "next" from "next.js"
+                ]
+                
+                if any(var in searchable for var in skill_variations):
+                    matches += 1
+                    matched.append(skill)
+            
+            if matches >= min_required:
+                candidate["_matched_skills"] = matched
+                candidate["_match_count"] = matches
+                filtered.append(candidate)
+        
+        # Sort by match count
+        filtered.sort(key=lambda x: x.get("_match_count", 0), reverse=True)
+        
+        return filtered
+    
+    def _score_candidates(
+        self,
+        candidates: List[Dict],
+        profile: Dict
+    ) -> List[Dict]:
+        """Score candidates (must-have skills already filtered)."""
+        
+        scored = []
+        must_have = profile.get("must_have_skills", [])
+        nice_to_have = profile.get("nice_to_have_skills", [])
+        
+        for candidate in candidates:
+            score = 0.0
+            
+            # 1. Must-have match (60 points)
+            matched_count = candidate.get("_match_count", 0)
+            if must_have:
+                ratio = matched_count / len(must_have[:4])
+                score += ratio * 60
+            
+            # 2. Nice-to-have (20 points)
+            if nice_to_have:
                 expertise = candidate.get("expertise", "").lower()
-                matched = 0
-                
-                for skill in ideal_profile["must_have_skills"]:
-                    if skill.lower() in expertise:
-                        matched += 1
-                
-                if ideal_profile["must_have_skills"]:
-                    score += 30 * (matched / len(ideal_profile["must_have_skills"]))
+                nice_matches = sum(1 for s in nice_to_have[:5] if s.lower() in expertise)
+                score += (nice_matches / len(nice_to_have[:5])) * 20
             
-            # Location match (10 points)
-            if ideal_profile.get("locations"):
-                location = candidate.get("location", "").lower()
-                for loc in ideal_profile["locations"]:
-                    if loc.lower() in location:
-                        score += 10
-                        break
+            # 3. Seniority match (10 points)
+            if profile.get("seniority"):
+                cand_sen = candidate.get("seniority_level", "").lower()
+                prof_sen = profile["seniority"].lower()
+                if prof_sen in cand_sen or cand_sen in prof_sen:
+                    score += 10
             
-            # Industry match (10 points)
-            if ideal_profile.get("industries"):
-                industry = candidate.get("current_industry", "").lower()
-                for ind in ideal_profile["industries"]:
-                    if ind.lower() in industry:
-                        score += 10
-                        break
+            # 4. Title relevance (10 points)
+            if profile.get("role_title"):
+                cand_title = candidate.get("title", "").lower()
+                prof_title = profile["role_title"].lower()
+                common_words = len(set(prof_title.split()) & set(cand_title.split()))
+                score += min(common_words * 2, 10)
             
             candidate["match_score"] = round(score, 1)
+            scored.append(candidate)
         
-        # Sort by score
-        candidates.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-        
-        return candidates
+        scored.sort(key=lambda x: x["match_score"], reverse=True)
+        return scored
     
     def _convert_to_sample(
         self,
         candidate: Dict,
-        ideal_profile: Dict
+        profile: Dict
     ) -> SampleProfile:
-        """Convert DB candidate to SampleProfile."""
+        """Convert MongoDB doc to SampleProfile."""
         
         # Extract skills
         expertise = candidate.get("expertise", "")
-        if isinstance(expertise, list):
-            skills = expertise[:5]
-        elif isinstance(expertise, str) and expertise != "NA":
-            skills = [s.strip() for s in expertise.split(",")][:5]
-        else:
-            skills = []
+        skills = [s.strip() for s in expertise.split(",") if s.strip()][:10]
         
-        # Estimate experience from title/seniority
-        seniority = candidate.get("seniority_level", "").lower()
-        title = candidate.get("title", "").lower()
-        
-        if "senior" in title or "senior" in seniority:
-            exp_years = 7
-        elif "lead" in title or "principal" in title:
-            exp_years = 10
-        elif "junior" in title or "entry" in seniority:
-            exp_years = 2
-        else:
-            exp_years = 5
-        
-        # Get current company from experience array
-        current_company = "Unknown"
-        experience = candidate.get("experience", [])
-        if experience and experience != ['NA']:
-            if isinstance(experience, list) and len(experience) > 0:
-                if isinstance(experience[0], dict):
-                    current_company = experience[0].get("company", "Unknown")
+        # Get experience years
+        exp_years = candidate.get("experience_years", 0)
+        if not exp_years:
+            # Estimate from experience array
+            exp_list = candidate.get("experience", [])
+            if exp_list and exp_list != ["NA"]:
+                exp_years = len(exp_list) * 2  # Rough estimate
         
         return SampleProfile(
             profile_id=str(candidate.get("_id", "")),
-            name=f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip() or "Sample Candidate",
-            title=candidate.get("title", ideal_profile.get("role_title", "")),
+            name=f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip(),
+            title=candidate.get("title", ""),
             skills=skills,
             experience_years=exp_years,
-            current_company=current_company,
-            location=candidate.get("location", "India"),
-            industry=candidate.get("current_industry", "Technology"),
-            match_score=candidate.get("match_score", 75)
+            current_company=self._extract_current_company(candidate),
+            location=candidate.get("location", ""),
+            industry=candidate.get("current_industry", ""),
+            match_score=candidate.get("match_score", 0.0)
         )
+    
+    def _extract_current_company(self, candidate: Dict) -> str:
+        """Extract current company from experience."""
+        exp_list = candidate.get("experience", [])
+        if exp_list and exp_list != ["NA"] and len(exp_list) > 0:
+            if isinstance(exp_list[0], dict):
+                return exp_list[0].get("company", "Unknown")
+        return "Unknown"
+    
+    def _generate_clarifying_questions(
+        self,
+        profile: Dict,
+        query_log: List[Dict]
+    ) -> List[str]:
+        """Generate helpful clarifying questions."""
+        
+        questions = []
+        
+        # Check what failed
+        role = profile.get("role_title", "")
+        skills = profile.get("must_have_skills", [])
+        
+        if role:
+            questions.append(f"Should I search for alternative titles like '{role.replace('Senior', 'Lead')}'?")
+        
+        if skills:
+            questions.append(f"Can candidates have {len(skills)-1} out of {len(skills)} must-have skills?")
+        
+        questions.append("Should I expand to more industries or locations?")
+        
+        return questions[:3]

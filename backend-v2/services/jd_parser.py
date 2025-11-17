@@ -226,7 +226,7 @@ class JDParser:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JD text: {e}")
             logger.error(f"Raw response: {response[:500]}")  # Log first 500 chars for debugging
-            # ✅ FALLBACK: Use regex extraction as last resort
+            # FALLBACK: Use regex extraction as last resort
             return self._fallback_extraction(jd_text)
     
     def _extract_from_docx(self, file_bytes: bytes) -> str:

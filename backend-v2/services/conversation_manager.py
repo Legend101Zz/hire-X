@@ -115,41 +115,58 @@ class ConversationManager:
             logger.info(f'JD to profile: {state.ideal_profile}')
             state.jd_uploaded = True
             state.stage = ConversationStage.REVIEW
-            donna_reply = self.prompts.get_greeting_with_jd()
-            logger.info(f'Donna reply: {donna_reply}')
             
-            # ✅ FIX: Handle V2 generator's dictionary response
+            # ✅ FIX: Generate sample FIRST, then decide greeting based on result
             sample_profile = None
+            donna_reply = ""
+            
             if self._has_minimum_info(state.ideal_profile):
                 try:
-                    # V2 returns a dict, not a SampleProfile object
                     result = await self.sample_generator.generate_sample(
                         state.ideal_profile
                     )
                     
-                    # Extract the actual sample profile from the result dict
                     if isinstance(result, dict):
                         sample_profile = result.get("sample_profile")
                         
-                        # If needs clarification, adjust the response
-                        if result.get("needs_clarification"):
+                        # ✅ CRITICAL FIX: Choose greeting based on whether sample was found
+                        if result.get("needs_clarification") or sample_profile is None:
                             logger.warning("Sample generation needs clarification")
-                            # Optionally append clarifying questions to donna_reply
+                            
+                            # Use clarification greeting instead of success greeting
+                            donna_reply = """I've analyzed your JD and extracted the requirements. 
+
+        However, I couldn't find matching candidates with the current criteria. Let's refine the search together!"""
+                            
+                            # Add specific clarifying questions
                             questions = result.get("clarifying_questions", [])
                             if questions:
                                 donna_reply += f"\n\n{questions[0]}"
+                        else:
+                            # Sample found - use success greeting
+                            donna_reply = self.prompts.get_greeting_with_jd()
+                            state.sample_profile = sample_profile
+                            logger.info(f'Sample profile: {sample_profile}')
                     else:
-                        # Fallback for old generator (returns SampleProfile directly)
+                        # Old generator fallback
                         sample_profile = result
-                    
-                    state.sample_profile = sample_profile
-                    logger.info(f'Sample profile: {sample_profile}')
-                    
+                        donna_reply = self.prompts.get_greeting_with_jd()
+                        
                 except Exception as e:
                     logger.error(f"Failed to generate sample profile: {e}")
                     sample_profile = None
+                    donna_reply = """I've analyzed your JD but encountered some difficulty finding matching candidates. 
+
+        Could you tell me more about what you're looking for? For example:
+        - What alternative job titles should I search for?
+        - Are there specific companies or industries you're targeting?
+        - What locations are you open to?"""
             else:
+                # Not enough info in JD
                 sample_profile = None
+                donna_reply = """I've analyzed your JD, but I need a bit more information to find great matches.
+
+        What role are you looking to fill?"""
         
         # If initial message provided, process it
         elif initial_message:
@@ -261,12 +278,92 @@ class ConversationManager:
                 state.ideal_profile,
                 username=None
             )
+            # NEW: Detect if user wants to see sample
+            user_wants_sample = self._detect_sample_request(user_message, state.stage)
+            
+            # Check what changed BEFORE merging
+            significant_changes = self._detect_significant_changes(
+                state.ideal_profile, 
+                extracted
+            )
             
             # Merge with existing profile
             state.ideal_profile = self._merge_profiles(
                 state.ideal_profile,
                 extracted
             )
+            
+            # ✅ NEW: Auto-regenerate sample if significant changes detected
+            if (user_wants_sample or significant_changes) and self._has_minimum_info(state.ideal_profile):
+                if user_wants_sample:
+                    logger.info("🎯 User requested sample generation")
+                else:
+                    logger.info(f"🔄 Significant changes detected: {significant_changes}")
+                
+                logger.info("🔄 Generating sample profile...")
+                
+                try:
+                    result = await self.sample_generator.generate_sample(
+                        state.ideal_profile
+                    )
+                    
+                    if isinstance(result, dict):
+                        new_sample = result.get("sample_profile")
+                        
+                        if result.get("needs_clarification"):
+                            # No sample found - ask for clarification
+                            state.sample_profile = None
+                            questions = result.get("clarifying_questions", [])
+                            clarification_msg = questions[0] if questions else "Could you provide more details about what you're looking for?"
+                            
+                            # Override donna_reply with clarification
+                            donna_reply = clarification_msg
+                            suggestions = ["Try different keywords", "Adjust criteria"]
+                            
+                            # Skip normal question flow
+                            state.messages.append(ConversationMessage(
+                                role="assistant",
+                                content=donna_reply
+                            ))
+                            state.updated_at = datetime.utcnow().isoformat()
+                            await self._save_state(state)
+                            
+                            return (
+                                donna_reply,
+                                state.ideal_profile,
+                                state.sample_profile,
+                                state.stage,
+                                state.ready_to_search,
+                                suggestions
+                            )
+                        
+                        elif new_sample:
+                            # Sample found!
+                            state.sample_profile = new_sample
+                            logger.info("✅ Sample profile generated")
+                            
+                            # Show the sample with appropriate message
+                            donna_reply = self.prompts.present_sample_profile()
+                            suggestions = ["Yes, looks good!", "No, adjust criteria"]
+                            
+                            state.messages.append(ConversationMessage(
+                                role="assistant",
+                                content=donna_reply
+                            ))
+                            state.updated_at = datetime.utcnow().isoformat()
+                            await self._save_state(state)
+                            
+                            return (
+                                donna_reply,
+                                state.ideal_profile,
+                                state.sample_profile,
+                                state.stage,
+                                state.ready_to_search,
+                                suggestions
+                            )
+                            
+                except Exception as e:
+                    logger.error(f"Failed to generate sample: {e}")
             
             # Decide next question and stage
             donna_reply, new_stage = await self._decide_next_question(state)
@@ -307,6 +404,56 @@ class ConversationManager:
     # ================================================================
     # HELPER METHODS
     # ================================================================
+    
+    def _detect_sample_request(self, user_message: str, current_stage: str) -> bool:
+        """
+        Detect if user is requesting to see a sample candidate.
+        
+        Args:
+            user_message: User's message
+            current_stage: Current conversation stage
+        
+        Returns:
+            True if user wants to see sample
+        """
+        # Only check in REVIEW stage
+        if current_stage != ConversationStage.REVIEW:
+            return False
+        
+        message_lower = user_message.lower().strip()
+        
+        # Positive indicators
+        positive_phrases = [
+            "yes",
+            "yeah",
+            "sure",
+            "okay",
+            "ok",
+            "show me",
+            "let's see",
+            "lets see",
+            "show sample",
+            "see sample",
+            "show candidate",
+            "see candidate",
+            "show profile",
+            "view sample",
+            "view profile",
+            "i want to see",
+            "i'd like to see",
+            "can i see",
+            "please show",
+            "go ahead",
+            "proceed",
+            "continue"
+        ]
+        
+        # Check if message contains positive indicators
+        for phrase in positive_phrases:
+            if phrase in message_lower:
+                return True
+        
+        return False
     
     async def _extract_info_from_message(
         self,
@@ -368,6 +515,42 @@ Extract new information and return updated fields as JSON."""
         except json.JSONDecodeError:
             # If LLM didn't return valid JSON, return unchanged profile
             return current_profile
+    
+    def _detect_significant_changes(
+    self,
+    old_profile: IdealProfileCard,
+    new_profile: IdealProfileCard
+) -> List[str]:
+        """
+        Detect significant changes that warrant sample regeneration.
+        
+        Returns:
+            List of changed fields
+        """
+        changes = []
+        
+        # Fields that trigger sample regeneration
+        significant_fields = [
+            "role_title",
+            "must_have_skills", 
+            "seniority",
+            "experience_years",
+            "industries",
+            "locations"
+        ]
+        
+        for field in significant_fields:
+            old_value = getattr(old_profile, field, None)
+            new_value = getattr(new_profile, field, None)
+            
+            # Handle lists vs strings
+            if isinstance(old_value, list) and isinstance(new_value, list):
+                if set(old_value) != set(new_value) and new_value:
+                    changes.append(field)
+            elif old_value != new_value and new_value:
+                changes.append(field)
+        
+        return changes
     
     
     async def _decide_next_question(
@@ -447,7 +630,12 @@ Extract new information and return updated fields as JSON."""
         
         # REVIEW STAGE
         elif current_stage == ConversationStage.REVIEW:
-            donna_question = "Want to see a sample candidate?"
+            # Check if we already have a sample
+            if state.sample_profile:
+                donna_question = "Is this the kind of candidate you're looking for?"
+            else:
+                # Don't have sample yet - ask if they want to see one
+                donna_question = "Want to see a sample candidate matching this profile?"
             new_stage = ConversationStage.REVIEW
         
         # READY STAGE
