@@ -1,35 +1,37 @@
+// app/conversation/page.tsx (UPDATED)
 "use client";
 
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Sparkles, Loader2, ThumbsUp, ThumbsDown, History, ChevronUp, AlertCircle, Brain } from "lucide-react";
+import { Send, Sparkles, Loader2, AlertCircle, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import BlueprintBackground from "@/components/conversation/BlueprintBackground";
 import DonnaEnhanced from "@/components/conversation/DonnaEnhanced";
 import ResumeProfileCard from "@/components/conversation/ResumeProfileCard";
-import SampleProfileDisplay from "@/components/conversation/SampleProfileDisplay";
 import ChatCard from "@/components/conversation/ChatCard";
 import IntroSequence from "@/components/conversation/IntroSequence";
-import { Badge } from "@/components/ui/badge";
+import SwipeableCandidateDeck from "@/components/conversation/SwipeableCandidateDeck";
+import WizardGuide, { shouldShowWizard } from "@/components/conversation/WizardGuide";
 import * as conversationApi from "@/utils/api/conversationApiV2";
-import type { IdealProfileCard, SampleProfile, ConversationMessage } from "@/types";
+import type { IdealProfileCard, ConversationMessage } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
-import WizardGuide from "@/components/conversation/WizardGuide";
-import AgentProgress, { AgentStep, AgentStatus } from "@/components/conversation/AgentProgress";
-import { Switch } from "@radix-ui/react-switch";
 
 type BotExpression = "neutral" | "happy" | "thinking" | "excited" | "peek" | "waving";
 type BotPosition = "home" | "chat" | "profile" | "sample" | "intro1" | "intro2" | "intro3";
 
-interface RejectedCandidate {
-    profile: any;
-    reason?: string;
-    timestamp: Date;
+interface FeedbackData {
+    rejected: Array<{
+        candidate: any;
+        reason: string;
+        timestamp: string;
+    }>;
+    accepted: Array<{
+        candidate: any;
+        timestamp: string;
+    }>;
 }
-
-const WIZARD_SHOWN_KEY = "neuraleap_wizard_shown";
 
 function LoadingFallback() {
     return (
@@ -48,13 +50,18 @@ function ConversationWorkspace() {
     const { token } = useAuth();
     const sessionId = searchParams.get("session");
 
+    // Wizard state
     const [showWizard, setShowWizard] = useState(false);
     const [wizardChecked, setWizardChecked] = useState(false);
 
-    // Show intro only on first visit
+    // Loading state
     const [showIntro, setShowIntro] = useState(false);
     const [isLoadingState, setIsLoadingState] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
+
+    // Conversation state
+    const [stage, setStage] = useState<string>("greeting");
+    const [readyToSearch, setReadyToSearch] = useState(false);
 
     // Profile State
     const [idealProfile, setIdealProfile] = useState<IdealProfileCard>({
@@ -68,12 +75,6 @@ function ConversationWorkspace() {
         locations: [],
         additional_requirements: "",
     });
-
-    const [sampleProfile, setSampleProfile] = useState<SampleProfile | null>(null);
-    const [showCandidateActions, setShowCandidateActions] = useState(false);
-    const [rejectedCandidates, setRejectedCandidates] = useState<RejectedCandidate[]>([]);
-    const [showHistory, setShowHistory] = useState(false);
-    const [waitingForRejectionReason, setWaitingForRejectionReason] = useState(false);
 
     // Chat State
     const [inputValue, setInputValue] = useState("");
@@ -91,63 +92,31 @@ function ConversationWorkspace() {
     const [highlightedField, setHighlightedField] = useState<string | null>(null);
     const [updatingField, setUpdatingField] = useState<string | null>(null);
 
-    // Agent Mode State
-    const [useAgentMode, setUseAgentMode] = useState(true); // Enable by default
-    const [showAgentProgress, setShowAgentProgress] = useState(false);
-    const [agentSteps, setAgentSteps] = useState<AgentStep[]>([
-        {
-            agent: "JD Analyst",
-            task: "Analyzing job requirements and database constraints...",
-            status: "pending" as AgentStatus,
-            icon: "brain" as const,
-        },
-        {
-            agent: "Query Strategist",
-            task: "Building optimized MongoDB queries...",
-            status: "pending" as AgentStatus,
-            icon: "search" as const,
-        },
-        {
-            agent: "Search Validator",
-            task: "Validating search results and quality...",
-            status: "pending" as AgentStatus,
-            icon: "check" as const,
-        },
-    ]);
+    // Sample Candidates State
+    const [sampleCandidates, setSampleCandidates] = useState<any[]>([]);
+    const [showCandidateDeck, setShowCandidateDeck] = useState(false);
+    const [isLoadingSamples, setIsLoadingSamples] = useState(false);
+
+    // Feedback State
+    const [feedbackData, setFeedbackData] = useState<FeedbackData>({
+        rejected: [],
+        accepted: [],
+    });
+    const [showFeedbackSummary, setShowFeedbackSummary] = useState(false);
+    const [isProcessingFeedback, setIsProcessingFeedback] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    // Check wizard on mount
     useEffect(() => {
-        const hasSeenWizard = localStorage.getItem(WIZARD_SHOWN_KEY);
-        if (!hasSeenWizard) {
-            setShowWizard(true);
-        }
+        const shouldShow = shouldShowWizard();
+        setShowWizard(shouldShow);
         setWizardChecked(true);
     }, []);
 
-
-    // ================================================================
-    // WIZARD HANDLERS
-    // ================================================================
-    const handleWizardComplete = () => {
-        localStorage.setItem(WIZARD_SHOWN_KEY, "true");
-        setShowWizard(false);
-        // Optionally show intro sequence after wizard
-        // setShowIntro(true);
-    };
-
-    const handleWizardSkip = () => {
-        localStorage.setItem(WIZARD_SHOWN_KEY, "true");
-        setShowWizard(false);
-    };
-
-    // ================================================================
-    // LOAD CONVERSATION STATE ON MOUNT
-    // ================================================================
-
+    // Load conversation state
     useEffect(() => {
-        // Don't load state until wizard check is complete
-        if (!wizardChecked) return;
+        if (!wizardChecked || showWizard) return;
 
         const loadConversationState = async () => {
             if (!sessionId || !token) {
@@ -160,7 +129,14 @@ function ConversationWorkspace() {
                 console.log("📥 Loading conversation state:", sessionId);
                 const state = await conversationApi.getConversationState(sessionId, token);
 
-                // Set state from backend
+                // ✅ DEBUG: Log loaded state
+                console.log("📊 Loaded state:", state);
+                console.log("  - Role:", state.ideal_profile?.role_title);
+                console.log("  - Skills:", state.ideal_profile?.must_have_skills);
+                console.log("  - Sample candidates:", state.sample_candidates?.length || 0);
+
+                setStage(state.stage || "greeting");
+                setReadyToSearch(state.ready_to_search || false);
                 setIdealProfile(state.ideal_profile || {
                     role_title: "",
                     must_have_skills: [],
@@ -172,37 +148,18 @@ function ConversationWorkspace() {
                     locations: [],
                     additional_requirements: "",
                 });
-
-                setSampleProfile(state.sample_profile || null);
-
-                // Check if the last message indicates we need clarification
-                const lastMessage = state.messages[state.messages.length - 1];
-                if (lastMessage && lastMessage.role === "assistant") {
-                    if (lastMessage.content.includes("couldn't find any matching candidates") ||
-                        lastMessage.content.includes("couldn't find matching candidates")) {
-                        // Donna is asking for clarification
-                        setBotExpression("thinking");
-                        setBotPosition("chat"); // Move to chat area
-                        setSpeechBubble("Let's refine the search together!");
-                        setShowSpeech(true);
-                    } else if (state.sample_profile) {
-                        // Sample found - show it
-                        setBotExpression("excited");
-                        setBotPosition("sample");
-                        setSpeechBubble("Here's a great match!");
-                        setShowSpeech(true);
-                    }
-                }
+                if (state.sample_candidates && state.sample_candidates.length > 0) {
+                    console.log("📦 Restoring sample candidates from state");
+                    setSampleCandidates(state.sample_candidates);
+                    setShowCandidateDeck(true);
+                } 
 
                 setMessages(state.messages || []);
-
                 setIsLoadingState(false);
 
-                // Show intro only if it's a brand new conversation
                 if (!state.messages || state.messages.length === 0) {
                     setShowIntro(true);
                 } else {
-                    // Skip intro and show welcome if already started
                     setBotPosition("home");
                     setBotExpression("happy");
                 }
@@ -221,10 +178,23 @@ function ConversationWorkspace() {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
-    // ================================================================
-    // INTRO SEQUENCE
-    // ================================================================
+    // Auto-load samples when stage changes to review
+    useEffect(() => {
+        if (stage === "review" && sessionId && token && sampleCandidates.length === 0) {
+            loadSampleCandidates();
+        }
+    }, [stage, sessionId, token]);
 
+    // Wizard handlers
+    const handleWizardComplete = () => {
+        setShowWizard(false);
+    };
+
+    const handleWizardSkip = () => {
+        setShowWizard(false);
+    };
+
+    // Intro sequence
     const handleIntroComplete = () => {
         setShowIntro(false);
         setTimeout(() => {
@@ -233,23 +203,20 @@ function ConversationWorkspace() {
     };
 
     const showWelcomeSequence = async () => {
-        // Step 1: Fly to profile card
         setBotPosition("profile");
         setBotExpression("waving");
         setSpeechBubble("This is where we'll build your ideal candidate profile together");
         setShowSpeech(true);
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
-        // Step 2: Fly to sample card
         setShowSpeech(false);
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         setBotPosition("sample");
-        setSpeechBubble("Here, I'll show you matching candidates in real-time");
+        setSpeechBubble("Here, I'll show you matching candidates as swipeable cards!");
         setShowSpeech(true);
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
-        // Step 3: Fly to chat
         setShowSpeech(false);
         await new Promise((resolve) => setTimeout(resolve, 500));
 
@@ -258,36 +225,24 @@ function ConversationWorkspace() {
         setShowSpeech(true);
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
-        // Step 4: Go home and start
         setShowSpeech(false);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-
         setBotPosition("home");
         setBotExpression("neutral");
     };
 
-    // Handle input focus - Bot peeks
-    const handleInputFocus = () => {
-        if (botPosition === "home") {
-            setBotPosition("chat");
-            setBotExpression("peek");
-        }
+    // Handle Donna speaking
+    const handleDonnaSpeak = (message: string, expression: BotExpression) => {
+        setSpeechBubble(message);
+        setBotExpression(expression);
+        setShowSpeech(true);
+
+        setTimeout(() => {
+            setShowSpeech(false);
+            setBotExpression("neutral");
+        }, 4000);
     };
 
-    // Handle input blur
-    const handleInputBlur = () => {
-        if (botPosition === "chat" && !isTyping) {
-            setTimeout(() => {
-                setBotPosition("home");
-                setBotExpression("neutral");
-            }, 1000);
-        }
-    };
-
-    // ================================================================
-    // SEND MESSAGE
-    // ================================================================
-
+    // Send message
     const handleSendMessage = async () => {
         if (!inputValue.trim() || !sessionId || !token || isTyping) return;
 
@@ -297,7 +252,6 @@ function ConversationWorkspace() {
         setBotExpression("thinking");
         setIsThinking(true);
 
-        // Add user message immediately
         const newUserMessage: ConversationMessage = {
             role: "user",
             content: userMessage,
@@ -305,21 +259,13 @@ function ConversationWorkspace() {
         };
         setMessages((prev) => [...prev, newUserMessage]);
 
-        // Bot flies to chat and thinks
         setBotPosition("chat");
 
-        //  Trigger agent mode if enabled
-        if (useAgentMode) {
-            simulateAgentProgress();
-        }
-
         try {
-            // Send message to backend
             const response = await conversationApi.sendMessage(sessionId, token, {
                 message: userMessage,
             });
 
-            // Add Donna's response
             const donnaMessage: ConversationMessage = {
                 role: "assistant",
                 content: response.donna_reply,
@@ -327,15 +273,21 @@ function ConversationWorkspace() {
             };
             setMessages((prev) => [...prev, donnaMessage]);
 
-            // Update profile and sample
-            setIdealProfile(response.updated_ideal_profile);
-            if (response.updated_sample_profile) {
-                setSampleProfile(response.updated_sample_profile);
-                setShowCandidateActions(true);
-            }
+            setStage(response.stage || stage);
+            setReadyToSearch(response.ready_to_search || false);
 
-            // Highlight updated fields
-            highlightProfileUpdates(response.updated_ideal_profile);
+            const oldProfile = idealProfile;
+            const newProfile = response.updated_ideal_profile;
+
+            setIdealProfile(newProfile);
+            highlightProfileUpdates(newProfile);
+
+            // Check if we should load samples
+            setTimeout(async () => {
+                if (response.stage === "review" || hasEnoughInfo(newProfile)) {
+                    await loadSampleCandidates();
+                }
+            }, 2000);
 
             setBotExpression("happy");
         } catch (error) {
@@ -350,7 +302,6 @@ function ConversationWorkspace() {
         } finally {
             setIsTyping(false);
             setIsThinking(false);
-            // Return home after a delay
             setTimeout(() => {
                 setBotPosition("home");
                 setBotExpression("neutral");
@@ -358,10 +309,55 @@ function ConversationWorkspace() {
         }
     };
 
-    // ================================================================
-    // PROFILE UPDATE HIGHLIGHTING
-    // ================================================================
+    const hasEnoughInfo = (profile: IdealProfileCard): boolean => {
+        return !!(
+            profile.role_title &&
+            profile.must_have_skills.length >= 2 &&
+            (profile.seniority || profile.industries.length > 0)
+        );
+    };
 
+    // Load sample candidates
+    const loadSampleCandidates = async () => {
+        if (!sessionId || !token || isLoadingSamples) return;
+
+        setIsLoadingSamples(true);
+        setBotPosition("sample");
+        setBotExpression("thinking");
+        setSpeechBubble("Searching for matching candidates... ⚡");
+        setShowSpeech(true);
+
+        try {
+            console.log("🔍 Loading sample candidates...");
+            const response = await conversationApi.getSampleCandidates(sessionId, token);
+
+            if (response.samples && response.samples.length > 0) {
+                setSampleCandidates(response.samples);
+                setShowCandidateDeck(true);
+                setSpeechBubble(
+                    `Found ${response.samples.length} candidates! Swipe right (👍) to like, left (👎) to pass!`
+                );
+                setBotExpression("excited");
+            } else {
+                setSpeechBubble("Hmm, let's refine the criteria to find better matches!");
+                setBotExpression("thinking");
+            }
+
+            setTimeout(() => {
+                setShowSpeech(false);
+                setBotPosition("home");
+                setBotExpression("neutral");
+            }, 4000);
+        } catch (error) {
+            console.error("Error loading samples:", error);
+            setSpeechBubble("Oops! Had trouble finding candidates. Let's adjust the search?");
+            setBotExpression("thinking");
+        } finally {
+            setIsLoadingSamples(false);
+        }
+    };
+
+    // Profile update highlighting
     const highlightProfileUpdates = (newProfile: IdealProfileCard) => {
         const fieldsToCheck: (keyof IdealProfileCard)[] = [
             "role_title",
@@ -380,7 +376,6 @@ function ConversationWorkspace() {
                 setHighlightedField(field);
                 setUpdatingField(field);
 
-                // Donna flies to profile card
                 setBotPosition("profile");
                 setBotExpression("excited");
 
@@ -397,138 +392,208 @@ function ConversationWorkspace() {
         });
     };
 
-    // ================================================================
-    // CANDIDATE ACTIONS
-    // ================================================================
+    // Candidate actions
+    const handleAcceptCandidate = (candidate: any) => {
+        setFeedbackData((prev) => ({
+            ...prev,
+            accepted: [
+                ...prev.accepted,
+                {
+                    candidate: candidate.candidate,
+                    timestamp: new Date().toISOString(),
+                },
+            ],
+        }));
 
-    const handleAcceptCandidate = async () => {
-        setShowCandidateActions(false);
+        // Add to chat
+        const message: ConversationMessage = {
+            role: "user",
+            content: `✅ Liked ${candidate.candidate.first_name} ${candidate.candidate.last_name}`,
+            timestamp: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, message]);
+    };
+
+    const handleRejectCandidate = (candidate: any, reason?: string) => {
+        setFeedbackData((prev) => ({
+            ...prev,
+            rejected: [
+                ...prev.rejected,
+                {
+                    candidate: candidate.candidate,
+                    reason: reason || "Not specified",
+                    timestamp: new Date().toISOString(),
+                },
+            ],
+        }));
+
+        // Add to chat
+        const message: ConversationMessage = {
+            role: "user",
+            content: `❌ Passed on ${candidate.candidate.first_name} ${candidate.candidate.last_name} - ${reason}`,
+            timestamp: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, message]);
+    };
+
+    const handleDeckComplete = () => {
+        setShowCandidateDeck(false);
+        setShowFeedbackSummary(true);
+
+        handleDonnaSpeak(
+            `Great! You reviewed ${feedbackData.accepted.length + feedbackData.rejected.length} candidates. Ready to refine and find more? 🎯`,
+            "excited"
+        );
+    };
+
+    // Process feedback and get better results
+    const handleProcessFeedback = async () => {
+        if (!sessionId || !token) return;
+
+        setIsProcessingFeedback(true);
         setBotPosition("sample");
-        setBotExpression("excited");
-        setSpeechBubble("Excellent choice! Ready to search for more like this?");
+        setBotExpression("thinking");
+        setSpeechBubble("Analyzing your feedback to find better matches... 🧠");
         setShowSpeech(true);
 
-        setMessages((prev) => [
-            ...prev,
-            { role: "assistant", content: "Great! You've accepted this candidate. Ready to search for more?", timestamp: new Date().toISOString() }
-        ]);
+        try {
+            // Analyze rejection patterns
+            const rejectionReasons = feedbackData.rejected.map((r) => r.reason);
+            const mostCommonReason = getMostCommonReason(rejectionReasons);
 
-        setTimeout(() => {
-            setShowSpeech(false);
-            setBotPosition("home");
+            // Map reasons to feedback types
+            let feedbackType: "too_junior" | "need_more_skill" | "wrong_industry" | "perfect" = "perfect";
+            let feedbackData_api: Record<string, any> = {};
+
+            if (mostCommonReason.includes("junior") || mostCommonReason.includes("Junior")) {
+                feedbackType = "too_junior";
+            } else if (mostCommonReason.includes("skill") || mostCommonReason.includes("Skill")) {
+                feedbackType = "need_more_skill";
+                // Extract skill from reason if possible
+                const skillMatch = mostCommonReason.match(/need more (\w+)/i);
+                if (skillMatch) {
+                    feedbackData_api.skill = skillMatch[1];
+                }
+            } else if (mostCommonReason.includes("industry") || mostCommonReason.includes("Industry")) {
+                feedbackType = "wrong_industry";
+            }
+
+            // Send feedback to backend
+            const response = await conversationApi.provideFeedback(
+                sessionId,
+                token,
+                feedbackType,
+                feedbackData_api
+            );
+
+            setSpeechBubble(response.donna_reply);
             setBotExpression("happy");
-        }, 3000);
+
+            // Add Donna's response to chat
+            const donnaMessage: ConversationMessage = {
+                role: "assistant",
+                content: response.donna_reply,
+                timestamp: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, donnaMessage]);
+
+            // Load new samples
+            if (response.updated_samples && response.updated_samples.length > 0) {
+                setSampleCandidates(response.updated_samples);
+                setShowCandidateDeck(true);
+                setShowFeedbackSummary(false);
+
+                // Reset feedback data
+                setFeedbackData({
+                    rejected: [],
+                    accepted: [],
+                });
+            }
+
+            setTimeout(() => {
+                setShowSpeech(false);
+                setBotPosition("home");
+                setBotExpression("neutral");
+            }, 4000);
+        } catch (error) {
+            console.error("Feedback error:", error);
+            setSpeechBubble("Oops! Had trouble processing feedback. Let's try again?");
+            setBotExpression("thinking");
+        } finally {
+            setIsProcessingFeedback(false);
+        }
     };
 
-    const handleRejectCandidate = async () => {
-        setShowCandidateActions(false);
+    const getMostCommonReason = (reasons: string[]): string => {
+        const counts: Record<string, number> = {};
+        reasons.forEach((reason) => {
+            counts[reason] = (counts[reason] || 0) + 1;
+        });
+        return Object.keys(counts).reduce((a, b) => (counts[a] > counts[b] ? a : b), reasons[0] || "");
+    };
 
-        // Add to rejected history
-        if (sampleProfile) {
-            setRejectedCandidates(prev => [
-                ...prev,
-                { profile: sampleProfile, timestamp: new Date() }
-            ]);
+    // Finalize and start comprehensive search
+    const handleFinalizeSearch = async () => {
+        if (!sessionId || !token) return;
+
+        // ✅ DEBUG: Log current state
+        console.log("🚀 Finalizing search...");
+        console.log("📊 Current state:");
+        console.log("  - Session ID:", sessionId);
+        console.log("  - Ideal Profile:", idealProfile);
+        console.log("  - Sample Candidates:", sampleCandidates.length);
+        console.log("  - Stage:", stage);
+
+        // Validate before calling API
+        if (!idealProfile.role_title) {
+            console.error("❌ Role title is missing!");
+            handleDonnaSpeak(
+                "Oops! The profile is incomplete. Let's build it properly first! 📋",
+                "thinking"
+            );
+            return;
         }
 
-        setBotPosition("chat");
-        setBotExpression("thinking");
-
-        setMessages((prev) => [
-            ...prev,
-            { role: "user", content: "Not this one", timestamp: new Date().toISOString() },
-            { role: "assistant", content: "I understand. Could you tell me what didn't work about this candidate?", timestamp: new Date().toISOString() }
-        ]);
-
-        setWaitingForRejectionReason(true);
-        setSampleProfile(null);
-
-        setTimeout(() => {
-            setBotPosition("home");
-            setBotExpression("neutral");
-        }, 2000);
-    };
-
-    // ================================================================
-    // AGENT ACTIONS
-    // ================================================================
-
-    const simulateAgentProgress = async () => {
-        setShowAgentProgress(true);
-
-        // Step 1: JD Analyst starts
-        setAgentSteps((prev) => {
-            const newSteps = [...prev];
-            newSteps[0] = { ...newSteps[0], status: "running", timestamp: new Date() };
-            return newSteps;
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        // Step 1: JD Analyst completes
-        setAgentSteps((prev) => {
-            const newSteps = [...prev];
-            newSteps[0] = {
-                ...newSteps[0],
-                status: "completed",
-                output: "Identified critical search criteria: title reliability (98.5%), industry filtering",
-            };
-            newSteps[1] = { ...newSteps[1], status: "running", timestamp: new Date() };
-            return newSteps;
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-
-        // Step 2: Query Strategist completes
-        setAgentSteps((prev) => {
-            const newSteps = [...prev];
-            newSteps[1] = {
-                ...newSteps[1],
-                status: "completed",
-                output: "Built query using industry_seniority strategy - found 150 candidates",
-            };
-            newSteps[2] = { ...newSteps[2], status: "running", timestamp: new Date() };
-            return newSteps;
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        // Step 3: Validator completes
-        setAgentSteps((prev) => {
-            const newSteps = [...prev];
-            newSteps[2] = {
-                ...newSteps[2],
-                status: "completed",
-                output: "Quality validated - 12 top matches identified",
-            };
-            return newSteps;
-        });
-
-        // Hide after a delay
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        setShowAgentProgress(false);
-
-        // Reset for next time
-        setTimeout(() => {
-            setAgentSteps((prev) =>
-                prev.map((step) => ({ ...step, status: "pending" as AgentStatus, output: undefined }))
+        if (idealProfile.must_have_skills.length < 2) {
+            console.error("❌ Not enough skills!");
+            handleDonnaSpeak(
+                "I need at least 2 must-have skills. Let's add more! 💡",
+                "thinking"
             );
-        }, 1000);
+            return;
+        }
+
+        try {
+            setBotPosition("chat");
+            setBotExpression("excited");
+            setSpeechBubble("Perfect! Enriching your top 5 candidates... 🚀");
+            setShowSpeech(true);
+
+            console.log("📤 Calling finalize API...");
+            const response = await conversationApi.finalizeConversation(sessionId, token);
+
+            console.log("✅ Finalize response:", response);
+            router.push(`/results?session=${response.session_id}`);
+
+        } catch (error) {
+            console.error("❌ Finalize error:", error);
+            const errorMessage = error instanceof Error
+                ? error.message
+                : "Failed to start enrichment";
+
+            handleDonnaSpeak(
+                `Oops! ${errorMessage}. Let's check the profile! 📋`,
+                "thinking"
+            );
+        }
     };
 
-    // ================================================================
-    // RENDER
-    // ================================================================
-
-    // Show wizard first if not seen before
-    if (!wizardChecked || (wizardChecked && showWizard)) {
+    // Render guards
+    if (!wizardChecked || showWizard) {
         return (
             <AnimatePresence>
                 {showWizard && (
-                    <WizardGuide
-                        onComplete={handleWizardComplete}
-                        onSkip={handleWizardSkip}
-                    />
+                    <WizardGuide onComplete={handleWizardComplete} onSkip={handleWizardSkip} />
                 )}
             </AnimatePresence>
         );
@@ -553,16 +618,13 @@ function ConversationWorkspace() {
 
     return (
         <>
-            {/* Intro Sequence */}
             <AnimatePresence>
                 {showIntro && <IntroSequence onComplete={handleIntroComplete} />}
             </AnimatePresence>
 
-            {/* Main Workspace */}
             <div className="min-h-screen relative overflow-hidden">
                 <BlueprintBackground />
 
-                {/* Donna Bot */}
                 <DonnaEnhanced
                     position={botPosition}
                     expression={botExpression}
@@ -571,7 +633,6 @@ function ConversationWorkspace() {
                     showSpeech={showSpeech}
                 />
 
-                {/* Main Content */}
                 <div className="relative container mx-auto px-8 py-12">
                     {/* Header */}
                     <motion.div
@@ -593,40 +654,16 @@ function ConversationWorkspace() {
                             <div className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/50">
                                 <Sparkles className="w-6 h-6 text-white" />
                             </div>
-                            <h1 className="text-5xl font-bold text-white">
-                                Recruiter's Workspace
-                            </h1>
+                            <h1 className="text-5xl font-bold text-white">Recruiter's Workspace</h1>
                         </motion.div>
                         <p className="text-amber-200 text-lg font-medium">
                             Build your ideal candidate profile with Donna
                         </p>
-                        {/* Add this in the header section, after the title */}
-                        <motion.div
-                            initial={{ opacity: 0, y: -20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.3 }}
-                            className="flex items-center justify-center gap-3 mt-4"
-                        >
-                            <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800/50 border border-slate-700/50">
-                                <Brain className={`w-4 h-4 ${useAgentMode ? 'text-purple-400' : 'text-gray-400'}`} />
-                                <span className="text-sm text-slate-300">Intelligent Agent Mode</span>
-                                <Switch
-                                    checked={useAgentMode}
-                                    onCheckedChange={setUseAgentMode}
-                                    className="ml-2"
-                                />
-                                {useAgentMode && (
-                                    <Badge className="ml-2 bg-purple-500/20 text-purple-400 border-purple-500/30">
-                                        ACTIVE
-                                    </Badge>
-                                )}
-                            </div>
-                        </motion.div>
                     </motion.div>
 
-                    {/* Three Premium Cards - ORIGINAL LAYOUT */}
+                    {/* Main Grid */}
                     <div className="grid lg:grid-cols-3 gap-8 mb-8">
-                        {/* Left: Resume Profile */}
+                        {/* Profile Card */}
                         <motion.div
                             initial={{ opacity: 0, x: -50 }}
                             animate={{ opacity: 1, x: 0 }}
@@ -639,51 +676,118 @@ function ConversationWorkspace() {
                             />
                         </motion.div>
 
-                        {/* Center: Sample Profile with Actions */}
+                        {/* Center Column - Swipeable Deck or Feedback Summary */}
                         <motion.div
                             initial={{ opacity: 0, y: 50 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: 0.4, type: "spring" }}
                             className="relative"
                         >
-                            <SampleProfileDisplay
-                                profile={sampleProfile}
-                                isLoading={isTyping && !sampleProfile}
-                            />
-
-                            {/* Candidate Actions - Floating over sample profile */}
-                            <AnimatePresence>
-                                {showCandidateActions && sampleProfile && (
+                            <AnimatePresence mode="wait">
+                                {showCandidateDeck && sampleCandidates.length > 0 ? (
                                     <motion.div
-                                        initial={{ opacity: 0, y: 20, scale: 0.9 }}
-                                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                                        exit={{ opacity: 0, y: -20, scale: 0.9 }}
-                                        className="absolute -bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-md px-4"
+                                        key="deck"
+                                        initial={{ opacity: 0, scale: 0.9 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        exit={{ opacity: 0, scale: 0.9 }}
                                     >
-                                        <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 rounded-xl border border-slate-700/50 shadow-2xl p-4 backdrop-blur-xl">
-                                            <div className="flex items-center gap-3">
-                                                <Button
-                                                    onClick={handleRejectCandidate}
-                                                    className="flex-1 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white h-12 rounded-lg shadow-lg shadow-red-500/20"
-                                                >
-                                                    <ThumbsDown className="w-5 h-5 mr-2" />
-                                                    Not a fit
-                                                </Button>
-                                                <Button
-                                                    onClick={handleAcceptCandidate}
-                                                    className="flex-1 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white h-12 rounded-lg shadow-lg shadow-emerald-500/20"
-                                                >
-                                                    <ThumbsUp className="w-5 h-5 mr-2" />
-                                                    Looks good!
-                                                </Button>
+                                        <SwipeableCandidateDeck
+                                            candidates={sampleCandidates}
+                                            onAccept={handleAcceptCandidate}
+                                            onReject={handleRejectCandidate}
+                                            onComplete={handleDeckComplete}
+                                            onDonnaSpeak={handleDonnaSpeak}
+                                        />
+                                    </motion.div>
+                                ) : showFeedbackSummary ? (
+                                    <motion.div
+                                        key="summary"
+                                        initial={{ opacity: 0, scale: 0.9 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        exit={{ opacity: 0, scale: 0.9 }}
+                                        className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 rounded-2xl p-6 border border-slate-700/50 shadow-2xl"
+                                    >
+                                        <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                                            <CheckCircle className="w-6 h-6 text-green-500" />
+                                            Review Complete!
+                                        </h3>
+
+                                        <div className="space-y-4 mb-6">
+                                            <div className="p-4 bg-green-500/10 rounded-xl border border-green-500/20">
+                                                <p className="text-sm text-green-400 mb-1">Candidates Liked</p>
+                                                <p className="text-3xl font-bold text-white">
+                                                    {feedbackData.accepted.length}
+                                                </p>
                                             </div>
+
+                                            <div className="p-4 bg-red-500/10 rounded-xl border border-red-500/20">
+                                                <p className="text-sm text-red-400 mb-1">Candidates Passed</p>
+                                                <p className="text-3xl font-bold text-white">
+                                                    {feedbackData.rejected.length}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <Button
+                                                onClick={handleProcessFeedback}
+                                                disabled={isProcessingFeedback}
+                                                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white h-12 rounded-lg shadow-lg"
+                                            >
+                                                {isProcessingFeedback ? (
+                                                    <>
+                                                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                                                        Processing...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Sparkles className="w-5 h-5 mr-2" />
+                                                        Refine & Find Better Matches
+                                                    </>
+                                                )}
+                                            </Button>
+
+                                            {feedbackData.accepted.length > 0 && (
+                                                <Button
+                                                    onClick={handleFinalizeSearch}
+                                                    className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white h-12 rounded-lg shadow-lg"
+                                                >
+                                                    <CheckCircle className="w-5 h-5 mr-2" />
+                                                    Start Full Search (50+ Candidates)
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </motion.div>
+                                ) : (
+                                    <motion.div
+                                        key="placeholder"
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 rounded-2xl p-12 border border-slate-700/50 shadow-2xl flex items-center justify-center min-h-[500px]"
+                                    >
+                                        <div className="text-center">
+                                            <motion.div
+                                                animate={{
+                                                    scale: [1, 1.1, 1],
+                                                    rotate: [0, 10, -10, 0],
+                                                }}
+                                                transition={{ duration: 3, repeat: Infinity }}
+                                            >
+                                                <Sparkles className="w-16 h-16 text-amber-500 mx-auto mb-4" />
+                                            </motion.div>
+                                            <p className="text-slate-400 text-lg">
+                                                {isLoadingSamples
+                                                    ? "Finding matching candidates..."
+                                                    : "Tell me about the role and I'll find matching candidates!"}
+                                            </p>
                                         </div>
                                     </motion.div>
                                 )}
                             </AnimatePresence>
                         </motion.div>
 
-                        {/* Right: Chat */}
+                        {/* Chat Card */}
                         <motion.div
                             initial={{ opacity: 0, x: 50 }}
                             animate={{ opacity: 1, x: 0 }}
@@ -693,7 +797,7 @@ function ConversationWorkspace() {
                         </motion.div>
                     </div>
 
-                    {/* Chat Input - Dark Professional Style - BOTTOM */}
+                    {/* Chat Input */}
                     <motion.div
                         initial={{ opacity: 0, y: 50 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -701,56 +805,33 @@ function ConversationWorkspace() {
                         className="max-w-4xl mx-auto"
                     >
                         <div className="relative group">
-                            {/* Ambient glow effect */}
                             <motion.div
                                 className="absolute -inset-1 bg-gradient-to-r from-violet-500 via-purple-500 to-amber-500 rounded-2xl blur-xl opacity-20 group-hover:opacity-30 transition-opacity"
-                                animate={{
-                                    opacity: [0.15, 0.25, 0.15],
-                                }}
-                                transition={{
-                                    duration: 3,
-                                    repeat: Infinity,
-                                }}
+                                animate={{ opacity: [0.15, 0.25, 0.15] }}
+                                transition={{ duration: 3, repeat: Infinity }}
                             />
 
-                            {/* Main input container */}
                             <div className="relative bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 rounded-2xl border border-slate-700/50 shadow-2xl backdrop-blur-xl overflow-hidden">
-                                {/* Top gradient line */}
                                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-purple-500/50 to-transparent" />
 
                                 <div className="p-3 flex items-center gap-3">
-                                    {/* Input field */}
                                     <div className="flex-1 relative">
                                         <Input
                                             value={inputValue}
                                             onChange={(e) => setInputValue(e.target.value)}
-                                            onFocus={handleInputFocus}
-                                            onBlur={handleInputBlur}
                                             onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                                            placeholder={waitingForRejectionReason ? "Tell me what didn't work..." : "Type your message to Donna..."}
+                                            placeholder="Type your message to Donna..."
                                             disabled={isTyping}
                                             className="w-full bg-slate-800/50 border-slate-700/50 focus:border-purple-500/50 focus:ring-2 focus:ring-purple-500/20 text-slate-100 placeholder:text-slate-500 rounded-xl px-5 h-14 text-base transition-all duration-300"
                                         />
-
-                                        {/* Input glow on focus */}
-                                        <motion.div
-                                            className="absolute inset-0 rounded-xl bg-gradient-to-r from-violet-500/10 to-purple-500/10 pointer-events-none opacity-0 group-focus-within:opacity-100 transition-opacity"
-                                        />
                                     </div>
 
-                                    {/* Send button */}
                                     <Button
                                         onClick={handleSendMessage}
                                         disabled={!inputValue.trim() || isTyping}
                                         size="lg"
-                                        className="relative h-14 px-8 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 disabled:from-slate-700 disabled:to-slate-700 text-white rounded-xl shadow-lg shadow-purple-500/20 transition-all duration-300 group/btn overflow-hidden"
+                                        className="relative h-14 px-8 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 disabled:from-slate-700 disabled:to-slate-700 text-white rounded-xl shadow-lg shadow-purple-500/20 transition-all duration-300"
                                     >
-                                        {/* Button glow effect */}
-                                        <motion.div
-                                            className="absolute inset-0 bg-gradient-to-r from-violet-400 to-purple-400 opacity-0 group-hover/btn:opacity-20 blur-xl transition-opacity"
-                                        />
-
-                                        {/* Button content */}
                                         <div className="relative flex items-center gap-2">
                                             {isTyping ? (
                                                 <>
@@ -760,194 +841,16 @@ function ConversationWorkspace() {
                                             ) : (
                                                 <>
                                                     <span className="font-semibold">Send</span>
-                                                    <motion.div
-                                                        animate={{ x: [0, 3, 0] }}
-                                                        transition={{ duration: 1.5, repeat: Infinity }}
-                                                    >
-                                                        <Send className="w-5 h-5" />
-                                                    </motion.div>
+                                                    <Send className="w-5 h-5" />
                                                 </>
                                             )}
                                         </div>
                                     </Button>
                                 </div>
-
-                                {/* Bottom info bar */}
-                                <div className="px-5 py-2 bg-slate-950/30 border-t border-slate-800/50 flex items-center justify-between">
-                                    <div className="flex items-center gap-4">
-                                        <div className="flex items-center gap-2 text-xs text-slate-500">
-                                            <kbd className="px-2 py-1 bg-slate-800/60 border border-slate-700/50 rounded text-[10px] font-mono">
-                                                Enter
-                                            </kbd>
-                                            <span>to send</span>
-                                        </div>
-                                        <div className="w-px h-3 bg-slate-700/50" />
-                                        <div className="flex items-center gap-2 text-xs text-slate-500">
-                                            <kbd className="px-2 py-1 bg-slate-800/60 border border-slate-700/50 rounded text-[10px] font-mono">
-                                                Shift + Enter
-                                            </kbd>
-                                            <span>for new line</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Character counter */}
-                                    <motion.div
-                                        className="text-xs text-slate-500"
-                                        animate={{
-                                            color: inputValue.length > 0 ? "rgb(168, 85, 247)" : "rgb(100, 116, 139)",
-                                        }}
-                                    >
-                                        {inputValue.length > 0 && `${inputValue.length} characters`}
-                                    </motion.div>
-                                </div>
                             </div>
                         </div>
-
-                        {/* Status indicator */}
-                        <AnimatePresence>
-                            {isTyping && (
-                                <motion.div
-                                    initial={{ opacity: 0, y: -10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -10 }}
-                                    className="mt-3 flex items-center justify-center gap-2 text-xs text-slate-400"
-                                >
-                                    <motion.div
-                                        className="w-2 h-2 rounded-full bg-purple-500"
-                                        animate={{
-                                            scale: [1, 1.3, 1],
-                                            opacity: [1, 0.5, 1],
-                                        }}
-                                        transition={{ duration: 1.5, repeat: Infinity }}
-                                    />
-                                    <span>Donna is processing your message...</span>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
                     </motion.div>
                 </div>
-
-                {/* Rejected Candidates History - Bottom Left */}
-                <AnimatePresence>
-                    {rejectedCandidates.length > 0 && (
-                        <motion.div
-                            initial={{ opacity: 0, x: -100 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: -100 }}
-                            className="fixed bottom-8 left-8 z-40"
-                        >
-                            <div className="relative">
-                                {/* History Toggle Button */}
-                                <motion.button
-                                    onClick={() => setShowHistory(!showHistory)}
-                                    className="relative bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-slate-700/50 rounded-2xl px-6 py-4 shadow-2xl backdrop-blur-xl hover:border-slate-600/50 transition-all"
-                                    whileHover={{ scale: 1.05 }}
-                                    whileTap={{ scale: 0.95 }}
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20">
-                                            <History className="w-5 h-5 text-red-400" />
-                                        </div>
-                                        <div className="text-left">
-                                            <div className="text-sm font-semibold text-slate-200">
-                                                Rejected Profiles
-                                            </div>
-                                            <div className="text-xs text-slate-500">
-                                                {rejectedCandidates.length} candidates
-                                            </div>
-                                        </div>
-                                        <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
-                                            {rejectedCandidates.length}
-                                        </Badge>
-                                        <motion.div
-                                            animate={{ rotate: showHistory ? 180 : 0 }}
-                                            transition={{ duration: 0.3 }}
-                                        >
-                                            <ChevronUp className="w-4 h-4 text-slate-400" />
-                                        </motion.div>
-                                    </div>
-                                </motion.button>
-
-                                {/* History Panel */}
-                                <AnimatePresence>
-                                    {showHistory && (
-                                        <motion.div
-                                            initial={{ opacity: 0, y: 20, height: 0 }}
-                                            animate={{ opacity: 1, y: 0, height: "auto" }}
-                                            exit={{ opacity: 0, y: 20, height: 0 }}
-                                            className="absolute bottom-full left-0 mb-4 w-96 overflow-hidden"
-                                        >
-                                            <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 border border-slate-700/50 rounded-2xl shadow-2xl backdrop-blur-xl max-h-96 overflow-y-auto">
-                                                {/* Header */}
-                                                <div className="px-6 py-4 border-b border-slate-800/50 sticky top-0 bg-slate-950/50 backdrop-blur-sm">
-                                                    <div className="flex items-center justify-between">
-                                                        <h3 className="text-sm font-semibold text-slate-200">
-                                                            Rejected Candidates
-                                                        </h3>
-                                                        <Button
-                                                            onClick={() => setRejectedCandidates([])}
-                                                            variant="ghost"
-                                                            size="sm"
-                                                            className="text-xs text-slate-500 hover:text-slate-300"
-                                                        >
-                                                            Clear all
-                                                        </Button>
-                                                    </div>
-                                                </div>
-
-                                                {/* List */}
-                                                <div className="p-4 space-y-3">
-                                                    {rejectedCandidates.map((rejected, idx) => (
-                                                        <motion.div
-                                                            key={idx}
-                                                            initial={{ opacity: 0, x: -20 }}
-                                                            animate={{ opacity: 1, x: 0 }}
-                                                            transition={{ delay: idx * 0.05 }}
-                                                            className="p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl hover:border-slate-600/50 transition-all"
-                                                        >
-                                                            <div className="flex items-start justify-between mb-2">
-                                                                <div>
-                                                                    <div className="text-sm font-semibold text-slate-200">
-                                                                        {rejected.profile.name}
-                                                                    </div>
-                                                                    <div className="text-xs text-slate-500">
-                                                                        {rejected.profile.title}
-                                                                    </div>
-                                                                </div>
-                                                                <Badge variant="outline" className="border-red-500/30 text-red-400 text-xs">
-                                                                    {rejected.profile.match_score}%
-                                                                </Badge>
-                                                            </div>
-                                                            {rejected.reason && (
-                                                                <div className="mt-2 text-xs text-slate-400 italic">
-                                                                    "{rejected.reason}"
-                                                                </div>
-                                                            )}
-                                                            <div className="mt-2 text-[10px] text-slate-600">
-                                                                {rejected.timestamp.toLocaleTimeString()}
-                                                            </div>
-                                                        </motion.div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-                {/* Agent Progress Panel */}
-                <AnimatePresence>
-                    {showAgentProgress && (
-                        <AgentProgress
-                            steps={agentSteps}
-                            isActive={showAgentProgress}
-                            onClose={() => setShowAgentProgress(false)}
-                        />
-                    )}
-                </AnimatePresence>
-
             </div>
         </>
     );

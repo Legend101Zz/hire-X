@@ -7,23 +7,28 @@ FastAPI routes for the conversational interface with Donna.
 import base64
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
                      UploadFile)
 
 from core.dependencies import (get_conversation_manager, get_current_username,
-                               get_jd_generator, get_jd_parser, get_workflow)
+                               get_enrichment_service, get_jd_generator,
+                               get_jd_parser, get_mongodb, get_workflow)
 from core.logging_config import get_logger
+from data.mongodb import MongoDB
 from models.conversation_models import (ConversationFinalizeRequest,
                                         ConversationFinalizeResponse,
                                         ConversationMessageRequest,
                                         ConversationMessageResponse,
                                         ConversationStartRequest,
                                         ConversationStartResponse,
+                                        FeedbackRequest, FeedbackResponse,
                                         GenerateJDRequest, GenerateJDResponse,
-                                        RefineJDRequest, RefineJDResponse)
+                                        RefineJDRequest, RefineJDResponse,
+                                        RefineSearchRequest)
 from services.conversation_manager import ConversationManager
+from services.enrichment_service import EnrichmentService
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.scorecard_workflow import ScorecardWorkflow
@@ -213,30 +218,26 @@ async def get_conversation(
 async def finalize_conversation(
     session_id: str,
     request: ConversationFinalizeRequest,
-    background_tasks: BackgroundTasks,  
+    background_tasks: BackgroundTasks,
     username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
-    workflow: ScorecardWorkflow = Depends(get_workflow) 
+    enrichment_service: EnrichmentService = Depends(get_enrichment_service),
+    mongodb: MongoDB = Depends(get_mongodb)
 ):
     """
-    Finalize conversation and trigger search.
+    Finalize conversation and enrich top 5 candidates with FULL enrichment.
     
-    This endpoint:
-    1. Validates the ideal profile
-    2. Generates a new search session ID
-    3. Triggers the V3 workflow in background
-    4. Returns search session info for progress tracking
-    
-    Args:
-        session_id: Conversation session ID
-        request: Final adjustments and model config
-    
-    Returns:
-        Search session ID and status
+    This triggers comprehensive enrichment including:
+    - Salary estimation (career progression with web search)
+    - Skills validation (GitHub, StackOverflow, blogs)
+    - Response likelihood (detailed factor analysis)
+    - Availability checking (company health, urgency)
+    - Web intelligence (press mentions, online presence)
+    - Recruiter summary (AI-generated actionable insights)
     """
     
     try:
-        logger.info(f"Finalizing conversation {session_id} for {username}")
+        logger.info(f"🎯 Finalizing conversation {session_id} for {username}")
         
         # Load conversation state
         state = await conversation_manager._load_state(session_id)
@@ -246,57 +247,146 @@ async def finalize_conversation(
         
         # Apply final adjustments if provided
         if request.final_profile_adjustments:
-            state.ideal_profile = request.final_profile_adjustments
+            adjustments_dict = request.final_profile_adjustments.dict(exclude_unset=True)
+            for key, value in adjustments_dict.items():
+                setattr(state.ideal_profile, key, value)
         
-        # VALIDATE PROFILE
+        # Validation
         if not state.ideal_profile.role_title:
             raise HTTPException(status_code=400, detail="Role title is required")
         
-        if not state.ideal_profile.must_have_skills or len(state.ideal_profile.must_have_skills) < 3:
+        if not state.ideal_profile.must_have_skills or len(state.ideal_profile.must_have_skills) < 2:
+            raise HTTPException(status_code=400, detail="At least 2 must-have skills required")
+        
+        # Get sample candidates
+        sample_candidates = getattr(state, 'sample_candidates', [])
+        
+        if not sample_candidates:
             raise HTTPException(
-                status_code=400, 
-                detail="At least 3 must-have skills required"
+                status_code=400,
+                detail="No sample candidates found. Please review candidates first."
             )
         
-        # Mark conversation as ready
-        state.ready_to_search = True
-        state.stage = "ready"
-        await conversation_manager._save_state(state)
+        # Take top 5 candidates
+        top_5 = sample_candidates[:5]
         
-        # ✅ GENERATE SEARCH SESSION ID (different from conversation session)
-        search_session_id = str(uuid.uuid4())
+        logger.info(f"✅ Enriching {len(top_5)} candidates with FULL enrichment")
         
-        logger.info(f"Triggering V3 workflow:")
-        logger.info(f"  - Conversation session: {session_id}")
-        logger.info(f"  - Search session: {search_session_id}")
-        logger.info(f"  - Profile: {state.ideal_profile.role_title}")
+        # Generate enrichment session ID
+        enrichment_session_id = str(uuid.uuid4())
         
-        # ✅ TRIGGER V3 WORKFLOW IN BACKGROUND
-        # This runs: conversation → ideal profile → search → score → enrich
+        # Trigger enrichment in background
         background_tasks.add_task(
-            workflow.execute,
-            session_id=search_session_id,  # Search workflow session ID
+            _enrich_and_store_results,
+            enrichment_session_id=enrichment_session_id,
+            conversation_session_id=session_id,
             username=username,
-            conversation_session_id=session_id,  # Link to conversation
-            mode="v3"  # Use V3 mode with enrichment
+            ideal_profile=state.ideal_profile.dict(),
+            candidates=top_5,
+            enrichment_service=enrichment_service,
+            mongodb=mongodb
         )
         
-        logger.info(f"✅ V3 workflow started in background for {search_session_id}")
-        
-        # ✅ RETURN IMMEDIATELY (workflow runs in background)
         return ConversationFinalizeResponse(
-            session_id=search_session_id,  # Return the SEARCH session ID for polling
+            session_id=enrichment_session_id,
             search_triggered=True,
-            message="Search initiated! Poll /session/{session_id}/status for progress.",
-            estimated_candidates=None  # Will be filled after search completes
+            message="Enriching top 5 candidates with salary, skills, response likelihood, availability, and recruiter insights!",
+            estimated_candidates=len(top_5)
         )
     
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error finalizing conversation: {e}")
+        logger.error(f"Error finalizing conversation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+async def _enrich_and_store_results(
+    enrichment_session_id: str,
+    conversation_session_id: str,
+    username: str,
+    ideal_profile: Dict,
+    candidates: List[Dict],
+    enrichment_service: EnrichmentService,
+    mongodb: MongoDB
+):
+    """Background task for comprehensive enrichment."""
+    
+    try:
+        logger.info(f"🚀 Starting FULL enrichment for {enrichment_session_id}")
+        
+        # Initialize progress
+        await enrichment_service.redis.store_session_data(
+            enrichment_session_id,
+            "enrichment_progress",
+            {
+                "status": "enriching",
+                "total_candidates": len(candidates),
+                "enriched_count": 0,
+                "progress_percentage": 0,
+                "message": "Starting comprehensive enrichment..."
+            },
+            expire_seconds=3600
+        )
+        
+        # Run FULL enrichment (all types including recruiter summary)
+        enriched_candidates = await enrichment_service.enrich_candidates(
+            session_id=enrichment_session_id,
+            candidates=candidates,
+            enrichment_types=[
+                "salary", "response_likelihood", "skills", 
+                "availability", "web_intelligence", "recruiter_summary"
+            ],
+            username=username
+        )
+        
+        # ✅ FIX: Store results using the save_enriched_results method
+        results_doc = {
+            "session_id": enrichment_session_id,
+            "conversation_session_id": conversation_session_id,
+            "username": username,
+            "ideal_profile": ideal_profile,
+            "total_found": len(enriched_candidates),
+            "enriched_count": len([c for c in enriched_candidates if c.enrichment_status == "completed"]),
+            "candidates": [c.dict() for c in enriched_candidates],
+            "created_at": datetime.utcnow().isoformat(),
+            "status": "completed"
+        }
+        
+        # ✅ Use the proper MongoDB method
+        await mongodb.save_enriched_results(results_doc)
+        
+        logger.info(f"✅ Enrichment completed for {enrichment_session_id}")
+        
+        # Update progress to completed
+        await enrichment_service.redis.store_session_data(
+            enrichment_session_id,
+            "enrichment_progress",
+            {
+                "status": "completed",
+                "total_candidates": len(candidates),
+                "enriched_count": len([c for c in enriched_candidates if c.enrichment_status == "completed"]),
+                "progress_percentage": 100,
+                "message": "Enrichment complete! View your results now."
+            },
+            expire_seconds=3600
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Enrichment failed for {enrichment_session_id}: {e}", exc_info=True)
+        
+        await enrichment_service.redis.store_session_data(
+            enrichment_session_id,
+            "enrichment_progress",
+            {
+                "status": "failed",
+                "total_candidates": len(candidates),
+                "enriched_count": 0,
+                "progress_percentage": 0,
+                "message": f"Enrichment failed: {str(e)}"
+            },
+            expire_seconds=3600
+        )
 
 # ================================================================
 # UPLOAD JD (ALTERNATIVE ENDPOINT)
@@ -503,6 +593,148 @@ async def refine_jd(
     except Exception as e:
         logger.error(f"Error refining JD: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{session_id}/refine")
+async def refine_search(
+    session_id: str,
+    request: RefineSearchRequest,
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    username: str = Depends(get_current_username)
+):
+    """
+    Refine search based on HR feedback.
+    
+    Allows HR to iteratively adjust search criteria.
+    """
+    try:
+        # Load current state
+        state = await conversation_manager._load_state(session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Apply refinement
+        filters = conversation_manager.refinement.apply_refinement(
+            session_id=session_id,
+            original_jd={
+                "role_title": state.ideal_profile.role_title,
+                "required_skills": state.ideal_profile.must_have_skills,
+                "industries": state.ideal_profile.industries,
+                "seniority": state.ideal_profile.seniority
+            },
+            refinement_action=request.action,
+            refinement_data=request.data
+        )
+        
+        # Store filters in state
+        state.search_filters = filters
+        
+        # Re-run search with new filters
+        donna_reply, suggestions = await conversation_manager._generate_sample_with_smart_search(state)
+        
+        # Save state
+        await conversation_manager._save_state(state)
+        
+        return {
+            "donna_reply": donna_reply,
+            "updated_filters": filters,
+            "sample_profile": state.sample_profile,
+            "suggestions": suggestions
+        }
+        
+    except Exception as e:
+        logger.error(f"Refinement failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ================================================================
+# PROVIDE FEEDBACK ON SAMPLES
+# ================================================================
+
+@router.post("/{session_id}/feedback", response_model=FeedbackResponse)
+async def provide_feedback(
+    session_id: str,
+    request: FeedbackRequest,
+    username: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """
+    Provide feedback on sample candidates.
+    
+    Feedback types:
+    - too_junior: Candidates are too junior
+    - need_more_skill: Need more of a specific skill
+    - wrong_industry: Wrong industries shown
+    - perfect: These are great, search for more
+    
+    Returns:
+        Updated samples based on feedback
+    """
+    
+    try:
+        logger.info(f"Feedback from {username}: {request.feedback_type}")
+        
+        # Process feedback
+        donna_reply, updated_samples = await conversation_manager.process_feedback(
+            session_id=session_id,
+            feedback_type=request.feedback_type,
+            feedback_data=request.feedback_data
+        )
+        
+        return FeedbackResponse(
+            donna_reply=donna_reply,
+            updated_samples=updated_samples,
+            feedback_applied=True
+        )
+    
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error processing feedback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================================================
+# GET SAMPLE CANDIDATES (REFRESH)
+# ================================================================
+
+@router.get("/{session_id}/samples")
+async def get_sample_candidates(
+    session_id: str,
+    username: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """
+    Get/refresh sample candidates.
+    
+    Returns current samples or generates new ones.
+    """
+    
+    try:
+        # Load state
+        state = await conversation_manager._load_state(session_id)
+        
+        if not state:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Generate samples if not exists
+        if not hasattr(state, 'sample_candidates') or not state.sample_candidates:
+            samples = await conversation_manager._generate_sample_candidates(state)
+            state.sample_candidates = samples
+            await conversation_manager._save_state(state)
+        else:
+            samples = state.sample_candidates
+        
+        return {
+            "samples": samples,
+            "count": len(samples)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting samples: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ================================================================
 # RESET CONVERSATION

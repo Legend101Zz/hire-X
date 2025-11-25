@@ -11,7 +11,7 @@ These models define the structure of:
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -141,19 +141,6 @@ class ConversationState(BaseModel):
     - What have we built so far?
     - What's the message history?
     - What sample profile are we showing?
-    
-    Example:
-        {
-            "session_id": "abc-123-def-456",
-            "username": "recruiter@company.com",
-            "stage": "skills",
-            "turn_count": 3,
-            "ideal_profile": {...},
-            "sample_profile": {...},
-            "messages": [...],
-            "jd_uploaded": false,
-            "ready_to_search": false
-        }
     """
     session_id: str = Field(..., description="Unique session ID")
     username: str = Field(..., description="Logged-in user")
@@ -175,10 +162,23 @@ class ConversationState(BaseModel):
     jd_file_name: Optional[str] = Field(None, description="Uploaded JD filename")
     ready_to_search: bool = Field(default=False, description="Ready to trigger search?")
     
+    # ✅ ADD THESE NEW FIELDS!
+    sample_candidates: List[Dict[str, Any]] = Field(
+        default_factory=list, 
+        description="List of sample candidates for feedback"
+    )
+    last_search_metadata: Optional[Dict[str, Any]] = Field(
+        None, 
+        description="Metadata from last search (total_found, tier_distribution, etc.)"
+    )
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="User feedback for refining searches (min_years, skill_weights, etc.)"
+    )
+    
     # Timestamps
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
-
 
 # ===================================================================
 # API REQUEST/RESPONSE MODELS
@@ -274,3 +274,20 @@ class RefineJDResponse(BaseModel):
     jd_text: str = Field(..., description="Refined job description text")
     retry_count: int = Field(..., description="Updated retry count")
     max_retries_reached: bool = Field(..., description="Have we hit max retries?")
+    
+class RefineSearchRequest(BaseModel):
+    """Request to refine search."""
+    action: str = Field(..., description="Refinement action")
+    data: Dict[str, Any] = Field(..., description="Refinement data")
+    
+class FeedbackRequest(BaseModel):
+    """Request for feedback on samples."""
+    feedback_type: str = Field(..., description="Type: too_junior, need_more_skill, wrong_industry, perfect")
+    feedback_data: Optional[Dict[str, Any]] = Field(None, description="Additional data for feedback")
+
+
+class FeedbackResponse(BaseModel):
+    """Response after feedback."""
+    donna_reply: str
+    updated_samples: List[Dict[str, Any]]
+    feedback_applied: bool

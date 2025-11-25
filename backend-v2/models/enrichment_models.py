@@ -139,6 +139,40 @@ class AvailabilityData(BaseModel):
     urgency_score: int = Field(ge=0, le=10)  # How urgently they're looking
 
 
+
+    
+# ============================================================================
+# RECRUITER SUMMARY MODEL 
+# ============================================================================
+
+class RecruiterSummary(BaseModel):
+    """
+    AI-generated recruiter-friendly summary of candidate.
+    """
+    why_shortlist: str  # 2-3 sentences: Why this candidate stands out
+    why_reject: str  # 2-3 sentences: Potential concerns
+    fit_summary: str  # For hiring manager: Overall assessment
+    standout_achievements: List[str] = []  # Top 3-5 achievements
+    red_flags: List[str] = []  # Any concerns
+    interesting_findings: List[str] = []  # Press mentions, certifications, etc.
+    overall_recommendation: str  # "Strong Yes" | "Yes" | "Maybe" | "No"
+    confidence_level: int = Field(ge=0, le=100)  # How confident we are
+
+
+class WebIntelligence(BaseModel):
+    """
+    Intelligence gathered from web about candidate.
+    """
+    github_stats: Optional[Dict] = None  # Stars, contributions, repos
+    online_presence: List[str] = []  # Active platforms
+    press_mentions: List[Dict] = []  # News articles, interviews
+    social_signals: List[str] = []  # Twitter, blog posts, etc.
+    risk_flags: List[str] = []  # Job hopping, gaps, controversies
+    last_updated: str
+
+
+
+
 # ============================================================================
 # COMBINED ENRICHED CANDIDATE MODEL
 # ============================================================================
@@ -174,6 +208,8 @@ class EnrichedCandidate(BaseModel):
     response_likelihood: Optional[ResponseLikelihoodAnalysis] = None
     skill_validation: Optional[SkillValidation] = None
     availability: Optional[AvailabilityData] = None
+    recruiter_summary: Optional[RecruiterSummary] = None
+    web_intelligence: Optional[WebIntelligence] = None
     
     # Metadata
     enrichment_status: str = "pending"  # "pending" | "in_progress" | "completed" | "failed"

@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # Import auth utilities
 from core.auth import verify_token
+from core.config import Settings
 from core.logging_config import get_logger
 # Import data layer
 from data.mongodb import MongoDB
@@ -35,7 +36,10 @@ from services.salary_estimator import SalaryEstimator
 from services.sample_profile_generator_v3 import SampleProfileGeneratorV3
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
+from services.search_refinement_service import SearchRefinementService
 from services.skill_validator import SkillValidator
+from services.smart_search_service import ProgressiveSmartSearch
+from services.tiered_smart_search import TieredSmartSearch
 from services.web_search_wrapper import WebSearchWrapper
 
 # Security scheme for JWT
@@ -44,6 +48,8 @@ security = HTTPBearer()
 # Get the logger for this module
 logger = get_logger(__name__)
 
+
+ENABLE_CREWAI = False
 # ============================================================================
 # Global Service Instances (Singletons)
 # ============================================================================
@@ -63,7 +69,8 @@ async def initialize_services() -> Dict[str, Any]:
         Dict with all initialized services
     """ 
     logger.info("Initializing services...")
-    
+                
+    settings = Settings()     
     # ========================================
     # DATA LAYER
     # ========================================
@@ -125,7 +132,8 @@ async def initialize_services() -> Dict[str, Any]:
         salary_estimator=salary_estimator,
         response_scorer=response_scorer,
         skill_validator=skill_validator,
-        availability_checker=availability_checker
+        availability_checker=availability_checker,
+        web_search=web_search
     )
     logger.info("✅ EnrichmentService initialized")
     
@@ -133,32 +141,50 @@ async def initialize_services() -> Dict[str, Any]:
     jd_parser = JDParser(model_config_manager)
     logger.info("✅ JDParser initialized")
     
+    sample_generator_v3 = None
     # Sample Profile Generator
-    try:
-        from core.config import Settings
-        settings = Settings()
-        
-        sample_generator_v3 = SampleProfileGeneratorV3(
-            profiles_collection=mongodb.profiles_collection,
-            openrouter_api_key=settings.OPENROUTER_API_KEY,
-            model_name=settings.AI_MODEL_NAME
-        )
-        logger.info("✅ SampleProfileGeneratorV3 (CrewAI) initialized")
-    except Exception as e:
-        logger.warning(f"⚠️ CrewAI initialization failed: {e}. V3 generator unavailable.")
-        sample_generator_v3 = None
+    if ENABLE_CREWAI:
+        try:
+            sample_generator_v3 = SampleProfileGeneratorV3(
+                profiles_collection=mongodb.profiles_collection,
+                openrouter_api_key=settings.OPENROUTER_API_KEY,
+                model_name=settings.AI_MODEL_NAME
+            )
+            logger.info("✅ SampleProfileGeneratorV3 (CrewAI) initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ CrewAI initialization failed: {e}. V3 generator unavailable.")
+            sample_generator_v3 = None
     
     # Add Query Debugger
     query_debugger = QueryDebugger()
     logger.info("✅ QueryDebugger initialized")
 
+    # # Smart Search Services
+    # smart_search_service = SmartSearchService(
+    #     profiles_collection=mongodb.profiles_collection
+    # )
+    # logger.info("✅ SmartSearchService initialized")
+    
+    # refinement_service = SearchRefinementService()
+    # logger.info("✅ SearchRefinementService initialized")
+    tiered_search = TieredSmartSearch(
+        profiles_collection=mongodb.profiles_collection,
+        openai_api_key=settings.OPENROUTER_API_KEY,
+    )
+    logger.info("✅ TieredSmartSearch initialized")
+    
+    progressive_search = ProgressiveSmartSearch(
+        profiles_collection=mongodb.profiles_collection,
+        openai_api_key=settings.OPENROUTER_API_KEY,
 
+    )
+    logger.info("✅ ProgressiveSmartSearch initialized")
         
     # Conversation Manager
     conversation_manager = ConversationManager(
         redis_cache=redis_cache,
         model_config_manager=model_config_manager,
-        sample_profile_generator=sample_generator_v3
+        tiered_search=tiered_search  
     )
     logger.info("✅ ConversationManager initialized")
     
@@ -205,6 +231,8 @@ async def initialize_services() -> Dict[str, Any]:
         "sample_generator_v3": sample_generator_v3, 
         "query_debugger": query_debugger,  # Add debugger
         "conversation_manager": conversation_manager,
+        "tiered_search": tiered_search,  
+        "progressive_search": progressive_search,  
         # Workflow Orchestrator
         "workflow": workflow
     }
@@ -332,6 +360,14 @@ async def get_jd_generator(
     """Get JD generator service."""
     return _global_services["jd_generator"]
 
+def get_tiered_search() -> TieredSmartSearch:
+    """Get tiered search service."""
+    return _global_services["tiered_search"]
+
+
+def get_progressive_search() -> ProgressiveSmartSearch:
+    """Get progressive search service."""
+    return _global_services["progressive_search"]
 
 
 def get_current_username(

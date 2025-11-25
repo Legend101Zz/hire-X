@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from core.logging_config import get_logger
+from data.redis_cache import RedisCache
 from models.enrichment_models import AvailabilityData
 
 logger = get_logger(__name__)
@@ -66,7 +67,7 @@ class AvailabilityChecker:
     def __init__(
         self,
         web_search,
-        redis_cache,
+        redis_cache: RedisCache,
         model_config_manager
     ):
         """

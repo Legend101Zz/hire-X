@@ -18,31 +18,27 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from core.dependencies import get_current_username, get_mongodb, get_redis
+from core.logging_config import get_logger
 from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
 
 router = APIRouter(prefix="/results", tags=["Results"])
+logger = get_logger(__name__)
 
 
 # ================================================================
 # GET RESULTS OVERVIEW
 # ================================================================
-
 @router.get("/{session_id}")
 async def get_results(
     session_id: str,
     username: str = Depends(get_current_username),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
-    """
-    Get results overview for a session.
-    
-    Returns:
-        Summary including total candidates, enriched count, ideal profile
-    """
+    """Get results overview for a session."""
     
     try:
-        # Get results from MongoDB
+        # ✅ FIX: Use the helper method
         results = await mongodb.get_enriched_results(session_id)
         
         if not results:
@@ -66,7 +62,9 @@ async def get_results(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error getting results: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ================================================================
@@ -84,22 +82,10 @@ async def get_candidates(
     username: str = Depends(get_current_username),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
-    """
-    Get paginated enriched candidates.
-    
-    Query params:
-        - page: Page number (1-indexed)
-        - page_size: Items per page (default 20, max 100)
-        - sort_by: Field to sort by (match_score, salary, response_likelihood)
-        - sort_order: asc or desc
-        - filter_match_label: Filter by match label (optional)
-    
-    Returns:
-        Paginated candidates with enrichment data
-    """
+    """Get paginated enriched candidates."""
     
     try:
-        # Get results
+        # ✅ FIX: Use helper method
         results = await mongodb.get_enriched_results(session_id)
         
         if not results:
@@ -126,7 +112,7 @@ async def get_candidates(
             candidates.sort(key=lambda x: x.get("match_score", 0), reverse=reverse)
         elif sort_by == "salary":
             candidates.sort(
-                key=lambda x: x.get("salary_enrichment", {}).get("estimated_current_ctc", 0),
+                key=lambda x: self._parse_salary(x.get("salary_enrichment", {}).get("current_estimated_ctc", "0")),
                 reverse=reverse
             )
         elif sort_by == "response_likelihood":
@@ -158,8 +144,21 @@ async def get_candidates(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error getting candidates: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+def _parse_salary(salary_str: str) -> float:
+    """Parse salary string to float for sorting."""
+    try:
+        # Extract first number from strings like "25.0 – 35.0"
+        import re
+        match = re.search(r'(\d+(?:\.\d+)?)', salary_str)
+        if match:
+            return float(match.group(1))
+        return 0.0
+    except:
+        return 0.0
 
 # ================================================================
 # GET SINGLE CANDIDATE
@@ -352,7 +351,7 @@ async def get_progress(
     redis: RedisCache = Depends(get_redis)
 ):
     """
-    Get current workflow progress.
+    Get current enrichment progress.
     
     Returns:
         Progress data (status, percentage, message)
@@ -360,9 +359,23 @@ async def get_progress(
     
     try:
         # Get progress from Redis
-        progress = await redis.get_session_data(session_id, "workflow_progress")
+        progress = await redis.get_session_data(session_id, "enrichment_progress")
         
         if not progress:
+            # Check if results already completed in MongoDB
+            mongodb = get_mongodb()
+            results = await mongodb.get_enriched_results(session_id)
+            
+            if results:
+                return {
+                    "status": "completed",
+                    "total_candidates": results.get("total_found", 0),
+                    "enriched_count": results.get("enriched_count", 0),
+                    "failed_count": 0,
+                    "progress_percentage": 100,
+                    "message": "Enrichment completed!"
+                }
+            
             raise HTTPException(status_code=404, detail="Progress not found")
         
         return progress
@@ -370,4 +383,5 @@ async def get_progress(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error getting progress: {e}")
         raise HTTPException(status_code=500, detail=str(e))

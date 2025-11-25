@@ -198,6 +198,8 @@ export interface EnrichedCandidate {
   response_likelihood?: ResponseLikelihood;
   skill_validation?: SkillValidation;
   availability?: Availability;
+  recruiter_summary?: RecruiterSummary;
+  web_intelligence?: WebIntelligence;
 
   // Metadata
   enrichment_status: "pending" | "in_progress" | "completed" | "failed";
@@ -398,4 +400,30 @@ export interface Profile {
   city: string;
   shortlistedAt?: string;
   sessionId?: string;
+}
+
+export interface RecruiterSummary {
+  why_shortlist: string;
+  why_reject: string;
+  fit_summary: string;
+  standout_achievements: string[];
+  red_flags: string[];
+  interesting_findings: string[];
+  overall_recommendation: "Strong Yes" | "Yes" | "Maybe" | "No";
+  confidence_level: number;
+}
+
+export interface WebIntelligence {
+  github_stats?: {
+    profile_url: string;
+    activity: string;
+  };
+  online_presence: string[];
+  press_mentions: Array<{
+    url: string;
+    description: string;
+  }>;
+  social_signals: string[];
+  risk_flags: string[];
+  last_updated: string;
 }

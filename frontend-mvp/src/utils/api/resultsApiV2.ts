@@ -1,17 +1,28 @@
-/**
- * Results API functions for backend-v2 (Enriched Results)
- */
-
 import { apiCall, handleApiResponse } from "../api";
 import type {
-  ResultsOverview,
-  GetCandidatesResponse,
   EnrichedCandidate,
+  GetCandidatesResponse,
+  ResultsOverview,
   ProgressResponse,
 } from "@/types";
 
 /**
- * Get results overview for a session
+ * Get enrichment progress (for polling)
+ */
+export const getProgress = async (
+  sessionId: string,
+  token: string
+): Promise<ProgressResponse> => {
+  const response = await apiCall(`/results/${sessionId}/progress`, {
+    method: "GET",
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Get results overview
  */
 export const getResultsOverview = async (
   sessionId: string,
@@ -26,46 +37,45 @@ export const getResultsOverview = async (
 };
 
 /**
- * Get paginated enriched candidates
+ * Get enriched candidates (paginated)
  */
 export const getCandidates = async (
   sessionId: string,
   token: string,
-  params: {
+  options?: {
     page?: number;
     page_size?: number;
-    sort_by?: "match_score" | "salary" | "response_likelihood";
+    sort_by?: string;
     sort_order?: "asc" | "desc";
     filter_match_label?: string;
-  } = {}
+  }
 ): Promise<GetCandidatesResponse> => {
-  const queryParams = new URLSearchParams();
-
-  if (params.page) queryParams.append("page", params.page.toString());
-  if (params.page_size)
-    queryParams.append("page_size", params.page_size.toString());
-  if (params.sort_by) queryParams.append("sort_by", params.sort_by);
-  if (params.sort_order) queryParams.append("sort_order", params.sort_order);
-  if (params.filter_match_label)
-    queryParams.append("filter_match_label", params.filter_match_label);
-
-  const queryString = queryParams.toString();
-  const endpoint = `/results/${sessionId}/candidates${
-    queryString ? `?${queryString}` : ""
-  }`;
-
-  const response = await apiCall(endpoint, {
-    method: "GET",
-    token,
+  const params = new URLSearchParams({
+    page: String(options?.page || 1),
+    page_size: String(options?.page_size || 20),
+    sort_by: options?.sort_by || "match_score",
+    sort_order: options?.sort_order || "desc",
   });
+
+  if (options?.filter_match_label) {
+    params.append("filter_match_label", options.filter_match_label);
+  }
+
+  const response = await apiCall(
+    `/results/${sessionId}/candidates?${params.toString()}`,
+    {
+      method: "GET",
+      token,
+    }
+  );
 
   return handleApiResponse(response);
 };
 
 /**
- * Get detailed single candidate information
+ * Get single candidate details
  */
-export const getCandidate = async (
+export const getSingleCandidate = async (
   sessionId: string,
   candidateId: string,
   token: string
@@ -90,16 +100,20 @@ export const exportResults = async (
   format: "csv" | "excel" = "csv",
   includeEnrichment: boolean = true
 ): Promise<Blob> => {
-  const queryParams = new URLSearchParams({
+  const params = new URLSearchParams({
     format,
-    include_enrichment: includeEnrichment.toString(),
+    include_enrichment: String(includeEnrichment),
   });
 
-  const response = await apiCall(
-    `/results/${sessionId}/export?${queryParams.toString()}`,
+  const response = await fetch(
+    `${
+      process.env.NEXT_PUBLIC_API_BASE_URL
+    }/results/${sessionId}/export?${params.toString()}`,
     {
       method: "GET",
-      token,
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     }
   );
 
@@ -108,19 +122,4 @@ export const exportResults = async (
   }
 
   return response.blob();
-};
-
-/**
- * Get workflow progress
- */
-export const getProgress = async (
-  sessionId: string,
-  token: string
-): Promise<ProgressResponse> => {
-  const response = await apiCall(`/results/${sessionId}/progress`, {
-    method: "GET",
-    token,
-  });
-
-  return handleApiResponse(response);
 };

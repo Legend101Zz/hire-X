@@ -261,3 +261,70 @@ export const refineSearch = async (
 
   return handleApiResponse(response);
 };
+
+/**
+ * Provide feedback on sample candidates
+ */
+export const provideFeedback = async (
+  sessionId: string,
+  token: string,
+  feedbackType: "too_junior" | "need_more_skill" | "wrong_industry" | "perfect",
+  feedbackData?: Record<string, any>
+): Promise<{
+  donna_reply: string;
+  updated_samples: any[];
+  feedback_applied: boolean;
+}> => {
+  const response = await apiCall(`/conversation/${sessionId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({
+      feedback_type: feedbackType,
+      feedback_data: feedbackData || {},
+    }),
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Get/refresh sample candidates
+ */
+export const getSampleCandidates = async (
+  sessionId: string,
+  token: string
+): Promise<{
+  samples: any[];
+  count: number;
+}> => {
+  const response = await apiCall(`/conversation/${sessionId}/samples`, {
+    method: "GET",
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Finalize and trigger PROGRESSIVE search
+ */
+export const finalizeConversationV2 = async (
+  sessionId: string,
+  token: string,
+  finalProfileAdjustments?: Partial<IdealProfileCard>
+): Promise<{
+  session_id: string;
+  search_triggered: boolean;
+  message: string;
+  search_type: "progressive";
+}> => {
+  const response = await apiCall(`/conversation/${sessionId}/finalize`, {
+    method: "POST",
+    body: JSON.stringify({
+      final_profile_adjustments: finalProfileAdjustments || {},
+    }),
+    token,
+  });
+
+  return handleApiResponse(response);
+};

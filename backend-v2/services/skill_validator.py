@@ -229,7 +229,7 @@ class SkillValidator:
     ) -> Optional[SkillEvidence]:
         """Validate a single developer skill."""
         
-        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}"
+        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip()
         github_url = candidate.get("github_url", "")
         
         # Try GitHub first (highest confidence)
@@ -240,7 +240,8 @@ class SkillValidator:
             search_query = f"{name} {skill} project site:github.com"
         
         try:
-            result = await self.web_search.search(search_query, session_id=session_id, max_results=3)
+            # ✅ FIX: Remove max_results parameter
+            result = await self.web_search.search(search_query, session_id=session_id)
             
             answer = result.get("answer", "")
             sources = result.get("sources", [])
@@ -264,7 +265,8 @@ class SkillValidator:
         # Try StackOverflow
         try:
             so_query = f"{name} {skill} site:stackoverflow.com"
-            so_result = await self.web_search.search(so_query, session_id=session_id, max_results=2)
+            # ✅ FIX: Remove max_results
+            so_result = await self.web_search.search(so_query, session_id=session_id)
             so_sources = [s for s in so_result.get("sources", []) if "stackoverflow.com" in s]
             
             if so_sources:
@@ -281,7 +283,8 @@ class SkillValidator:
         # Try tech blog posts
         try:
             blog_query = f"{name} {skill} blog OR tutorial OR article"
-            blog_result = await self.web_search.search(blog_query, session_id=session_id, max_results=2)
+            # ✅ FIX: Remove max_results
+            blog_result = await self.web_search.search(blog_query, session_id=session_id)
             blog_sources = blog_result.get("sources", [])
             
             # Filter out job boards and LinkedIn
@@ -302,18 +305,17 @@ class SkillValidator:
             logger.error(f"Blog search failed for {skill}: {e}")
         
         return None
-    
+
+
     async def _validate_sales_skills(
         self,
         candidate: Dict,
         skills: List[str],
         session_id: Optional[str]
     ) -> List[SkillEvidence]:
-        """
-        Validate sales skills via LinkedIn posts, case studies, etc.
-        """
+        """Validate sales skills via LinkedIn posts, case studies, etc."""
         
-        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}"
+        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip()
         linkedin_url = candidate.get("linkedin_url", "")
         
         evidence_list = []
@@ -327,7 +329,8 @@ class SkillValidator:
                 else:
                     search_query = f"{name} {skill} sales achievement OR quota OR deal"
                 
-                result = await self.web_search.search(search_query, session_id=session_id, max_results=3)
+                # ✅ FIX: Remove max_results
+                result = await self.web_search.search(search_query, session_id=session_id)
                 
                 sources = result.get("sources", [])
                 answer = result.get("answer", "")
@@ -348,18 +351,17 @@ class SkillValidator:
                 logger.error(f"Sales skill validation failed for {skill}: {e}")
         
         return evidence_list
-    
+
+
     async def _validate_marketing_skills(
         self,
         candidate: Dict,
         skills: List[str],
         session_id: Optional[str]
     ) -> List[SkillEvidence]:
-        """
-        Validate marketing skills via published content, campaigns, etc.
-        """
+        """Validate marketing skills via published content, campaigns, etc."""
         
-        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}"
+        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip()
         
         evidence_list = []
         
@@ -368,7 +370,8 @@ class SkillValidator:
             try:
                 search_query = f"{name} {skill} marketing campaign OR article OR content OR case study"
                 
-                result = await self.web_search.search(search_query, session_id=session_id, max_results=3)
+                # ✅ FIX: Remove max_results
+                result = await self.web_search.search(search_query, session_id=session_id)
                 
                 sources = result.get("sources", [])
                 answer = result.get("answer", "")
@@ -389,18 +392,17 @@ class SkillValidator:
                 logger.error(f"Marketing skill validation failed for {skill}: {e}")
         
         return evidence_list
-    
+
+
     async def _validate_general_skills(
         self,
         candidate: Dict,
         skills: List[str],
         session_id: Optional[str]
     ) -> List[SkillEvidence]:
-        """
-        Validate skills for general roles via LinkedIn, blog posts, etc.
-        """
+        """Validate skills for general roles via LinkedIn, blog posts, etc."""
         
-        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}"
+        name = f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip()
         linkedin_url = candidate.get("linkedin_url", "")
         
         evidence_list = []
@@ -413,7 +415,8 @@ class SkillValidator:
                 else:
                     search_query = f"{name} {skill} professional experience OR expertise"
                 
-                result = await self.web_search.search(search_query, session_id=session_id, max_results=2)
+                # ✅ FIX: Remove max_results
+                result = await self.web_search.search(search_query, session_id=session_id)
                 
                 sources = result.get("sources", [])
                 answer = result.get("answer", "")
@@ -434,7 +437,6 @@ class SkillValidator:
                 logger.error(f"General skill validation failed for {skill}: {e}")
         
         return evidence_list
-    
     def _extract_description(self, answer: str, skill: str) -> str:
         """
         Extract a brief description about the skill from search answer.

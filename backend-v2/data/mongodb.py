@@ -38,6 +38,7 @@ class MongoDB:
         self.users_collection = None
         self.prompts_collection = None
         self.logs_collection = None
+        self.main_db = None 
         
     async def connect(self):
         """
@@ -85,12 +86,13 @@ class MongoDB:
             await self.main_client.admin.command('ping')
             
             # Get database and collections
-            main_db = self.main_client[settings.DATABASE_NAME]
-            self.users_collection = main_db["users"]
-            self.prompts_collection = main_db["prompts"]
-            self.logs_collection = main_db["user_logs"]
-            self.sessions_collection = main_db["sessions"]
-            self.user_history_collection = main_db["user_history"]
+            self.main_db = self.main_client[settings.DATABASE_NAME]
+            self.users_collection = self.main_db["users"]
+            self.prompts_collection = self.main_db["prompts"]
+            self.logs_collection = self.main_db["user_logs"]
+            self.sessions_collection = self.main_db["sessions"]
+            self.user_history_collection = self.main_db["user_history"]
+            self.enriched_results_collection = self.main_db["enriched_results"]
             
             logger.info(f"✅ Main DB: {settings.DATABASE_NAME}")
             
@@ -383,22 +385,16 @@ class MongoDB:
         except Exception as e:
             # Don't raise - logging failures shouldn't break the app
             logger.critical(f" Failed to log action: {e}")
-    
-    # ========================================================================
-    # Cleanup
-    # ========================================================================
-    
-    def close(self):
-        """Close all MongoDB connections."""
-        if hasattr(self, 'profiles_client'):
-            self.profiles_client.close()
-        if hasattr(self, 'main_client'):
-            self.main_client.close()
-        logger.info("MongoDB connections closed")
+
         
+
+    # ========================================================================
+    # Enriched Results Operations (Main DB)
+    # ========================================================================
+    
     async def save_enriched_results(self, result_doc: Dict[str, Any]):
         """
-        Save enriched results to MongoDB.
+        Save enriched results to MongoDB (Main DB).
         
         Args:
             result_doc: Results document including:
@@ -412,23 +408,21 @@ class MongoDB:
                 - created_at
                 - status
         """
-        
-        collection = self.db["enriched_results"]
-        
-        # Create indexes if not exists
-        await self._ensure_enriched_results_indexes()
-        
-        # Insert or update
-        await collection.update_one(
-            {"session_id": result_doc["session_id"]},
-            {"$set": result_doc},
-            upsert=True
-        )
-    
+        try:
+            # ✅ Use main DB collection
+            await self.enriched_results_collection.update_one(
+                {"session_id": result_doc["session_id"]},
+                {"$set": result_doc},
+                upsert=True
+            )
+            logger.info(f"✅ Saved enriched results for session {result_doc['session_id']}")
+        except Exception as e:
+            logger.error(f"Failed to save enriched results: {e}")
+            raise
     
     async def get_enriched_results(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get enriched results by session ID.
+        Get enriched results by session ID (from Main DB).
         
         Args:
             session_id: Search session ID
@@ -436,10 +430,13 @@ class MongoDB:
         Returns:
             Results document or None
         """
-        
-        collection = self.db["enriched_results"]
-        return await collection.find_one({"session_id": session_id})
-    
+        try:
+            # ✅ Use main DB collection
+            result = await self.enriched_results_collection.find_one({"session_id": session_id})
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get enriched results: {e}")
+            return None
     
     async def list_enriched_results(
         self,
@@ -448,7 +445,7 @@ class MongoDB:
         skip: int = 0
     ) -> List[Dict[str, Any]]:
         """
-        List enriched results for a user.
+        List enriched results for a user (from Main DB).
         
         Args:
             username: Username
@@ -458,42 +455,45 @@ class MongoDB:
         Returns:
             List of result documents (without full candidate data)
         """
-        
-        collection = self.db["enriched_results"]
-        
-        cursor = collection.find(
-            {"username": username},
-            {
-                "session_id": 1,
-                "conversation_session_id": 1,
-                "ideal_profile": 1,
-                "total_found": 1,
-                "enriched_count": 1,
-                "created_at": 1,
-                "status": 1
-            }
-        ).sort("created_at", -1).skip(skip).limit(limit)
-        
-        return await cursor.to_list(length=limit)
-    
+        try:
+            # ✅ Use main DB collection
+            cursor = self.enriched_results_collection.find(
+                {"username": username},
+                {
+                    "session_id": 1,
+                    "conversation_session_id": 1,
+                    "ideal_profile": 1,
+                    "total_found": 1,
+                    "enriched_count": 1,
+                    "created_at": 1,
+                    "status": 1
+                }
+            ).sort("created_at", -1).skip(skip).limit(limit)
+            
+            return await cursor.to_list(length=limit)
+        except Exception as e:
+            logger.error(f"Failed to list enriched results: {e}")
+            return []
     
     async def _ensure_enriched_results_indexes(self):
-        """Create indexes for enriched_results collection."""
-        
-        collection = self.db["enriched_results"]
-        
-        # Index on session_id (unique)
-        await collection.create_index("session_id", unique=True)
-        
-        # Index on username + created_at (for listing)
-        await collection.create_index([
-            ("username", 1),
-            ("created_at", -1)
-        ])
-        
-        # Index on conversation_session_id
-        await collection.create_index("conversation_session_id")
-    
+        """Create indexes for enriched_results collection (Main DB)."""
+        try:
+            # ✅ Use main DB collection
+            # Index on session_id (unique)
+            await self.enriched_results_collection.create_index("session_id", unique=True)
+            
+            # Index on username + created_at (for listing)
+            await self.enriched_results_collection.create_index([
+                ("username", 1),
+                ("created_at", -1)
+            ])
+            
+            # Index on conversation_session_id
+            await self.enriched_results_collection.create_index("conversation_session_id")
+            
+            logger.info("✅ Enriched results indexes created")
+        except Exception as e:
+            logger.warning(f"Could not create enriched results indexes: {e}")
     
     # ================================================================
     # CONVERSATIONS (Optional - for persistence)
@@ -501,7 +501,7 @@ class MongoDB:
     
     async def save_conversation_state(self, conversation_doc: Dict[str, Any]):
         """
-        Save conversation state to MongoDB (for long-term persistence).
+        Save conversation state to MongoDB (Main DB, for long-term persistence).
         
         Args:
             conversation_doc: Conversation state including:
@@ -514,25 +514,22 @@ class MongoDB:
                 - updated_at
         
         Note: This is optional - conversation state is primarily in Redis.
-              This is for long-term archival or recovery.
         """
-        
-        collection = self.db["conversations"]
-        
-        # Create indexes if not exists
-        await self._ensure_conversations_indexes()
-        
-        # Insert or update
-        await collection.update_one(
-            {"session_id": conversation_doc["session_id"]},
-            {"$set": conversation_doc},
-            upsert=True
-        )
-    
+        try:
+            # ✅ Use main DB
+            collection = self.main_db["conversations"]
+            
+            await collection.update_one(
+                {"session_id": conversation_doc["session_id"]},
+                {"$set": conversation_doc},
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Failed to save conversation state: {e}")
     
     async def get_conversation_state(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get conversation state from MongoDB.
+        Get conversation state from MongoDB (Main DB).
         
         Args:
             session_id: Conversation session ID
@@ -540,12 +537,30 @@ class MongoDB:
         Returns:
             Conversation document or None
         """
-        
-        collection = self.db["conversations"]
-        return await collection.find_one({"session_id": session_id})
-    
+        try:
+            # ✅ Use main DB
+            collection = self.main_db["conversations"]
+            return await collection.find_one({"session_id": session_id})
+        except Exception as e:
+            logger.error(f"Failed to get conversation state: {e}")
+            return None
     
     async def _ensure_conversations_indexes(self):
+        """Create indexes for conversations collection (Main DB)."""
+        try:
+            # ✅ Use main DB
+            collection = self.main_db["conversations"]
+            
+            # Index on session_id (unique)
+            await collection.create_index("session_id", unique=True)
+            
+            # Index on username + updated_at
+            await collection.create_index([
+                ("username", 1),
+                ("updated_at", -1)
+            ])
+        except Exception as e:
+            logger.warning(f"Could not create conversations indexes: {e}")
         """Create indexes for conversations collection."""
         
         collection = self.db["conversations"]
@@ -558,3 +573,15 @@ class MongoDB:
             ("username", 1),
             ("updated_at", -1)
         ])
+        
+    # ========================================================================
+    # Cleanup
+    # ========================================================================
+    
+    def close(self):
+        """Close all MongoDB connections."""
+        if hasattr(self, 'profiles_client'):
+            self.profiles_client.close()
+        if hasattr(self, 'main_client'):
+            self.main_client.close()
+        logger.info("MongoDB connections closed")
