@@ -24,6 +24,8 @@ from services.candidate_scorer import CandidateScorer
 # Import all V3 services
 from services.conversation_manager import ConversationManager
 from services.enrichment_service import EnrichmentService
+from services.intelligent_enrichment_orchestrator import \
+    IntelligentEnrichmentOrchestrator
 from services.intelligent_search_crew import IntelligentSearchCrew
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
@@ -203,6 +205,13 @@ async def initialize_services() -> Dict[str, Any]:
     )
     logger.info("✅ ScorecardWorkflow V3 orchestrated successfully")
     
+    deep_dive_service = IntelligentEnrichmentOrchestrator(
+        mongodb=mongodb,
+        redis_cache=redis_cache,
+        model_config_manager=model_config_manager
+    )
+    logger.info("✅ IntelligentEnrichmentOrchestrator initialized")
+    
     # ========================================
     # STORE IN GLOBAL DICT
     # ========================================
@@ -234,7 +243,10 @@ async def initialize_services() -> Dict[str, Any]:
         "tiered_search": tiered_search,  
         "progressive_search": progressive_search,  
         # Workflow Orchestrator
-        "workflow": workflow
+        "workflow": workflow,
+        
+        # deep search
+        "deep_dive_service": deep_dive_service
     }
     
     # Save to global variable
@@ -312,6 +324,10 @@ def get_availability_checker():
 def get_enrichment_service() -> EnrichmentService:
     """Get the enrichment service."""
     return _global_services["enrichment_service"]
+
+def get_deep_dive_service() -> IntelligentEnrichmentOrchestrator:
+    """Get the deep dive service."""
+    return _global_services["deep_dive_service"]
 
 
 # ============================================================================

@@ -39,6 +39,13 @@ class Settings:
     
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "anthropic/claude-sonnet-4-20250514")
+    
+    # =================================
+    # External APIs
+    # =================================
+    
+    BRIGHTDATA_API_TOKEN: str = os.getenv("BRIGHTDATA_API_TOKEN","")
+    
     # ========================================================================
     # MongoDB - Main Database (Users, Prompts, Logs)
     # ========================================================================
