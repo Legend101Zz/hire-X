@@ -1,10 +1,9 @@
-// app/conversation/page.tsx (UPDATED)
 "use client";
 
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Sparkles, Loader2, AlertCircle, CheckCircle } from "lucide-react";
+import { Send, Sparkles, Loader2, AlertCircle, CheckCircle, Search, MapPin, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import BlueprintBackground from "@/components/conversation/BlueprintBackground";
@@ -14,6 +13,7 @@ import ChatCard from "@/components/conversation/ChatCard";
 import IntroSequence from "@/components/conversation/IntroSequence";
 import SwipeableCandidateDeck from "@/components/conversation/SwipeableCandidateDeck";
 import WizardGuide, { shouldShowWizard } from "@/components/conversation/WizardGuide";
+import EnrichmentOverlay from "@/components/conversation/EnrichmentOverlay";
 import * as conversationApi from "@/utils/api/conversationApiV2";
 import type { IdealProfileCard, ConversationMessage } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
@@ -80,6 +80,7 @@ function ConversationWorkspace() {
     const [inputValue, setInputValue] = useState("");
     const [messages, setMessages] = useState<ConversationMessage[]>([]);
     const [isTyping, setIsTyping] = useState(false);
+    const [suggestions, setSuggestions] = useState<string[]>([]); // NEW
 
     // Bot State
     const [botPosition, setBotPosition] = useState<BotPosition>("home");
@@ -91,6 +92,7 @@ function ConversationWorkspace() {
     // Highlight State
     const [highlightedField, setHighlightedField] = useState<string | null>(null);
     const [updatingField, setUpdatingField] = useState<string | null>(null);
+    const [recentlyUpdatedFields, setRecentlyUpdatedFields] = useState<string[]>([]); // NEW
 
     // Sample Candidates State
     const [sampleCandidates, setSampleCandidates] = useState<any[]>([]);
@@ -104,8 +106,46 @@ function ConversationWorkspace() {
     });
     const [showFeedbackSummary, setShowFeedbackSummary] = useState(false);
     const [isProcessingFeedback, setIsProcessingFeedback] = useState(false);
+    const [enrichmentStatus, setEnrichmentStatus] = useState<Record<string, any>>({});
+    const [isEnrichingCandidate, setIsEnrichingCandidate] = useState<string | null>(null);
+
+    const [isBatchEnriching, setIsBatchEnriching] = useState(false);
+    const [batchProgress, setBatchProgress] = useState({ completed: 0, total: 0, status: "starting" });
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+
+
+    useEffect(() => {
+        if (!sessionId || !token) return;
+
+        const acceptedIds = feedbackData.accepted.map(a =>
+            a.candidate.profile_id || a.candidate._id
+        );
+
+        if (acceptedIds.length === 0) return;
+
+        const pollInterval = setInterval(async () => {
+            try {
+                const status = await conversationApi.getEnrichmentStatus(sessionId, token);
+                setEnrichmentStatus(status.candidates || {});
+
+                // Check if all completed
+                const allComplete = acceptedIds.every(id =>
+                    status.candidates?.[id]?.status === "completed" ||
+                    status.candidates?.[id]?.status === "failed"
+                );
+
+                if (allComplete) {
+                    clearInterval(pollInterval);
+                }
+            } catch (error) {
+                console.error("Error polling enrichment status:", error);
+            }
+        }, 3000); // Poll every 3 seconds
+
+        return () => clearInterval(pollInterval);
+    }, [feedbackData.accepted, sessionId, token]);
 
     // Check wizard on mount
     useEffect(() => {
@@ -129,11 +169,7 @@ function ConversationWorkspace() {
                 console.log("📥 Loading conversation state:", sessionId);
                 const state = await conversationApi.getConversationState(sessionId, token);
 
-                // ✅ DEBUG: Log loaded state
                 console.log("📊 Loaded state:", state);
-                console.log("  - Role:", state.ideal_profile?.role_title);
-                console.log("  - Skills:", state.ideal_profile?.must_have_skills);
-                console.log("  - Sample candidates:", state.sample_candidates?.length || 0);
 
                 setStage(state.stage || "greeting");
                 setReadyToSearch(state.ready_to_search || false);
@@ -148,11 +184,19 @@ function ConversationWorkspace() {
                     locations: [],
                     additional_requirements: "",
                 });
-                if (state.sample_candidates && state.sample_candidates.length > 0) {
-                    console.log("📦 Restoring sample candidates from state");
+
+                // Load sample candidates if available
+                if (state.sample_candidates && Array.isArray(state.sample_candidates) && state.sample_candidates.length > 0) {
+                    console.log("📦 Restoring sample candidates:", state.sample_candidates.length);
                     setSampleCandidates(state.sample_candidates);
                     setShowCandidateDeck(true);
-                } 
+
+                    // Optional: Move bot to show it's ready
+                    setBotPosition("sample");
+                    setSpeechBubble(`I found ${state.sample_candidates.length} candidates!`);
+                    setShowSpeech(true);
+                    setTimeout(() => setShowSpeech(false), 3000);
+                }
 
                 setMessages(state.messages || []);
                 setIsLoadingState(false);
@@ -162,6 +206,9 @@ function ConversationWorkspace() {
                 } else {
                     setBotPosition("home");
                     setBotExpression("happy");
+
+                    // Set initial suggestions based on stage
+                    setSuggestions(getSuggestionsForStage(state.stage, state.ideal_profile));
                 }
             } catch (error) {
                 console.error("Error loading conversation state:", error);
@@ -178,12 +225,26 @@ function ConversationWorkspace() {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
-    // Auto-load samples when stage changes to review
-    useEffect(() => {
-        if (stage === "review" && sessionId && token && sampleCandidates.length === 0) {
-            loadSampleCandidates();
+    // Get suggestions based on stage and profile
+    const getSuggestionsForStage = (currentStage: string, profile: IdealProfileCard): string[] => {
+        if (currentStage === "greeting" || !profile.role_title) {
+            return ["Senior Software Engineer", "Product Manager", "Data Scientist", "DevOps Engineer"];
         }
-    }, [stage, sessionId, token]);
+
+        if (!profile.locations || profile.locations.length === 0) {
+            return ["Add Bangalore location", "Add Mumbai location", "Remote only", "Any location"];
+        }
+
+        if (!profile.seniority) {
+            return ["Senior level (5+ years)", "Mid level (3-5 years)", "Lead/Principal", "Any experience"];
+        }
+
+        if (currentStage === "review") {
+            return ["These look good!", "Too junior", "Wrong industry", "Need different skills"];
+        }
+
+        return ["Show more candidates", "Refine criteria", "Start full search"];
+    };
 
     // Wizard handlers
     const handleWizardComplete = () => {
@@ -228,6 +289,9 @@ function ConversationWorkspace() {
         setShowSpeech(false);
         setBotPosition("home");
         setBotExpression("neutral");
+
+        // Set initial suggestions
+        setSuggestions(["Senior Software Engineer", "Product Manager", "Data Scientist"]);
     };
 
     // Handle Donna speaking
@@ -242,15 +306,25 @@ function ConversationWorkspace() {
         }, 4000);
     };
 
-    // Send message
-    const handleSendMessage = async () => {
-        if (!inputValue.trim() || !sessionId || !token || isTyping) return;
+    // Handle suggestion chip click
+    const handleSuggestionClick = (suggestion: string) => {
+        setInputValue(suggestion);
+        // Auto-send after a brief delay
+        setTimeout(() => {
+            handleSendMessageWithText(suggestion);
+        }, 100);
+    };
 
-        const userMessage = inputValue.trim();
+    // Send message with specific text
+    const handleSendMessageWithText = async (text: string) => {
+        if (!text.trim() || !sessionId || !token || isTyping) return;
+
+        const userMessage = text.trim();
         setInputValue("");
         setIsTyping(true);
         setBotExpression("thinking");
         setIsThinking(true);
+        setSuggestions([]); // Clear suggestions while processing
 
         const newUserMessage: ConversationMessage = {
             role: "user",
@@ -266,6 +340,8 @@ function ConversationWorkspace() {
                 message: userMessage,
             });
 
+            console.log("📨 Message response:", response);
+
             const donnaMessage: ConversationMessage = {
                 role: "assistant",
                 content: response.donna_reply,
@@ -276,18 +352,36 @@ function ConversationWorkspace() {
             setStage(response.stage || stage);
             setReadyToSearch(response.ready_to_search || false);
 
-            const oldProfile = idealProfile;
+            // Track profile changes for highlighting
+            const oldProfile = { ...idealProfile };
             const newProfile = response.updated_ideal_profile;
 
-            setIdealProfile(newProfile);
-            highlightProfileUpdates(newProfile);
+            // Detect which fields changed
+            const changedFields = detectChangedFields(oldProfile, newProfile);
+            if (changedFields.length > 0) {
+                setRecentlyUpdatedFields(changedFields);
+                highlightProfileUpdates(newProfile);
 
-            // Check if we should load samples
-            setTimeout(async () => {
-                if (response.stage === "review" || hasEnoughInfo(newProfile)) {
-                    await loadSampleCandidates();
-                }
-            }, 2000);
+                // Clear highlights after animation
+                setTimeout(() => {
+                    setRecentlyUpdatedFields([]);
+                }, 3000);
+            }
+
+            setIdealProfile(newProfile);
+
+            // Update suggestions from response
+            if (response.suggestions && response.suggestions.length > 0) {
+                setSuggestions(response.suggestions);
+            } else {
+                setSuggestions(getSuggestionsForStage(response.stage, newProfile));
+            }
+
+            // Check if response includes new candidates (search was triggered)
+            if (response.updated_sample_profile) {
+                // Refresh candidates
+                await loadSampleCandidates();
+            }
 
             setBotExpression("happy");
         } catch (error) {
@@ -299,6 +393,9 @@ function ConversationWorkspace() {
             };
             setMessages((prev) => [...prev, errorMessage]);
             setBotExpression("neutral");
+
+            // Restore suggestions on error
+            setSuggestions(getSuggestionsForStage(stage, idealProfile));
         } finally {
             setIsTyping(false);
             setIsThinking(false);
@@ -307,6 +404,35 @@ function ConversationWorkspace() {
                 setBotExpression("neutral");
             }, 1500);
         }
+    };
+
+    // Send message from input
+    const handleSendMessage = async () => {
+        await handleSendMessageWithText(inputValue);
+    };
+
+    // Detect which profile fields changed
+    const detectChangedFields = (oldProfile: IdealProfileCard, newProfile: IdealProfileCard): string[] => {
+        const changed: string[] = [];
+        const fieldsToCheck: (keyof IdealProfileCard)[] = [
+            "role_title", "must_have_skills", "nice_to_have_skills",
+            "seniority", "experience_years", "industries", "locations", "company_size"
+        ];
+
+        for (const field of fieldsToCheck) {
+            const oldValue = oldProfile[field];
+            const newValue = newProfile[field];
+
+            if (Array.isArray(oldValue) && Array.isArray(newValue)) {
+                if (JSON.stringify(oldValue.sort()) !== JSON.stringify(newValue.sort())) {
+                    changed.push(field);
+                }
+            } else if (oldValue !== newValue) {
+                changed.push(field);
+            }
+        }
+
+        return changed;
     };
 
     const hasEnoughInfo = (profile: IdealProfileCard): boolean => {
@@ -393,7 +519,9 @@ function ConversationWorkspace() {
     };
 
     // Candidate actions
-    const handleAcceptCandidate = (candidate: any) => {
+    const handleAcceptCandidate = async (candidate: any) => {
+        const candidateId = candidate.candidate.profile_id || candidate.candidate._id;
+
         setFeedbackData((prev) => ({
             ...prev,
             accepted: [
@@ -405,16 +533,42 @@ function ConversationWorkspace() {
             ],
         }));
 
-        // Add to chat
         const message: ConversationMessage = {
             role: "user",
             content: `✅ Liked ${candidate.candidate.first_name} ${candidate.candidate.last_name}`,
             timestamp: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, message]);
+
+        // Trigger background enrichment
+        if (sessionId && token) {
+            try {
+                setIsEnrichingCandidate(candidateId);
+                await conversationApi.enrichCandidate(
+                    sessionId,
+                    token,
+                    candidateId,
+                    candidate
+                );
+
+                // Add Donna message about enrichment
+                const donnaMessage: ConversationMessage = {
+                    role: "assistant",
+                    content: `Great choice! I'm gathering more details about ${candidate.candidate.first_name} in the background... 🔍`,
+                    timestamp: new Date().toISOString(),
+                };
+                setMessages((prev) => [...prev, donnaMessage]);
+
+            } catch (error) {
+                console.error("Error starting enrichment:", error);
+            } finally {
+                setIsEnrichingCandidate(null);
+            }
+        }
     };
 
-    const handleRejectCandidate = (candidate: any, reason?: string) => {
+    // Updated reject handler - sends feedback to LLM
+    const handleRejectCandidate = async (candidate: any, reason?: string) => {
         setFeedbackData((prev) => ({
             ...prev,
             rejected: [
@@ -427,21 +581,84 @@ function ConversationWorkspace() {
             ],
         }));
 
-        // Add to chat
         const message: ConversationMessage = {
             role: "user",
-            content: `❌ Passed on ${candidate.candidate.first_name} ${candidate.candidate.last_name} - ${reason}`,
+            content: `❌ Passed on ${candidate.candidate.first_name} ${candidate.candidate.last_name} - ${reason || "Not specified"}`,
             timestamp: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, message]);
+
+        // Send rejection feedback to LLM for analysis
+        if (sessionId && token && reason) {
+            try {
+                setBotExpression("thinking");
+                setSpeechBubble("Analyzing your feedback... 🧠");
+                setShowSpeech(true);
+
+                const response = await conversationApi.processRejectionFeedback(
+                    sessionId,
+                    token,
+                    candidate.candidate,
+                    reason
+                );
+
+                // Show Donna's response
+                const donnaMessage: ConversationMessage = {
+                    role: "assistant",
+                    content: response.donna_reply,
+                    timestamp: new Date().toISOString(),
+                };
+                setMessages((prev) => [...prev, donnaMessage]);
+
+                // Update profile if changed
+                if (response.updated_profile) {
+                    setIdealProfile(response.updated_profile);
+                }
+
+                // Show refinements applied
+                if (response.refinements_applied.length > 0) {
+                    setSpeechBubble(`Adjusting: ${response.refinements_applied.join(", ")}`);
+                }
+
+                // If new samples returned, add them to the deck
+                if (response.new_samples && response.new_samples.length > 0) {
+                    setSampleCandidates((prev) => {
+                        // Add new samples, avoiding duplicates
+                        const existingIds = new Set(prev.map(c =>
+                            c.candidate?.profile_id || c.candidate?._id
+                        ));
+                        const newOnes = response.new_samples.filter(c =>
+                            !existingIds.has(c.candidate?.profile_id || c.candidate?._id)
+                        );
+                        return [...prev, ...newOnes];
+                    });
+                }
+
+                setBotExpression("happy");
+
+                setTimeout(() => {
+                    setShowSpeech(false);
+                }, 3000);
+
+            } catch (error) {
+                console.error("Error processing rejection feedback:", error);
+            }
+        }
     };
 
-    const handleDeckComplete = () => {
+    // Updated deck complete handler
+    const handleDeckComplete = async () => {
         setShowCandidateDeck(false);
         setShowFeedbackSummary(true);
 
+        // Check enrichment status for accepted candidates
+        const acceptedCount = feedbackData.accepted.length;
+        const enrichedCount = Object.values(enrichmentStatus).filter(
+            s => s.status === "completed"
+        ).length;
+
         handleDonnaSpeak(
-            `Great! You reviewed ${feedbackData.accepted.length + feedbackData.rejected.length} candidates. Ready to refine and find more? 🎯`,
+            `Great! You liked ${acceptedCount} candidates. ${enrichedCount > 0 ? `${enrichedCount} are already enriched!` : "Starting enrichment..."} 🎯`,
             "excited"
         );
     };
@@ -457,11 +674,9 @@ function ConversationWorkspace() {
         setShowSpeech(true);
 
         try {
-            // Analyze rejection patterns
             const rejectionReasons = feedbackData.rejected.map((r) => r.reason);
             const mostCommonReason = getMostCommonReason(rejectionReasons);
 
-            // Map reasons to feedback types
             let feedbackType: "too_junior" | "need_more_skill" | "wrong_industry" | "perfect" = "perfect";
             let feedbackData_api: Record<string, any> = {};
 
@@ -469,7 +684,6 @@ function ConversationWorkspace() {
                 feedbackType = "too_junior";
             } else if (mostCommonReason.includes("skill") || mostCommonReason.includes("Skill")) {
                 feedbackType = "need_more_skill";
-                // Extract skill from reason if possible
                 const skillMatch = mostCommonReason.match(/need more (\w+)/i);
                 if (skillMatch) {
                     feedbackData_api.skill = skillMatch[1];
@@ -478,7 +692,6 @@ function ConversationWorkspace() {
                 feedbackType = "wrong_industry";
             }
 
-            // Send feedback to backend
             const response = await conversationApi.provideFeedback(
                 sessionId,
                 token,
@@ -489,7 +702,6 @@ function ConversationWorkspace() {
             setSpeechBubble(response.donna_reply);
             setBotExpression("happy");
 
-            // Add Donna's response to chat
             const donnaMessage: ConversationMessage = {
                 role: "assistant",
                 content: response.donna_reply,
@@ -497,13 +709,11 @@ function ConversationWorkspace() {
             };
             setMessages((prev) => [...prev, donnaMessage]);
 
-            // Load new samples
             if (response.updated_samples && response.updated_samples.length > 0) {
                 setSampleCandidates(response.updated_samples);
                 setShowCandidateDeck(true);
                 setShowFeedbackSummary(false);
 
-                // Reset feedback data
                 setFeedbackData({
                     rejected: [],
                     accepted: [],
@@ -536,53 +746,51 @@ function ConversationWorkspace() {
     const handleFinalizeSearch = async () => {
         if (!sessionId || !token) return;
 
-        // ✅ DEBUG: Log current state
-        console.log("🚀 Finalizing search...");
-        console.log("📊 Current state:");
-        console.log("  - Session ID:", sessionId);
-        console.log("  - Ideal Profile:", idealProfile);
-        console.log("  - Sample Candidates:", sampleCandidates.length);
-        console.log("  - Stage:", stage);
-
-        // Validate before calling API
-        if (!idealProfile.role_title) {
-            console.error("❌ Role title is missing!");
-            handleDonnaSpeak(
-                "Oops! The profile is incomplete. Let's build it properly first! 📋",
-                "thinking"
-            );
-            return;
-        }
-
-        if (idealProfile.must_have_skills.length < 2) {
-            console.error("❌ Not enough skills!");
-            handleDonnaSpeak(
-                "I need at least 2 must-have skills. Let's add more! 💡",
-                "thinking"
-            );
-            return;
-        }
+        // 1. Move Donna to Center and Look Busy
+        setBotPosition("chat"); // Or a new 'center' position if you define it
+        setBotExpression("thinking");
+        setIsBatchEnriching(true); // Triggers the overlay
 
         try {
-            setBotPosition("chat");
-            setBotExpression("excited");
-            setSpeechBubble("Perfect! Enriching your top 5 candidates... 🚀");
-            setShowSpeech(true);
+            // 2. Start the batch process
+            await conversationApi.enrichAcceptedCandidates(
+                sessionId,
+                token,
+                feedbackData.accepted.map(a => ({ candidate: a.candidate }))
+            );
 
-            console.log("📤 Calling finalize API...");
-            const response = await conversationApi.finalizeConversation(sessionId, token);
+            // 3. Start Polling Loop
+            const checkComplete = setInterval(async () => {
+                try {
+                    const status = await conversationApi.getEnrichmentStatus(sessionId, token);
 
-            console.log("✅ Finalize response:", response);
-            router.push(`/results?session=${response.session_id}`);
+                    // Update Progress State for the Overlay
+                    setBatchProgress({
+                        completed: status.completed || 0,
+                        total: status.total || feedbackData.accepted.length,
+                        status: status.status
+                    });
+
+                    // 4. If Complete
+                    if (status.status === "completed" || (status.completed === status.total && status.total > 0)) {
+                        clearInterval(checkComplete);
+
+                        // Happy animation before redirect
+                        setBotExpression("excited");
+                        await new Promise(resolve => setTimeout(resolve, 1000)); // Let user see 100%
+
+                        router.push(`/results?session=${sessionId}`);
+                    }
+                } catch (e) {
+                    console.error("Polling error", e);
+                }
+            }, 1000); // Fast polling for smooth UI
 
         } catch (error) {
-            console.error("❌ Finalize error:", error);
-            const errorMessage = error instanceof Error
-                ? error.message
-                : "Failed to start enrichment";
-
+            console.error("Error starting batch enrichment:", error);
+            setIsBatchEnriching(false); // Hide overlay on error
             handleDonnaSpeak(
-                `Oops! ${errorMessage}. Let's check the profile! 📋`,
+                "Had trouble starting enrichment. Please try again!",
                 "thinking"
             );
         }
@@ -624,21 +832,31 @@ function ConversationWorkspace() {
 
             <div className="min-h-screen relative overflow-hidden">
                 <BlueprintBackground />
+                <AnimatePresence>
+                    {isBatchEnriching && (
+                        <EnrichmentOverlay progress={batchProgress} />
+                    )}
+                </AnimatePresence>
 
                 <DonnaEnhanced
-                    position={botPosition}
-                    expression={botExpression}
-                    isThinking={isThinking}
-                    speechBubble={speechBubble}
-                    showSpeech={showSpeech}
+                    position={isBatchEnriching ? "chat" : botPosition} // Reuse 'chat' or create a specific 'center' position coordinates
+                    expression={isBatchEnriching ? "thinking" : botExpression}
+                    isThinking={isThinking || isBatchEnriching}
+                    speechBubble={isBatchEnriching ? "" : speechBubble} // Hide bubble during overlay
+                    showSpeech={showSpeech && !isBatchEnriching}
+                // Add z-index higher than overlay if you want her on top, 
+                // or modify DonnaEnhanced to accept a className for z-index
                 />
 
                 <div className="relative container mx-auto px-8 py-12">
                     {/* Header */}
                     <motion.div
-                        initial={{ opacity: 0, y: -30 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="text-center mb-12"
+                        className="relative container mx-auto px-8 py-12"
+                        animate={{
+                            filter: isBatchEnriching ? "blur(10px)" : "blur(0px)",
+                            scale: isBatchEnriching ? 0.95 : 1
+                        }}
+                        transition={{ duration: 0.5 }}
                     >
                         <motion.div
                             className="inline-flex items-center gap-3 mb-4"
@@ -673,6 +891,7 @@ function ConversationWorkspace() {
                                 idealProfile={idealProfile}
                                 highlightedField={highlightedField}
                                 updatingField={updatingField}
+                                recentlyUpdatedFields={recentlyUpdatedFields}
                             />
                         </motion.div>
 
@@ -781,6 +1000,21 @@ function ConversationWorkspace() {
                                                     ? "Finding matching candidates..."
                                                     : "Tell me about the role and I'll find matching candidates!"}
                                             </p>
+
+                                            {/* Quick start suggestions */}
+                                            {!isLoadingSamples && !idealProfile.role_title && (
+                                                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                                                    {["Software Engineer", "Product Manager", "Data Scientist"].map((role) => (
+                                                        <button
+                                                            key={role}
+                                                            onClick={() => handleSuggestionClick(`Looking for a ${role}`)}
+                                                            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full text-sm transition-colors"
+                                                        >
+                                                            {role}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </motion.div>
                                 )}
@@ -793,17 +1027,51 @@ function ConversationWorkspace() {
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.6, type: "spring" }}
                         >
-                            <ChatCard messages={messages} isTyping={isTyping} isCollapsed={false} />
+                            <ChatCard
+                                messages={messages}
+                                isTyping={isTyping}
+                                isCollapsed={false}
+                                messagesEndRef={messagesEndRef}
+                            />
                         </motion.div>
                     </div>
 
-                    {/* Chat Input */}
+                    {/* Chat Input with Suggestions */}
                     <motion.div
                         initial={{ opacity: 0, y: 50 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.8 }}
                         className="max-w-4xl mx-auto"
                     >
+                        {/* Suggestion Chips */}
+                        <AnimatePresence>
+                            {suggestions.length > 0 && !isTyping && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -10 }}
+                                    className="mb-4 flex flex-wrap justify-center gap-2"
+                                >
+                                    {suggestions.slice(0, 4).map((suggestion, index) => (
+                                        <motion.button
+                                            key={suggestion}
+                                            initial={{ opacity: 0, scale: 0.8 }}
+                                            animate={{ opacity: 1, scale: 1 }}
+                                            transition={{ delay: index * 0.05 }}
+                                            onClick={() => handleSuggestionClick(suggestion)}
+                                            className="px-4 py-2 bg-slate-800/80 hover:bg-slate-700 border border-slate-600/50 hover:border-purple-500/50 text-slate-300 hover:text-white rounded-full text-sm transition-all duration-200 flex items-center gap-2"
+                                        >
+                                            {suggestion.includes("location") && <MapPin className="w-3 h-3" />}
+                                            {suggestion.includes("senior") && <Briefcase className="w-3 h-3" />}
+                                            {suggestion.includes("search") && <Search className="w-3 h-3" />}
+                                            {suggestion}
+                                        </motion.button>
+                                    ))}
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+
+                        {/* Input Field */}
                         <div className="relative group">
                             <motion.div
                                 className="absolute -inset-1 bg-gradient-to-r from-violet-500 via-purple-500 to-amber-500 rounded-2xl blur-xl opacity-20 group-hover:opacity-30 transition-opacity"
@@ -817,10 +1085,15 @@ function ConversationWorkspace() {
                                 <div className="p-3 flex items-center gap-3">
                                     <div className="flex-1 relative">
                                         <Input
+                                            ref={inputRef}
                                             value={inputValue}
                                             onChange={(e) => setInputValue(e.target.value)}
                                             onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                                            placeholder="Type your message to Donna..."
+                                            placeholder={
+                                                idealProfile.role_title
+                                                    ? "Add more criteria, ask questions, or refine..."
+                                                    : "Tell me what role you're hiring for..."
+                                            }
                                             disabled={isTyping}
                                             className="w-full bg-slate-800/50 border-slate-700/50 focus:border-purple-500/50 focus:ring-2 focus:ring-purple-500/20 text-slate-100 placeholder:text-slate-500 rounded-xl px-5 h-14 text-base transition-all duration-300"
                                         />
@@ -836,7 +1109,7 @@ function ConversationWorkspace() {
                                             {isTyping ? (
                                                 <>
                                                     <Loader2 className="w-5 h-5 animate-spin" />
-                                                    <span className="font-semibold">Sending</span>
+                                                    <span className="font-semibold">Thinking</span>
                                                 </>
                                             ) : (
                                                 <>
@@ -849,6 +1122,31 @@ function ConversationWorkspace() {
                                 </div>
                             </div>
                         </div>
+
+                        {/* Profile Status Bar */}
+                        {idealProfile.role_title && (
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                className="mt-4 flex items-center justify-center gap-4 text-sm text-slate-500"
+                            >
+                                <span className="flex items-center gap-1">
+                                    <Briefcase className="w-4 h-4" />
+                                    {idealProfile.role_title}
+                                </span>
+                                {idealProfile.locations.length > 0 && (
+                                    <span className="flex items-center gap-1">
+                                        <MapPin className="w-4 h-4" />
+                                        {idealProfile.locations.slice(0, 2).join(", ")}
+                                    </span>
+                                )}
+                                {idealProfile.must_have_skills.length > 0 && (
+                                    <span>
+                                        {idealProfile.must_have_skills.length} skills
+                                    </span>
+                                )}
+                            </motion.div>
+                        )}
                     </motion.div>
                 </div>
             </div>
@@ -863,3 +1161,6 @@ export default function ConversationPage() {
         </Suspense>
     );
 }
+
+
+

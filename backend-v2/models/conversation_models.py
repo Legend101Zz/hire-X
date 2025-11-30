@@ -20,45 +20,17 @@ from pydantic import BaseModel, Field
 # ===================================================================
 
 class IdealProfileCard(BaseModel):
-    """
-    The "living document" that builds up during conversation.
-    
-    This is what the user sees being built in real-time as they
-    chat with Donna.
-    
-    Example:
-        {
-            "role_title": "Senior React Developer",
-            "must_have_skills": ["React", "TypeScript", "Node.js"],
-            "nice_to_have_skills": ["Next.js", "GraphQL"],
-            "seniority": "Senior",
-            "experience_years": "5+",
-            "industries": ["Technology", "Fintech"],
-            "company_size": ["Startup", "Mid-size"],
-            "locations": ["Mumbai", "Bangalore"],
-            "additional_requirements": "Must have experience with microservices"
-        }
-    """
-    # Core requirements
-    role_title: str = Field(default="", description="Job title (e.g. 'Senior React Developer')")
-    must_have_skills: List[str] = Field(default_factory=list, description="Required skills")
-    nice_to_have_skills: List[str] = Field(default_factory=list, description="Preferred skills")
-    
-    # Experience
-    seniority: str = Field(default="", description="Seniority level (Junior/Mid/Senior/Lead)")
-    experience_years: str = Field(default="", description="Years of experience (e.g. '5+', '3-5')")
-    
-    # Context
-    industries: List[str] = Field(default_factory=list, description="Target industries")
-    company_size: List[str] = Field(default_factory=list, description="Company size preferences")
-    locations: List[str] = Field(default_factory=list, description="Acceptable locations")
-    
-    # Additional
-    additional_requirements: str = Field(default="", description="Any other requirements")
-    
-    # Metadata
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    role_title: str = ""
+    must_have_skills: List[str] = Field(default_factory=list)
+    nice_to_have_skills: List[str] = Field(default_factory=list)
+    seniority: str = ""
+    experience_years: str = ""
+    industries: List[str] = Field(default_factory=list)
+    company_size: List[str] = Field(default_factory=list)
+    locations: List[str] = Field(default_factory=list)
+    additional_requirements: str = ""
     updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
 
 
 # ===================================================================
@@ -153,16 +125,17 @@ class ConversationState(BaseModel):
     # Core data
     ideal_profile: IdealProfileCard = Field(default_factory=IdealProfileCard)
     sample_profile: Optional[SampleProfile] = Field(None, description="Current sample profile")
+    sample_candidates: List[Dict[str, Any]] = Field(default_factory=list)  
     
     # History
     messages: List[ConversationMessage] = Field(default_factory=list)
-    
+    feedback: Optional[Dict[str, Any]] = None 
     # Metadata
+    last_search_metadata: Optional[Dict[str, Any]] = None  
     jd_uploaded: bool = Field(default=False, description="Did user upload a JD?")
     jd_file_name: Optional[str] = Field(None, description="Uploaded JD filename")
     ready_to_search: bool = Field(default=False, description="Ready to trigger search?")
     
-    # ✅ ADD THESE NEW FIELDS!
     sample_candidates: List[Dict[str, Any]] = Field(
         default_factory=list, 
         description="List of sample candidates for feedback"
@@ -291,3 +264,45 @@ class FeedbackResponse(BaseModel):
     donna_reply: str
     updated_samples: List[Dict[str, Any]]
     feedback_applied: bool
+    
+
+class EnrichCandidateRequest(BaseModel):
+    candidate_id: str
+    candidate: Dict[str, Any]
+
+
+class EnrichCandidateResponse(BaseModel):
+    status: str
+    candidate_id: str
+    message: str
+
+
+class RejectionFeedbackRequest(BaseModel):
+    candidate: Dict[str, Any]
+    reason: str
+    detailed_feedback: Optional[str] = ""
+
+
+class RejectionFeedbackResponse(BaseModel):
+    donna_reply: str
+    refinements_applied: List[str]
+    new_samples: List[Dict[str, Any]]
+    updated_profile: Dict[str, Any]
+
+
+class EnrichmentProgressResponse(BaseModel):
+    status: str
+    total: int
+    completed: int
+    failed: int
+    candidates: Dict[str, Any] = Field(default_factory=dict)
+
+
+class BatchEnrichRequest(BaseModel):
+    accepted_candidates: List[Dict[str, Any]]
+
+
+class BatchEnrichResponse(BaseModel):
+    status: str
+    total_candidates: int
+    message: str

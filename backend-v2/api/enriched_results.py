@@ -344,6 +344,7 @@ async def export_results(
 # GET PROGRESS
 # ================================================================
 
+
 @router.get("/{session_id}/progress")
 async def get_progress(
     session_id: str,
@@ -352,36 +353,45 @@ async def get_progress(
 ):
     """
     Get current enrichment progress.
-    
-    Returns:
-        Progress data (status, percentage, message)
+    Note: session_id here should be the CONVERSATION session_id 
+    because that's what the frontend sends.
     """
-    
     try:
-        # Get progress from Redis
-        progress = await redis.get_session_data(session_id, "enrichment_progress")
+        # Check parallel enrichment progress (from ParallelEnrichmentService)
+        # This key was set in parallel_enrichment_service.py
+        parallel_progress = await redis.get_session_data(
+            session_id, 
+            "parallel_enrichment_progress"
+        )
         
-        if not progress:
-            # Check if results already completed in MongoDB
-            mongodb = get_mongodb()
-            results = await mongodb.get_enriched_results(session_id)
-            
-            if results:
-                return {
-                    "status": "completed",
-                    "total_candidates": results.get("total_found", 0),
-                    "enriched_count": results.get("enriched_count", 0),
-                    "failed_count": 0,
-                    "progress_percentage": 100,
-                    "message": "Enrichment completed!"
-                }
-            
-            raise HTTPException(status_code=404, detail="Progress not found")
+        if parallel_progress:
+            return {
+                "status": parallel_progress.get("status"),
+                "total": parallel_progress.get("total"),
+                "completed": parallel_progress.get("completed"),
+                "failed": parallel_progress.get("failed"),
+                "message": f"Enriching {parallel_progress.get('completed')}/{parallel_progress.get('total')} candidates"
+            }
+
+        # Fallback: Check if we have results in MongoDB already
+        # This handles cases where Redis expired but job is done
+        mongodb = get_mongodb()
+        # Ensure your MongoDB class has this method or implement the query directly
+        results = await mongodb.get_enriched_results(session_id)
         
-        return progress
-    
+        if results:
+            return {
+                "status": "completed",
+                "total": results.get("total_found", 0),
+                "completed": results.get("enriched_count", 0),
+                "message": "Enrichment completed"
+            }
+            
+        raise HTTPException(status_code=404, detail="Progress not found")
+        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting progress: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+   
