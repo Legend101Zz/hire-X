@@ -133,10 +133,27 @@ class LoggerManager(object):
         error_handler.setFormatter(file_format)
         root_logger.addHandler(error_handler)
         
-        # Suppress noisy third-party loggers
-        logging.getLogger("urllib3").setLevel(logging.WARNING)
-        logging.getLogger("requests").setLevel(logging.WARNING)
-        logging.getLogger("asyncio").setLevel(logging.WARNING)
+        # ------------------------------------------------------------------
+        # 4. Suppress Noisy Third-Party Loggers
+        # ------------------------------------------------------------------
+        # This list prevents installed packages from spamming your console 
+        # while keeping your own application logs at DEBUG level.
+        noisy_modules = [
+            "urllib3", 
+            "requests", 
+            "asyncio", 
+            "pymongo",      
+            "mongodb", 
+            "bson",
+            "uvicorn",    
+            "httpcore",   
+            "h11",
+            "watchfiles"    
+        ]
+        
+        for module_name in noisy_modules:
+            # We set these to WARNING so we only see them if they fail
+            logging.getLogger(module_name).setLevel(logging.WARNING)
         
     def get_logger(self,name:str) -> logging.Logger:
         """
