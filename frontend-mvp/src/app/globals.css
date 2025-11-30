@@ -209,7 +209,7 @@ select {
 .bg-gradient-radial {
   background: radial-gradient(circle, var(--tw-gradient-stops));
 }
-
+ 
 .spotlight::before {
   content: "";
   position: absolute;

@@ -44,6 +44,8 @@ class SkillValidationResult(BaseModel):
     overall_confidence: int = Field(ge=0, le=100)
     validation_strategy_used: Dict[str, Any]
     assessment: Optional[str] = None  # Overall assessment text
+    skill_gaps: Dict[str, Any] = Field(default_factory=dict)  
+    bonus_skills: List[Dict[str, Any]] = Field(default_factory=list)  
 
 
 class SalaryTimeline(BaseModel):
@@ -65,6 +67,9 @@ class ResponseLikelihoodScore(BaseModel):
     recommended_approach: Dict[str, Any]  # Outreach recommendations
     confidence_in_estimate: int = Field(ge=0, le=100)
     data_quality_notes: str
+    activity_signals: Dict[str, Any] = Field(default_factory=dict)  
+    reachability: Dict[str, Any] = Field(default_factory=dict)  
+
 
 
 class NoticePeriodEstimate(BaseModel):
@@ -80,13 +85,31 @@ class NoticePeriodEstimate(BaseModel):
 
 class MatchAnalysis(BaseModel):
     """Final match analysis synthesizing all data."""
-    overall_match_score: int = Field(ge=0, le=100)
-    match_label: str  # Excellent, Great, Good, Fair, Poor
-    strengths: List[str]
-    concerns: List[str]
-    gaps: List[str]
-    hiring_recommendation: Dict[str, Any]  # {action, reasoning, focus_areas}
-    recruiter_summary: Dict[str, Any]  # Talking points, salary range, timeline
+    overall_match_score: int = 0
+    match_label: str = "Unknown"
+    score_breakdown: Dict[str, Any] = Field(default_factory=dict)
+    experience_assessment: Dict[str, Any] = Field(default_factory=dict)
+    
+    strengths: List[Any] = Field(default_factory=list)
+    concerns: List[Any] = Field(default_factory=list)
+    gaps: List[Any] = Field(default_factory=list)
+    
+    hiring_recommendation: Dict[str, Any] = Field(default_factory=dict)
+    recruiter_summary: Dict[str, Any] = Field(default_factory=dict)
+
+class ProfessionalFootprint(BaseModel):
+    """Comprehensive professional footprint data."""
+    verified_profiles: List[Dict[str, Any]] = Field(default_factory=list)
+    possible_profiles: List[Dict[str, Any]] = Field(default_factory=list)
+    evidence_found: List[Dict[str, Any]] = Field(default_factory=list)
+    news_mentions: List[Dict[str, Any]] = Field(default_factory=list)
+    publications: List[Dict[str, Any]] = Field(default_factory=list)
+    certifications_verified: List[Dict[str, Any]] = Field(default_factory=list)
+    speaking_engagements: List[Dict[str, Any]] = Field(default_factory=list)
+    overall_footprint_assessment: Dict[str, Any] = Field(default_factory=dict)
+    identity_verification: Dict[str, Any] = Field(default_factory=dict)
+    linkedin_provided_links: Dict[str, Any] = Field(default_factory=dict)
+    search_coverage: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CandidateDeepDive(BaseModel):
@@ -111,6 +134,7 @@ class CandidateDeepDive(BaseModel):
     
     # Final analysis
     match_analysis: Optional[MatchAnalysis] = None
+    professional_footprint: Optional[Dict[str, Any]] = None 
     
     # Metadata
     data_source: str  # database, brightdata_dataset, brightdata_unlocker, perplexity

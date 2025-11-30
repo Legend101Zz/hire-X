@@ -53,6 +53,27 @@ class RedisCache:
         except redis.ConnectionError as e:
             logger.error(f"Failed to connect to Redis: {e}")
             raise
+        
+    async def get(self, key: str) -> Optional[str]:
+            """
+            Generic wrapper for Redis GET. 
+            Kept async to satisfy await calls in services.
+            """
+            try:
+                return self.redis.get(key)
+            except Exception as e:
+                logger.error(f"Redis GET failed for key {key}: {e}")
+                return None
+
+    async def set(self, key: str, value: str, ex: int = None):
+        """
+        Generic wrapper for Redis SET.
+        Kept async to satisfy await calls in services.
+        """
+        try:
+            return self.redis.set(key, value, ex=ex)
+        except Exception as e:
+            logger.error(f"Redis SET failed for key {key}: {e}")
     
     # ========================================================================
     # Session Data Operations
