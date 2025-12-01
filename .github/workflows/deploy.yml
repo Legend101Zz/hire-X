@@ -35,7 +35,7 @@ jobs:
 
             # Configure git to use PAT
             git config --global credential.helper store
-            echo "https://Legend101Zz:${{ secrets.GITHUB_PAT }}@github.com" > ~/.git-credentials
+            echo "https://Legend101Zz:${{ secrets.GH_PAT }}@github.com" > ~/.git-credentials
 
             # Pull latest code
             git fetch origin main
