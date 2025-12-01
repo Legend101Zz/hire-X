@@ -65,7 +65,7 @@ function ConversationWorkspace() {
 
     // Conversation state
     const [stage, setStage] = useState<string>("greeting");
-    // const [readyToSearch, setReadyToSearch] = useState(false);
+    const [readyToSearch, setReadyToSearch] = useState(false);
 
     // Profile State
     const [idealProfile, setIdealProfile] = useState<IdealProfileCard>({
