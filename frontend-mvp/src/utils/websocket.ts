@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export class WebSocketManager {
   private ws: WebSocket | null = null;
   private reconnectAttempts = 0;

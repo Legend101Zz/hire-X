@@ -14,7 +14,8 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
 
 from core.dependencies import (get_conversation_manager, get_current_username,
                                get_enrichment_service, get_jd_generator,
-                               get_jd_parser, get_mongodb, get_workflow)
+                               get_jd_parser, get_mongodb,
+                               get_parallel_enrichment_service, get_workflow)
 from core.logging_config import get_logger
 from data.mongodb import MongoDB
 from models.conversation_models import (ConversationFinalizeRequest,
@@ -33,14 +34,6 @@ from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.parallel_enrichment_service import ParallelEnrichmentService
 from services.scorecard_workflow import ScorecardWorkflow
-
-
-def get_parallel_enrichment_service():
-    from core.dependencies import get_deep_dive_service, get_redis
-    return ParallelEnrichmentService(
-        enrichment_orchestrator=get_deep_dive_service(),
-        redis_cache=get_redis()
-    )
 
 # ================================================================
 # ROUTER SETUP
@@ -950,12 +943,18 @@ async def enrich_accepted_candidates(
     background_tasks: BackgroundTasks,
     username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
-    parallel_service: ParallelEnrichmentService = Depends(get_parallel_enrichment_service)
+    parallel_service: ParallelEnrichmentService = Depends(get_parallel_enrichment_service),
+    mongodb: MongoDB = Depends(get_mongodb)
 ):
     """
-    Enrich all accepted candidates in parallel.
+    Start deep analysis of accepted candidates (capped at 5).
     
-    Called when user is done reviewing and wants full enrichment.
+    This triggers comprehensive enrichment:
+    - Match analysis with strengths/concerns
+    - Salary estimation with career progression
+    - Skills validation with evidence
+    - Response likelihood with factors
+    - Notice period estimation
     """
     try:
         state = await conversation_manager._load_state(session_id)
@@ -965,30 +964,94 @@ async def enrich_accepted_candidates(
         accepted_candidates = request.get("accepted_candidates", [])
         
         if not accepted_candidates:
-            raise HTTPException(status_code=400, detail="No candidates to enrich")
+            raise HTTPException(status_code=400, detail="No candidates to analyze")
         
-        logger.info(f"🚀 Starting batch enrichment for {len(accepted_candidates)} candidates")
+        # Cap at 5 candidates
+        candidates_to_enrich = accepted_candidates[:5]
         
-        # Start parallel enrichment in background
+        logger.info(f"🚀 Starting deep analysis for {len(candidates_to_enrich)} candidates (session: {session_id})")
+        
+        # Initialize progress immediately so frontend can start polling
+        await parallel_service.redis.store_session_data(
+            session_id,
+            "enrichment_progress",
+            {
+                "status": "starting",
+                "phase": "initializing",
+                "total": len(candidates_to_enrich),
+                "completed": 0,
+                "failed": 0,
+                "progress_percentage": 0,
+                "current_candidate": "",
+                "message": f"Preparing deep analysis for {len(candidates_to_enrich)} candidates...",
+                "candidates": {},
+                "started_at": datetime.utcnow().isoformat()
+            },
+            expire_seconds=3600
+        )
+        
+        # Inject MongoDB into parallel service if not already set
+        if not parallel_service.mongodb:
+            parallel_service.mongodb = mongodb
+        
+        # Start enrichment in background
         background_tasks.add_task(
             parallel_service.enrich_candidates_parallel,
             session_id=session_id,
-            candidates=accepted_candidates,
+            candidates=candidates_to_enrich,
             ideal_profile=state.ideal_profile.dict(),
-            enrichment_types=[
-                "salary", "response_likelihood", "skills",
-                "availability", "web_intelligence", "recruiter_summary"
-            ]
+            username=username
         )
         
         return {
             "status": "started",
-            "total_candidates": len(accepted_candidates),
-            "message": f"Enriching {len(accepted_candidates)} candidates in parallel. Check /enrichment-status for progress."
+            "session_id": session_id,
+            "total_candidates": len(candidates_to_enrich),
+            "message": f"Deep analysis started for {len(candidates_to_enrich)} candidates. This may take 1-2 minutes."
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error starting batch enrichment: {e}")
+        logger.error(f"Error starting batch enrichment: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================================================
+# GET ENRICHMENT STATUS 
+# ================================================================
+
+@router.get("/{session_id}/enrichment-status")
+async def get_enrichment_status(
+    session_id: str,
+    username: str = Depends(get_current_username),
+    parallel_service: ParallelEnrichmentService = Depends(get_parallel_enrichment_service)
+):
+    """
+    Get current enrichment progress.
+    
+    Returns:
+        - status: starting | in_progress | completed | failed
+        - phase: initializing | deep_analysis | complete
+        - total: total candidates being enriched
+        - completed: number completed
+        - failed: number failed
+        - progress_percentage: 0-100
+        - current_candidate: name of candidate currently being analyzed
+        - message: human-readable status message
+        - candidates: dict of candidate statuses
+    """
+    try:
+        progress = await parallel_service.get_enrichment_progress(session_id)
+        return progress
+        
+    except Exception as e:
+        logger.error(f"Error getting enrichment status: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "progress_percentage": 0
+        }

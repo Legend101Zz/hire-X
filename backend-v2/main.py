@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 # Import API routes
-from api import (auth, configuration, conversation, deep_dive,
+from api import (auth, configuration, conversation, dashboard, deep_dive,
                  enriched_results, intelligent_search, scorecard)
 # Import core components
 from core.config import settings
@@ -175,6 +175,11 @@ app.include_router(intelligent_search.router)
 app.include_router(
     deep_dive.router,
     tags=["Deep Dive"]
+)
+
+app.include_router(
+    dashboard.router,
+    tags=["Dashboard"]
 )
 
 # ============================================================================

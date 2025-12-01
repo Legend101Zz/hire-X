@@ -12,6 +12,14 @@ import type {
   IdealProfileCard,
 } from "@/types";
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+const getHeaders = (token: string) => ({
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json",
+});
+
 /**
  * Start a new conversation with Donna
  */
@@ -285,30 +293,51 @@ export const enrichCandidate = async (
 };
 
 /**
- * Get enrichment status
+ * Get enrichment progress
  */
+export interface EnrichmentProgress {
+  status:
+    | "not_started"
+    | "starting"
+    | "in_progress"
+    | "completed"
+    | "failed"
+    | "error";
+  phase: "idle" | "initializing" | "deep_analysis" | "complete";
+  total: number;
+  completed: number;
+  failed: number;
+  progress_percentage: number;
+  current_candidate: string;
+  message: string;
+  candidates: Record<
+    string,
+    {
+      name: string;
+      status: string;
+      error?: string;
+    }
+  >;
+  started_at?: string;
+  completed_at?: string;
+}
+
 export const getEnrichmentStatus = async (
   sessionId: string,
-  token: string,
-  candidateId?: string
-): Promise<{
-  status: string;
-  total?: number;
-  completed?: number;
-  failed?: number;
-  candidates?: Record<string, any>;
-  enriched_data?: any;
-}> => {
-  const url = candidateId
-    ? `/conversation/${sessionId}/enrichment-status?candidate_id=${candidateId}`
-    : `/conversation/${sessionId}/enrichment-status`;
+  token: string
+): Promise<EnrichmentProgress> => {
+  const response = await fetch(
+    `${API_BASE}/conversation/${sessionId}/enrichment-status`,
+    {
+      headers: getHeaders(token),
+    }
+  );
 
-  const response = await apiCall(url, {
-    method: "GET",
-    token,
-  });
+  if (!response.ok) {
+    throw new Error("Failed to get enrichment status");
+  }
 
-  return handleApiResponse(response);
+  return response.json();
 };
 
 /**
@@ -343,22 +372,31 @@ export const processRejectionFeedback = async (
 };
 
 /**
- * Batch enrich accepted candidates
+ * Start deep analysis of accepted candidates
  */
 export const enrichAcceptedCandidates = async (
   sessionId: string,
   token: string,
-  acceptedCandidates: any[]
+  acceptedCandidates: Array<{ candidate: any }>
 ): Promise<{
   status: string;
+  session_id: string;
   total_candidates: number;
   message: string;
 }> => {
-  const response = await apiCall(`/conversation/${sessionId}/enrich-accepted`, {
-    method: "POST",
-    body: JSON.stringify({ accepted_candidates: acceptedCandidates }),
-    token,
-  });
+  const response = await fetch(
+    `${API_BASE}/conversation/${sessionId}/enrich-accepted`,
+    {
+      method: "POST",
+      headers: getHeaders(token),
+      body: JSON.stringify({ accepted_candidates: acceptedCandidates }),
+    }
+  );
 
-  return handleApiResponse(response);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to start enrichment");
+  }
+
+  return response.json();
 };

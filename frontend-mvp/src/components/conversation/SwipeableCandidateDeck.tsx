@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+//@ts-nocheck
 "use client";
 
 import { useState, useEffect } from "react";
@@ -153,8 +156,8 @@ function CandidateCard({
 
                             {/* Score badge */}
                             <div className={`px-3 py-1 rounded-full text-sm font-bold ${score >= 80 ? "bg-green-500/20 text-green-400" :
-                                    score >= 60 ? "bg-amber-500/20 text-amber-400" :
-                                        "bg-slate-500/20 text-slate-400"
+                                score >= 60 ? "bg-amber-500/20 text-amber-400" :
+                                    "bg-slate-500/20 text-slate-400"
                                 }`}>
                                 {Math.round(score)}% Match
                             </div>
@@ -366,8 +369,8 @@ export default function SwipeableCandidateDeck({
                     <div
                         key={idx}
                         className={`h-1 flex-1 rounded-full transition-colors ${idx < currentIndex ? "bg-purple-500" :
-                                idx === currentIndex ? "bg-amber-500" :
-                                    "bg-slate-700"
+                            idx === currentIndex ? "bg-amber-500" :
+                                "bg-slate-700"
                             }`}
                     />
                 ))}

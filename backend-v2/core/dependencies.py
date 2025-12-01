@@ -31,6 +31,7 @@ from services.intelligent_search_crew import IntelligentSearchCrew
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.model_config_manager import ModelConfigManager
+from services.parallel_enrichment_service import ParallelEnrichmentService
 from services.query_debugger import QueryDebugger
 from services.response_likelihood_scorer import ResponseLikelihoodScorer
 from services.salary_estimator import SalaryEstimator
@@ -196,6 +197,13 @@ async def initialize_services() -> Dict[str, Any]:
     )
     logger.info("✅ IntelligentEnrichmentOrchestrator initialized")
     
+    parallel_enrichment_service = ParallelEnrichmentService(
+            enrichment_orchestrator=deep_dive_service,
+            redis_cache=redis_cache,
+            mongodb=mongodb
+        )
+    logger.info("✅ ParallelEnrichmentService created")
+    
     # ========================================
     # STORE IN GLOBAL DICT
     # ========================================
@@ -229,7 +237,8 @@ async def initialize_services() -> Dict[str, Any]:
         "workflow": workflow,
         
         # deep search
-        "deep_dive_service": deep_dive_service
+        "deep_dive_service": deep_dive_service,
+        "parallel_enrichment_service": parallel_enrichment_service
     }
     
     # Save to global variable
@@ -311,6 +320,10 @@ def get_enrichment_service() -> EnrichmentService:
 def get_deep_dive_service() -> IntelligentEnrichmentOrchestrator:
     """Get the deep dive service."""
     return _global_services["deep_dive_service"]
+
+def get_parallel_enrichment_service() -> ParallelEnrichmentService:
+    """Get singleton parallel enrichment service."""
+    return _global_services["parallel_enrichment_service"]
 
 
 # ============================================================================

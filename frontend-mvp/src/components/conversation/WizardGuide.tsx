@@ -305,7 +305,7 @@ export default function WizardGuide({ onComplete, onSkip }: WizardGuideProps) {
                                 >
                                     {isLastStep ? (
                                         <>
-                                            <span>Let's Start!</span>
+                                            <span>Let&apos;s Start!</span>
                                             <Sparkles className="w-5 h-5 ml-2" />
                                         </>
                                     ) : (

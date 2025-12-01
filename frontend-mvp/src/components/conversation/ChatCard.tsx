@@ -54,7 +54,7 @@ export default function ChatCard({
                     <div className="flex items-center justify-center h-full text-slate-500">
                         <p className="text-center">
                             Start a conversation with Donna!<br />
-                            <span className="text-sm">Tell her about the role you're hiring for.</span>
+                            <span className="text-sm">Tell her about the role you&apos;re hiring for.</span>
                         </p>
                     </div>
                 ) : (

@@ -1585,7 +1585,7 @@ export default function DeepDivePage() {
                         <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => router.push("/search")}
+                            onClick={() => router.push("/dashboard")}
                             className="text-white/60 hover:text-white hover:bg-white/5"
                         >
                             <ArrowLeft className="w-5 h-5" />

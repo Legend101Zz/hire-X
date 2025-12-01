@@ -1,135 +1,215 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
-import { Sparkles, CheckCircle, Search, Database, Globe } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+    Brain,
+    Check,
+    X,
+    Loader2,
+    Activity,
+    DollarSign,
+    Target,
+    Search,
+    User,
+    Sparkles
+} from "lucide-react";
+
+interface EnrichmentProgress {
+    status: string;
+    phase: string;
+    total: number;
+    completed: number;
+    failed: number;
+    progress_percentage: number;
+    current_candidate: string;
+    message: string;
+    candidates: Record<string, { name: string; status: string; error?: string }>;
+}
 
 interface EnrichmentOverlayProps {
-    progress: {
-        completed: number;
-        total: number;
-        status: string;
-    };
+    progress: EnrichmentProgress;
 }
 
 export default function EnrichmentOverlay({ progress }: EnrichmentOverlayProps) {
-    const [loadingText, setLoadingText] = useState("Initializing search...");
+    const { total, completed, failed, progress_percentage, current_candidate, message, candidates, phase } = progress;
 
-    const percentage = progress.total > 0
-        ? Math.round((progress.completed / progress.total) * 100)
-        : 0;
+    const candidateList = Object.entries(candidates || {});
 
-    // Cycle through "techy" status messages while waiting
-    useEffect(() => {
-        const messages = [
-            "Verifying professional footprints...",
-            "Analyzing GitHub repositories...",
-            "Cross-referencing salary data...",
-            "Validating skill evidence...",
-            "Checking digital presence..."
-        ];
-
-        let i = 0;
-        const interval = setInterval(() => {
-            setLoadingText(messages[i % messages.length]);
-            i++;
-        }, 2000);
-
-        return () => clearInterval(interval);
-    }, []);
+    // Animation variants for the list items to slide in smoothly
+    const listVariants = {
+        hidden: { opacity: 0, y: 10 },
+        visible: (i: number) => ({
+            opacity: 1,
+            y: 0,
+            transition: { delay: i * 0.05, duration: 0.2 }
+        })
+    };
 
     return (
         <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[60] bg-slate-950/90 backdrop-blur-xl flex flex-col items-center justify-center overflow-hidden"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
         >
-            {/* Background Grid Animation */}
-            <div className="absolute inset-0 opacity-20 pointer-events-none">
-                <div className="absolute inset-0 bg-[linear-gradient(to_right,#4f4f4f2e_1px,transparent_1px),linear-gradient(to_bottom,#4f4f4f2e_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)]" />
-            </div>
+            <motion.div
+                initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.95, opacity: 0, y: 20 }}
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                className="w-full max-w-md bg-[#1F1F1F] border border-[#333] rounded-xl shadow-2xl overflow-hidden flex flex-col font-sans"
+            >
+                {/* Header Section */}
+                <div className="p-6 border-b border-[#333] bg-[#252525]">
+                    <div className="flex items-center gap-3 mb-2">
+                        <div className="p-2 bg-[#2F2F2F] rounded-md border border-[#3F3F3F]">
+                            {phase === "complete" ? (
+                                <Sparkles className="w-5 h-5 text-amber-200" />
+                            ) : (
+                                <Brain className="w-5 h-5 text-blue-400" />
+                            )}
+                        </div>
+                        <div>
+                            <h2 className="text-base font-semibold text-neutral-100 leading-tight">
+                                {phase === "complete" ? "Enrichment Complete" : "Deep Analysis"}
+                            </h2>
+                            <p className="text-xs text-neutral-400 font-medium">
+                                {phase === "complete"
+                                    ? "All profiles processed successfully"
+                                    : "AI is evaluating candidate fit & salary"
+                                }
+                            </p>
+                        </div>
+                    </div>
 
-            {/* Central Content */}
-            <div className="relative z-10 flex flex-col items-center max-w-md w-full px-6">
+                    {/* Progress Bar - Minimalist */}
+                    <div className="mt-4">
+                        <div className="flex justify-between text-xs mb-1.5">
+                            <span className="text-neutral-500 font-medium">Progress</span>
+                            <span className="text-neutral-300 font-mono">{progress_percentage}%</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-[#333] rounded-full overflow-hidden">
+                            <motion.div
+                                className="h-full bg-blue-500"
+                                initial={{ width: 0 }}
+                                animate={{ width: `${progress_percentage}%` }}
+                                transition={{ type: "spring", stiffness: 50, damping: 20 }}
+                            />
+                        </div>
+                    </div>
+                </div>
 
-                {/* Donna Placeholder (She will be positioned here by the parent component, 
-                    but we create a glowing aura here) */}
-                <motion.div
-                    className="w-48 h-48 rounded-full bg-amber-500/10 blur-3xl absolute -top-10 left-1/2 -translate-x-1/2"
-                    animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-                    transition={{ duration: 3, repeat: Infinity }}
-                />
+                {/* Candidate List Container */}
+                <div className="flex-1 max-h-[240px] overflow-y-auto bg-[#1F1F1F] p-2 custom-scrollbar">
+                    {candidateList.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-neutral-600 gap-2 min-h-[150px]">
+                            <Loader2 className="w-6 h-6 animate-spin opacity-50" />
+                            <span className="text-sm">Initializing queue...</span>
+                        </div>
+                    ) : (
+                        <div className="space-y-1">
+                            <AnimatePresence initial={false}>
+                                {candidateList.map(([id, candidate], index) => (
+                                    <motion.div
+                                        key={id}
+                                        layout
+                                        variants={listVariants}
+                                        initial="hidden"
+                                        animate="visible"
+                                        custom={index}
+                                        className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm border transition-colors ${candidate.status === "analyzing"
+                                                ? "bg-[#2A2A2A] border-[#333]"
+                                                : "border-transparent hover:bg-[#252525]"
+                                            }`}
+                                    >
+                                        {/* Status Icon */}
+                                        <div className="shrink-0">
+                                            {candidate.status === "completed" ? (
+                                                <div className="bg-green-900/30 p-1 rounded-sm">
+                                                    <Check className="w-3.5 h-3.5 text-green-400" />
+                                                </div>
+                                            ) : candidate.status === "failed" ? (
+                                                <div className="bg-red-900/30 p-1 rounded-sm">
+                                                    <X className="w-3.5 h-3.5 text-red-400" />
+                                                </div>
+                                            ) : candidate.status === "analyzing" ? (
+                                                <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                                            ) : (
+                                                <div className="w-4 h-4 rounded-sm border border-neutral-700 bg-neutral-800" />
+                                            )}
+                                        </div>
 
-                {/* Spacing for Donna */}
-                <div className="h-32" />
+                                        {/* Name */}
+                                        <div className="flex-1 min-w-0 flex flex-col justify-center">
+                                            <span className={`truncate font-medium ${candidate.status === "analyzing" ? "text-blue-100" : "text-neutral-300"
+                                                }`}>
+                                                {candidate.name}
+                                            </span>
+                                            {candidate.error && (
+                                                <span className="text-[10px] text-red-400 truncate leading-tight">
+                                                    {candidate.error}
+                                                </span>
+                                            )}
+                                        </div>
 
-                {/* Progress Stats */}
-                <motion.h2
-                    key={loadingText}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="text-2xl font-bold text-white mb-2 text-center"
-                >
-                    {percentage === 100 ? "Finalizing Results..." : loadingText}
-                </motion.h2>
+                                        {/* Active Indicator */}
+                                        {candidate.status === "analyzing" && (
+                                            <motion.div
+                                                initial={{ opacity: 0 }}
+                                                animate={{ opacity: 1 }}
+                                                className="flex items-center gap-1.5"
+                                            >
+                                                <span className="text-[10px] text-blue-400 font-medium">Processing</span>
+                                            </motion.div>
+                                        )}
+                                    </motion.div>
+                                ))}
+                            </AnimatePresence>
+                        </div>
+                    )}
+                </div>
 
-                <p className="text-slate-400 mb-8 flex items-center gap-2">
-                    <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                    Enriching Candidate {progress.completed} of {progress.total}
-                </p>
+                {/* Footer / Status Bar */}
+                <div className="p-3 bg-[#252525] border-t border-[#333] flex justify-between items-center text-xs">
+                    <div className="text-neutral-500 flex items-center gap-2">
+                        {phase === "deep_analysis" ? (
+                            <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Processing...</span>
+                            </>
+                        ) : (
+                            <span>Complete</span>
+                        )}
+                    </div>
+                    <div className="flex gap-3 text-neutral-500">
+                        <span className={completed > 0 ? "text-neutral-300" : ""}>{completed} Done</span>
+                        <span className={failed > 0 ? "text-red-400" : ""}>{failed} Failed</span>
+                    </div>
+                </div>
 
-                {/* Progress Bar */}
-                <div className="w-full h-4 bg-slate-800 rounded-full overflow-hidden border border-slate-700 relative">
+                {/* Analysis Capabilities Grid - Only show during active analysis */}
+                {phase === "deep_analysis" && (
                     <motion.div
-                        className="absolute top-0 left-0 bottom-0 bg-gradient-to-r from-amber-500 to-orange-600"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${percentage}%` }}
-                        transition={{ type: "spring", stiffness: 50 }}
-                    />
-                    {/* Scanning Line Effect on Bar */}
-                    <motion.div
-                        className="absolute top-0 bottom-0 w-20 bg-white/20 blur-md"
-                        animate={{ x: [-100, 500] }}
-                        transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-                    />
-                </div>
-
-                <div className="flex justify-between w-full mt-2 text-xs text-slate-500 font-mono">
-                    <span>0%</span>
-                    <span>{percentage}%</span>
-                    <span>100%</span>
-                </div>
-
-                {/* Floating Icons Animation */}
-                <div className="absolute inset-0 -z-10 pointer-events-none">
-                    {[Search, Database, Globe, CheckCircle].map((Icon, i) => (
-                        <motion.div
-                            key={i}
-                            className="absolute text-slate-700/30"
-                            initial={{
-                                x: Math.random() * 400 - 200,
-                                y: Math.random() * 400 - 200,
-                                scale: 0,
-                                opacity: 0
-                            }}
-                            animate={{
-                                y: [0, -100],
-                                opacity: [0, 1, 0],
-                                scale: [0.5, 1, 0.5]
-                            }}
-                            transition={{
-                                duration: 3 + Math.random() * 2,
-                                repeat: Infinity,
-                                delay: i * 0.5
-                            }}
-                            style={{ left: '50%', top: '50%' }}
-                        >
-                            <Icon size={24 + Math.random() * 24} />
-                        </motion.div>
-                    ))}
-                </div>
-            </div>
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        className="bg-[#1a1a1a] border-t border-[#333] grid grid-cols-4 divide-x divide-[#333]"
+                    >
+                        {[
+                            { icon: DollarSign, label: "Salary" },
+                            { icon: Target, label: "Score" },
+                            { icon: Activity, label: "Skills" },
+                            { icon: Search, label: "Verify" },
+                        ].map((item, i) => (
+                            <div key={i} className="flex flex-col items-center justify-center py-3 gap-1.5">
+                                <item.icon className="w-3.5 h-3.5 text-neutral-500" />
+                                <span className="text-[10px] text-neutral-500 font-medium uppercase tracking-wider">
+                                    {item.label}
+                                </span>
+                            </div>
+                        ))}
+                    </motion.div>
+                )}
+            </motion.div>
         </motion.div>
     );
 }
