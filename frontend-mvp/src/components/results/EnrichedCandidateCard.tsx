@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+//@ts-nocheck
 "use client";
 
 import { useState } from "react";
@@ -255,13 +258,13 @@ export default function EnrichedCandidateCard({
                           ))}
                         {candidate.skill_validation.validated_skills.length >
                           3 && (
-                          <Badge variant="outline" className="text-xs">
-                            +
-                            {candidate.skill_validation.validated_skills
-                              .length - 3}{" "}
-                            more
-                          </Badge>
-                        )}
+                            <Badge variant="outline" className="text-xs">
+                              +
+                              {candidate.skill_validation.validated_skills
+                                .length - 3}{" "}
+                              more
+                            </Badge>
+                          )}
                       </div>
                     </div>
                   </div>

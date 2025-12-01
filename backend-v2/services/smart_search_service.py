@@ -174,7 +174,7 @@ Return ONLY a JSON object:
 
         try:
             response = self.ai_client.chat.completions.create(
-                model="anthropic/claude-3.5-sonnet",
+                model="anthropic/claude-haiku-4.5",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1500

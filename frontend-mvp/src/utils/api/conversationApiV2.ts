@@ -12,6 +12,14 @@ import type {
   IdealProfileCard,
 } from "@/types";
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+const getHeaders = (token: string) => ({
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json",
+});
+
 /**
  * Start a new conversation with Donna
  */
@@ -35,17 +43,20 @@ export const startConversation = async (
   return handleApiResponse(response);
 };
 
+/**
+ * Send message - FIXED field names
+ */
 export const sendMessage = async (
   sessionId: string,
   token: string,
   data: SendMessageRequest
 ): Promise<{
-  donna_response: string;
+  donna_reply: string;
   updated_ideal_profile: IdealProfileCard;
-  sample_profile: SampleProfile | null;
+  updated_sample_profile: SampleProfile | null;
   stage: string;
   ready_to_search: boolean;
-  suggested_next_steps: string[];
+  suggestions: string[];
 }> => {
   const response = await apiCall(`/conversation/${sessionId}/message`, {
     method: "POST",
@@ -53,16 +64,27 @@ export const sendMessage = async (
     token,
   });
 
-  return handleApiResponse(response);
+  const result = await handleApiResponse(response);
+
+  // Normalize field names (backend might return different names)
+  return {
+    donna_reply: result.donna_reply || result.donna_response || "",
+    updated_ideal_profile: result.updated_ideal_profile || result.ideal_profile,
+    updated_sample_profile:
+      result.updated_sample_profile || result.sample_profile || null,
+    stage: result.stage || "review",
+    ready_to_search: result.ready_to_search || false,
+    suggestions: result.suggestions || result.suggested_next_steps || [],
+  };
 };
 
 /**
- * Get current conversation state
+ * Get current conversation state - FIXED to include sample_candidates
  */
 export const getConversationState = async (
   sessionId: string,
   token: string
-): Promise<ConversationState> => {
+): Promise<ConversationState & { sample_candidates?: any[] }> => {
   const response = await apiCall(`/conversation/${sessionId}`, {
     method: "GET",
     token,
@@ -112,7 +134,7 @@ export const uploadJD = async (
   const response = await apiCall(`/conversation/${sessionId}/upload-jd`, {
     method: "POST",
     body: formData,
-    headers: {}, // Let browser set Content-Type for FormData
+    headers: {},
     token,
   });
 
@@ -203,66 +225,6 @@ export const deleteConversation = async (
 };
 
 /**
- * Generate samples using CrewAI intelligent search
- */
-export const intelligentSearch = async (
-  token: string,
-  idealProfile: any,
-  count: number = 5
-): Promise<{
-  success: boolean;
-  candidates: any[];
-  metadata: {
-    iterations: number;
-    final_query: any;
-    crew_output: string;
-  };
-}> => {
-  const response = await apiCall("/intelligent-search/generate-samples", {
-    method: "POST",
-    body: JSON.stringify({
-      ideal_profile: idealProfile,
-      count: count,
-    }),
-    token,
-  });
-
-  return handleApiResponse(response);
-};
-
-/**
- * Refine search based on user feedback (CrewAI)
- */
-export const refineSearch = async (
-  token: string,
-  idealProfile: any,
-  feedback: string,
-  previousQuery: any,
-  count: number = 5
-): Promise<{
-  success: boolean;
-  candidates: any[];
-  metadata: {
-    iterations: number;
-    final_query: any;
-    refinement_applied: boolean;
-  };
-}> => {
-  const response = await apiCall("/intelligent-search/refine-search", {
-    method: "POST",
-    body: JSON.stringify({
-      ideal_profile: idealProfile,
-      user_feedback: feedback,
-      previous_query: previousQuery,
-      count: count,
-    }),
-    token,
-  });
-
-  return handleApiResponse(response);
-};
-
-/**
  * Provide feedback on sample candidates
  */
 export const provideFeedback = async (
@@ -306,25 +268,135 @@ export const getSampleCandidates = async (
 };
 
 /**
- * Finalize and trigger PROGRESSIVE search
+ * Enrich a single candidate (background)
  */
-export const finalizeConversationV2 = async (
+export const enrichCandidate = async (
   sessionId: string,
   token: string,
-  finalProfileAdjustments?: Partial<IdealProfileCard>
+  candidateId: string,
+  candidate: any
 ): Promise<{
-  session_id: string;
-  search_triggered: boolean;
+  status: string;
+  candidate_id: string;
   message: string;
-  search_type: "progressive";
 }> => {
-  const response = await apiCall(`/conversation/${sessionId}/finalize`, {
-    method: "POST",
-    body: JSON.stringify({
-      final_profile_adjustments: finalProfileAdjustments || {},
-    }),
-    token,
-  });
+  const response = await apiCall(
+    `/conversation/${sessionId}/enrich-candidate`,
+    {
+      method: "POST",
+      body: JSON.stringify({ candidate_id: candidateId, candidate }),
+      token,
+    }
+  );
 
   return handleApiResponse(response);
+};
+
+/**
+ * Get enrichment progress
+ */
+export interface EnrichmentProgress {
+  status:
+    | "not_started"
+    | "starting"
+    | "in_progress"
+    | "completed"
+    | "failed"
+    | "error";
+  phase: "idle" | "initializing" | "deep_analysis" | "complete";
+  total: number;
+  completed: number;
+  failed: number;
+  progress_percentage: number;
+  current_candidate: string;
+  message: string;
+  candidates: Record<
+    string,
+    {
+      name: string;
+      status: string;
+      error?: string;
+    }
+  >;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export const getEnrichmentStatus = async (
+  sessionId: string,
+  token: string
+): Promise<EnrichmentProgress> => {
+  const response = await fetch(
+    `${API_BASE}/conversation/${sessionId}/enrichment-status`,
+    {
+      headers: getHeaders(token),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to get enrichment status");
+  }
+
+  return response.json();
+};
+
+/**
+ * Process rejection feedback with LLM
+ */
+export const processRejectionFeedback = async (
+  sessionId: string,
+  token: string,
+  candidate: any,
+  reason: string,
+  detailedFeedback?: string
+): Promise<{
+  donna_reply: string;
+  refinements_applied: string[];
+  new_samples: any[];
+  updated_profile: any;
+}> => {
+  const response = await apiCall(
+    `/conversation/${sessionId}/rejection-feedback`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        candidate,
+        reason,
+        detailed_feedback: detailedFeedback || "",
+      }),
+      token,
+    }
+  );
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Start deep analysis of accepted candidates
+ */
+export const enrichAcceptedCandidates = async (
+  sessionId: string,
+  token: string,
+  acceptedCandidates: Array<{ candidate: any }>
+): Promise<{
+  status: string;
+  session_id: string;
+  total_candidates: number;
+  message: string;
+}> => {
+  const response = await fetch(
+    `${API_BASE}/conversation/${sessionId}/enrich-accepted`,
+    {
+      method: "POST",
+      headers: getHeaders(token),
+      body: JSON.stringify({ accepted_candidates: acceptedCandidates }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to start enrichment");
+  }
+
+  return response.json();
 };

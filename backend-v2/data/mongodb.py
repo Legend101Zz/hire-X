@@ -431,8 +431,14 @@ class MongoDB:
             Results document or None
         """
         try:
+            query = {
+                "$or": [
+                    {"session_id": session_id},
+                    {"conversation_session_id": session_id}
+                ]
+            }
             # ✅ Use main DB collection
-            result = await self.enriched_results_collection.find_one({"session_id": session_id})
+            result = await self.enriched_results_collection.find_one(query)
             return result
         except Exception as e:
             logger.error(f"Failed to get enriched results: {e}")
@@ -573,6 +579,7 @@ class MongoDB:
             ("username", 1),
             ("updated_at", -1)
         ])
+        
         
     # ========================================================================
     # Cleanup

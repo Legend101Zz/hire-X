@@ -22,7 +22,7 @@ import {
   Rocket,
   ChevronDown,
   ChevronUp,
-
+  LayoutDashboard, // Added import
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -269,6 +269,18 @@ export default function SearchPage() {
     <div className="min-h-screen relative overflow-hidden bg-background">
       {/* Enhanced Animated Background */}
       <AnimatedBackground />
+
+      {/* Top Header / Navigation Bar */}
+      <div className="absolute top-0 left-0 w-full p-6 z-20 flex justify-end pointer-events-none">
+        <Button
+          variant="ghost"
+          onClick={() => router.push("/dashboard")}
+          className="gap-2 pointer-events-auto hover:bg-muted/50 backdrop-blur-sm transition-all"
+        >
+          <LayoutDashboard className="w-4 h-4" />
+          Dashboard
+        </Button>
+      </div>
 
       <div className="relative z-10 container mx-auto px-4 py-16">
         {/* Header with animation */}

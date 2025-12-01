@@ -97,7 +97,11 @@ export default function DonnaEnhanced({
         return () => clearInterval(cleanup);
     }, []);
 
-    const getEyePath = () => {
+    const getEyePath = (): string => {
+        // Fallback default path
+        const defaultPath = "M4,7 Q8,5 12,7";
+
+        if (!mounted) return defaultPath;
         if (eyeState === "blink") return "M4,8 L12,8";
 
         switch (expression) {
@@ -111,8 +115,9 @@ export default function DonnaEnhanced({
                 return "M4,8 C6,6 10,6 12,8";
             case "waving":
                 return "M4,7 Q8,4 12,7";
+            case "neutral":
             default:
-                return "M4,7 Q8,5 12,7";
+                return defaultPath;
         }
     };
 

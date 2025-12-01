@@ -1,21 +1,3 @@
-# services/conversation_manager.py (CORRECTED)
-"""
-Conversation Manager V3
-=======================
-Manages conversation state and flow for Donna (AI assistant).
-
-UPDATED FOR TIERED SEARCH: Uses fast tiered search during conversation.
-
-This service:
-- Tracks conversation state (greeting → skills → experience → preferences → ready)
-- Decides what questions to ask next
-- Determines when enough information is gathered
-- Builds ideal profile progressively
-- Uses TieredSmartSearch for fast sample generation (10s)
-- Updates sample profile as conversation progresses
-
-This is the brain of the conversational interface!
-"""
 
 import json
 from datetime import datetime
@@ -27,8 +9,8 @@ from models.conversation_models import (ConversationMessage, ConversationStage,
                                         ConversationState, IdealProfileCard,
                                         SampleProfile)
 from services.conversation_prompts import ConversationPrompts
+from services.funnel_search_service import FunnelSearchService
 from services.model_config_manager import ModelConfigManager
-from services.tiered_smart_search import TieredSmartSearch
 
 logger = get_logger(__name__)
 
@@ -37,13 +19,9 @@ class ConversationManager:
     """
     Manages conversation flow and state for Donna.
     
-    V3 Enhancement: Uses TieredSmartSearch for fast sample generation.
-    
-    State Machine:
-    greeting → skills → experience → preferences → review → ready
+    V3.1 Enhancement: Full conversational context for LLM responses.
     """
     
-    # Conversation stages
     STAGES = [
         ConversationStage.GREETING,
         ConversationStage.SKILLS,
@@ -53,7 +31,6 @@ class ConversationManager:
         ConversationStage.READY
     ]
     
-    # Minimum required fields for each stage
     STAGE_REQUIREMENTS = {
         ConversationStage.GREETING: [],
         ConversationStage.SKILLS: ["role_title", "must_have_skills"],
@@ -63,304 +40,39 @@ class ConversationManager:
         ConversationStage.READY: []
     }
     
-    # Maximum turns per stage (prevent infinite loops)
     MAX_TURNS_PER_STAGE = 5
     
     def __init__(
         self,
         redis_cache: RedisCache,
         model_config_manager: ModelConfigManager,
-        tiered_search: TieredSmartSearch
+        funnel_search: FunnelSearchService 
     ):
-        """
-        Initialize conversation manager.
-        
-        Args:
-            redis_cache: Redis cache for session storage
-            model_config_manager: Model configuration manager
-            tiered_search: Tiered smart search for fast sample generation
-        """
         self.redis = redis_cache
         self.model_config = model_config_manager
-        self.tiered_search = tiered_search
+        self.funnel_search = funnel_search 
         self.prompts = ConversationPrompts()
         
-        logger.info("✅ ConversationManager initialized with TieredSmartSearch")
+        logger.info("✅ ConversationManager initialized with contextual LLM")
     
     
     # ================================================================
-    # FEEDBACK PROCESSING
+    # PROCESS USER MESSAGE - UPDATED FOR FULL CONTEXT
     # ================================================================
-    
-    async def process_feedback(
-        self,
-        session_id: str,
-        feedback_type: str,
-        feedback_data: Optional[Dict[str, Any]] = None
-    ) -> Tuple[str, List[Dict[str, Any]]]:
-        """
-        Process user feedback and regenerate samples.
-        
-        Feedback types:
-        - "too_junior" → Increase seniority requirements
-        - "need_more_skill" → Boost specific skill weight
-        - "wrong_industry" → Adjust industry list
-        - "perfect" → Lock criteria for final search
-        
-        Returns:
-            (donna_reply, updated_samples)
-        """
-        logger.info(f"Processing feedback: {feedback_type}")
-        
-        # Load state
-        state = await self._load_state(session_id)
-        
-        if not state:
-            raise ValueError("Session not found")
-        
-        # Initialize feedback dict if not exists
-        if state.feedback is None:
-            state.feedback = {}
-        
-        # Apply feedback
-        if feedback_type == "too_junior":
-            state.feedback["min_years"] = 5
-            state.feedback["excluded_titles"] = ["student", "intern", "junior", "trainee"]
-            donna_reply = "Got it! Filtering for 5+ years experience and excluding junior roles. Let me find better matches... ⚡"
-            
-        elif feedback_type == "need_more_skill":
-            skill = feedback_data.get("skill") if feedback_data else None
-            if skill:
-                if "skill_weights" not in state.feedback:
-                    state.feedback["skill_weights"] = {}
-                state.feedback["skill_weights"][skill] = 2.5
-                donna_reply = f"Understood! Prioritizing {skill} experience. Searching... ⚡"
-            else:
-                donna_reply = "Which skill should I focus on more?"
-                await self._save_state(state)
-                return donna_reply, []
-        
-        elif feedback_type == "wrong_industry":
-            industries = feedback_data.get("industries", []) if feedback_data else []
-            if industries:
-                state.ideal_profile.industries = industries
-                donna_reply = f"Switching focus to {', '.join(industries[:2])}. Refreshing results... ⚡"
-            else:
-                donna_reply = "Which industries should I focus on?"
-                await self._save_state(state)
-                return donna_reply, []
-        
-        elif feedback_type == "perfect":
-            state.ready_to_search = True
-            state.stage = ConversationStage.READY
-            donna_reply = "Excellent! These are great matches. Ready to search for more? 🎯"
-            await self._save_state(state)
-            return donna_reply, []
-        
-        else:
-            donna_reply = "I didn't quite understand that feedback. Could you clarify?"
-            await self._save_state(state)
-            return donna_reply, []
-        
-        # Re-generate samples with updated criteria
-        try:
-            samples = await self._generate_sample_candidates(state)
-            
-            # Update state
-            if hasattr(state, 'sample_candidates'):
-                state.sample_candidates = samples
-            else:
-                # Add attribute if doesn't exist
-                state.__dict__['sample_candidates'] = samples
-            
-            await self._save_state(state)
-            
-            return donna_reply, samples
-            
-        except Exception as e:
-            logger.error(f"Error regenerating samples: {e}", exc_info=True)
-            return "Oops! Had trouble finding new matches. Let's try adjusting differently?", []
-    
-    
-    async def _generate_sample_candidates(
-        self,
-        state: ConversationState
-    ) -> List[Dict[str, Any]]:
-        """
-        Generate sample candidates using FAST tiered search.
-        
-        This runs during conversation for quick validation.
-        Returns 3-5 samples in ~10 seconds.
-        """
-        logger.info("🔎 Generating sample candidates (tiered search)...")
-        
-        # Build search criteria from ideal profile
-        jd_data = {
-            "role_title": state.ideal_profile.role_title,
-            "required_skills": state.ideal_profile.must_have_skills,
-            "preferred_skills": state.ideal_profile.nice_to_have_skills,
-            "seniority": state.ideal_profile.seniority,
-            "experience_years": state.ideal_profile.experience_years,
-            "industries": state.ideal_profile.industries,
-        }
-        logger.debug(f"JD data: {jd_data}")
-        # Apply feedback from previous iterations
-        filters = state.feedback if state.feedback else None
-        
-        # IERED SEARCH 
-        result = await self.tiered_search.search(
-            jd_data=jd_data,
-            limit=5,
-            filters=filters
-        )
-        
-        if result["success"] and result["candidates"]:
-            logger.info(f"✅ Found {len(result['candidates'])} sample candidates")
-            return result["candidates"][:3]
-        else:
-            logger.warning("⚠️ No sample candidates found")
-            return []
-    
-    
-    # ================================================================
-    # START CONVERSATION
-    # ================================================================
-    
-    async def start_conversation(
-        self,
-        session_id: str,
-        username: str,
-        initial_message: Optional[str] = None,
-        jd_data: Optional[Dict] = None
-    ) -> Tuple[str, IdealProfileCard, Optional[SampleProfile], str]:
-        """
-        Start a new conversation with Donna.
-        
-        Args:
-            session_id: Unique session identifier
-            username: Logged-in user
-            initial_message: Optional initial user message
-            jd_data: Optional parsed JD data
-        
-        Returns:
-            Tuple of (donna_reply, ideal_profile, sample_profile, stage)
-        """
-        
-        # Initialize conversation state
-        state = ConversationState(
-            session_id=session_id,
-            username=username,
-            stage=ConversationStage.GREETING
-        )
-        
-        # If JD provided, pre-fill profile
-        if jd_data:
-            state.ideal_profile = self._jd_to_profile(jd_data)
-            
-            # ✅ ADD DETAILED LOGGING
-            logger.info(f'✅ JD to profile conversion:')
-            logger.info(f'   - role_title: "{state.ideal_profile.role_title}"')
-            logger.info(f'   - must_have_skills: {len(state.ideal_profile.must_have_skills)} skills')
-            logger.info(f'   - seniority: "{state.ideal_profile.seniority}"')
-            logger.info(f'   - industries: {state.ideal_profile.industries}')
-            
-            state.jd_uploaded = True
-            state.stage = ConversationStage.REVIEW
-            
-            # Generate sample using tiered search
-            sample_profile = None
-            donna_reply = ""
-            
-            if self._has_minimum_info(state.ideal_profile):
-                try:
-                    logger.info("🚀 Starting TieredSmartSearch...")
-                    donna_reply, suggestions = await self._generate_sample_with_tiered_search(state)
-                    sample_profile = state.sample_profile
-                    
-                except Exception as e:
-                    logger.error(f"Failed to generate sample profile: {e}")
-                    sample_profile = None
-                    donna_reply = """I've analyzed your JD but encountered some difficulty finding matching candidates. 
 
-Could you tell me more about what you're looking for?"""
-            else:
-                sample_profile = None
-                donna_reply = """I've analyzed your JD, but I need a bit more information to find great matches.
-
-What role are you looking to fill?"""
-        
-        # If initial message provided, process it
-        elif initial_message:
-            extracted = await self._extract_info_from_message(
-                initial_message,
-                state.ideal_profile,
-                username=username
-            )
-            state.ideal_profile = extracted
-            
-            donna_reply, new_stage = await self._decide_next_question(state)
-            state.stage = new_stage
-            sample_profile = None
-        
-        # Otherwise, start fresh
-        else:
-            donna_reply = self.prompts.get_greeting_without_jd()
-            sample_profile = None
-        
-        # Add initial messages
-        if initial_message:
-            state.messages.append(ConversationMessage(
-                role="user",
-                content=initial_message
-            ))
-        
-        state.messages.append(ConversationMessage(
-            role="assistant",
-            content=donna_reply
-        ))
-        
-        # Save state
-        await self._save_state(state)
-        verify_state = await self._load_state(session_id)
-        if verify_state:
-            logger.info(f'✅ State saved and verified:')
-            logger.info(f'   - Session: {verify_state.session_id}')
-            logger.info(f'   - Role: "{verify_state.ideal_profile.role_title}"')
-            logger.info(f'   - Skills: {len(verify_state.ideal_profile.must_have_skills)}')
-        else:
-            logger.error(f'❌ State verification failed!')
-        
-        return donna_reply, state.ideal_profile, sample_profile, state.stage
-    
-    
-    # ================================================================
-    # PROCESS USER MESSAGE
-    # ================================================================
-    
     async def process_message(
         self,
         session_id: str,
         user_message: str,
         action: Optional[str] = None
     ) -> Tuple[str, IdealProfileCard, Optional[SampleProfile], str, bool, List[str]]:
-        """
-        Process user's message and generate Donna's response.
+        """Process user's message with FULL conversation context."""
         
-        Args:
-            session_id: Session identifier
-            user_message: User's message
-            action: Optional action ('update_card', 'ready_to_search', 'show_sample')
-        
-        Returns:
-            Tuple of (donna_reply, updated_profile, sample_profile, stage, ready, suggestions)
-        """
-        
-        # Load conversation state
         state = await self._load_state(session_id)
         if not state:
             raise ValueError(f"No conversation found for session {session_id}")
         
-        # Add user message
+        # Add user message to history
         state.messages.append(ConversationMessage(
             role="user",
             content=user_message
@@ -368,90 +80,92 @@ What role are you looking to fill?"""
         state.turn_count += 1
         state.stage_turn_count += 1
         
-        # Handle special actions
+        # Handle explicit actions
         if action == "ready_to_search":
             donna_reply = self.prompts.ready_to_search_confirmation()
             state.ready_to_search = True
             state.stage = ConversationStage.READY
             suggestions = []
+            
+            state.messages.append(ConversationMessage(
+                role="assistant",
+                content=donna_reply
+            ))
+            await self._save_state(state)
+            
+            return (
+                donna_reply,
+                state.ideal_profile,
+                state.sample_profile,
+                state.stage,
+                state.ready_to_search,
+                suggestions
+            )
         
-        elif action == "show_sample":
-            donna_reply, suggestions = await self._generate_sample_with_tiered_search(state)
+        # ================================================================
+        # NEW: Use LLM to understand message in FULL context
+        # ================================================================
         
-        # Regular message processing
+        extraction_result = await self._extract_and_respond_with_context(
+            user_message=user_message,
+            state=state
+        )
+        
+        # Update profile with extracted info
+        if extraction_result["profile_updates"]:
+            old_profile = state.ideal_profile.copy()
+            
+            for key, value in extraction_result["profile_updates"].items():
+                if value:  # Only update non-empty values
+                    if isinstance(value, list) and hasattr(state.ideal_profile, key):
+                        # Merge lists
+                        current = getattr(state.ideal_profile, key, [])
+                        merged = list(set(current + value))
+                        setattr(state.ideal_profile, key, merged)
+                    else:
+                        setattr(state.ideal_profile, key, value)
+            
+            # Detect if we need to re-search
+            should_research = self._should_trigger_new_search(
+                old_profile, 
+                state.ideal_profile,
+                extraction_result.get("intent", "")
+            )
         else:
-            # Extract info from user message
-            extracted = await self._extract_info_from_message(
-                user_message,
-                state.ideal_profile,
-                username=state.username
-            )
-            
-            # Detect if user wants to see sample
-            user_wants_sample = self._detect_sample_request(user_message, state.stage)
-            
-            # Check what changed BEFORE merging
-            significant_changes = self._detect_significant_changes(
-                state.ideal_profile,
-                extracted
-            )
-            
-            # Merge with existing profile
-            state.ideal_profile = self._merge_profiles(
-                state.ideal_profile,
-                extracted
-            )
-            
-            # Auto-regenerate sample if significant changes or user requested
-            if (user_wants_sample or significant_changes) and self._has_minimum_info(state.ideal_profile):
-                if user_wants_sample:
-                    logger.info("🎯 User requested sample generation")
-                else:
-                    logger.info(f"🔄 Significant changes detected: {significant_changes}")
-                
-                donna_reply, suggestions = await self._generate_sample_with_tiered_search(state)
-                
-                # Early return after sample generation
-                state.messages.append(ConversationMessage(
-                    role="assistant",
-                    content=donna_reply
-                ))
-                state.updated_at = datetime.utcnow().isoformat()
-                await self._save_state(state)
-                
-                return (
-                    donna_reply,
-                    state.ideal_profile,
-                    state.sample_profile,
-                    state.stage,
-                    state.ready_to_search,
-                    suggestions
-                )
-            
-            # Decide next question and stage
-            donna_reply, new_stage = await self._decide_next_question(state)
-            
-            # Check if stage changed
-            if new_stage != state.stage:
-                state.stage = new_stage
-                state.stage_turn_count = 0
-            
-            # Get suggestions for quick replies
-            suggestions = self._get_suggestions(state.stage, state.ideal_profile)
-            
-            # Check if ready to search
-            state.ready_to_search = self._check_if_ready(state)
+            should_research = False
         
-        # Add Donna's response
+        # Get Donna's response
+        donna_reply = extraction_result["donna_response"]
+        suggestions = extraction_result.get("suggestions", [])
+        
+        # ================================================================
+        # Trigger new search if criteria changed significantly
+        # ================================================================
+        
+        if should_research and self._has_minimum_info(state.ideal_profile):
+            logger.info("🔄 Criteria changed - triggering new search...")
+            
+            search_reply, search_suggestions = await self._generate_sample_with_funnel_search(state)
+            
+            # Combine responses
+            donna_reply = f"{donna_reply}\n\n{search_reply}"
+            suggestions = search_suggestions
+        
+        # Update stage if needed
+        new_stage = extraction_result.get("suggested_stage", state.stage)
+        if new_stage != state.stage:
+            state.stage = new_stage
+            state.stage_turn_count = 0
+        
+        state.ready_to_search = self._check_if_ready(state)
+        
+        # Save assistant response
         state.messages.append(ConversationMessage(
             role="assistant",
             content=donna_reply
         ))
         
-        # Update timestamp
         state.updated_at = datetime.utcnow().isoformat()
-        
-        # Save state
         await self._save_state(state)
         
         return (
@@ -465,22 +179,338 @@ What role are you looking to fill?"""
     
     
     # ================================================================
-    # TIERED SEARCH INTEGRATION
+    # NEW: CONTEXTUAL EXTRACTION AND RESPONSE
     # ================================================================
     
-    async def _generate_sample_with_tiered_search(
+    async def _extract_and_respond_with_context(
+        self,
+        user_message: str,
+        state: ConversationState
+    ) -> Dict[str, Any]:
+        """
+        Use LLM to understand message with FULL conversation context.
+        
+        Returns:
+            - profile_updates: Dict of fields to update
+            - donna_response: Natural conversational response
+            - intent: What the user wants (add_criteria, refine, question, etc.)
+            - suggestions: Quick action buttons
+        """
+        
+        # Build conversation history (last 10 messages)
+        recent_messages = state.messages[-10:] if state.messages else []
+        conversation_history = "\n".join([
+            f"{'User' if m.role == 'user' else 'Donna'}: {m.content}"
+            for m in recent_messages
+        ])
+        
+        # Current profile state
+        profile_json = json.dumps(state.ideal_profile.dict(), indent=2)
+        
+        # Sample candidates info (if any)
+        sample_info = ""
+        if hasattr(state, 'sample_candidates') and state.sample_candidates:
+            sample_info = f"""
+Current Sample Candidates ({len(state.sample_candidates)} found):
+{json.dumps([{
+    'name': f"{c['candidate'].get('first_name', '')} {c['candidate'].get('last_name', '')}",
+    'title': c['candidate'].get('title', ''),
+    'location': c['candidate'].get('location', ''),
+    'skills': c.get('matched_skills', [])[:5],
+    'score': c.get('score', 0)
+} for c in state.sample_candidates[:3]], indent=2)}
+"""
+        
+        system_prompt = """You are Donna, an AI recruiting assistant. You're having a conversation with a recruiter to help them find candidates.
+
+YOUR PERSONALITY:
+- Friendly, professional, and helpful
+- Acknowledge what you understood
+- Ask clarifying questions when needed
+- Be concise but warm
+
+IMPORTANT CONTEXT RULES:
+1. The user may be ADDING to an existing search (e.g., "add Bangalore location")
+2. The user may be REFINING criteria (e.g., "make it more senior")
+3. The user may be asking a QUESTION about the candidates
+4. The user may be giving FEEDBACK (e.g., "these are too junior")
+
+You must EXTRACT any new/updated criteria AND generate a natural response.
+
+RESPOND IN THIS EXACT JSON FORMAT:
+{
+    "intent": "add_criteria|refine|question|feedback|confirm|other",
+    "profile_updates": {
+        "role_title": null or "string",
+        "must_have_skills": [] or ["skill1", "skill2"],
+        "nice_to_have_skills": [] or ["skill1"],
+        "seniority": null or "senior|mid|junior|lead|principal",
+        "experience_years": null or "5+|3-5|7+|etc",
+        "industries": [] or ["Industry1", "Industry2"],
+        "locations": [] or ["Location1", "Location2"],
+        "company_size": [] or ["startup", "enterprise"],
+        "additional_requirements": null or "string"
+    },
+    "donna_response": "Your natural conversational response here",
+    "suggestions": ["Suggestion 1", "Suggestion 2"],
+    "should_search": true or false,
+    "suggested_stage": "review|preferences|skills|experience"
+}
+
+RULES FOR profile_updates:
+- Only include fields that the user EXPLICITLY mentioned or implied
+- For locations: Extract city names like "Bangalore", "Mumbai", "San Francisco"
+- For skills: Extract technical skills mentioned
+- Use null for fields not mentioned
+- Use empty [] for list fields not mentioned
+
+RULES FOR donna_response:
+- Acknowledge what you understood
+- If adding criteria, confirm what was added
+- If no sample candidates exist yet, offer to search
+- Be conversational, not robotic"""
+
+        user_prompt = f"""CURRENT CONVERSATION STATE:
+- Stage: {state.stage}
+- Turn count: {state.turn_count}
+
+CURRENT IDEAL PROFILE:
+{profile_json}
+
+{sample_info}
+
+CONVERSATION HISTORY:
+{conversation_history}
+
+USER'S LATEST MESSAGE:
+"{user_message}"
+
+Understand this message in context and respond appropriately. Extract any criteria updates."""
+
+        try:
+            model_config = await self.model_config.get_user_config(state.username)
+            
+            response = await self.model_config.call_model(
+                model_config=model_config,
+                model_purpose="conversation",  # Use conversation model
+                system_prompt=system_prompt,
+                user_message=user_prompt,
+                temperature=0.4,
+                username=state.username
+            )
+            
+            # Parse JSON response
+            response_text = response.strip()
+            
+            # Handle markdown code blocks
+            if "```" in response_text:
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.split("```")[0]
+            
+            result = json.loads(response_text)
+            
+            logger.info(f"✅ LLM understood intent: {result.get('intent')}")
+            logger.info(f"   Profile updates: {result.get('profile_updates')}")
+            
+            return {
+                "profile_updates": result.get("profile_updates", {}),
+                "donna_response": result.get("donna_response", "I'm not sure I understood. Could you clarify?"),
+                "intent": result.get("intent", "other"),
+                "suggestions": result.get("suggestions", []),
+                "should_search": result.get("should_search", False),
+                "suggested_stage": result.get("suggested_stage", state.stage)
+            }
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse LLM response: {e}")
+            logger.error(f"   Raw response: {response[:500]}")
+            
+            # Fallback: Try to extract intent from raw response
+            return {
+                "profile_updates": {},
+                "donna_response": "I understood you want to make some changes. Could you be more specific about what you'd like to adjust?",
+                "intent": "other",
+                "suggestions": ["Add location", "Change seniority", "Show more candidates"],
+                "should_search": False,
+                "suggested_stage": state.stage
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ LLM extraction failed: {e}", exc_info=True)
+            return {
+                "profile_updates": {},
+                "donna_response": "Sorry, I had trouble understanding that. Could you rephrase?",
+                "intent": "error",
+                "suggestions": [],
+                "should_search": False,
+                "suggested_stage": state.stage
+            }
+    
+    
+    def _should_trigger_new_search(
+        self,
+        old_profile: IdealProfileCard,
+        new_profile: IdealProfileCard,
+        intent: str
+    ) -> bool:
+        """Determine if we should trigger a new search based on profile changes."""
+        
+        # Always search if intent is to add/refine criteria
+        if intent in ["add_criteria", "refine"]:
+            return True
+        
+        # Check for significant field changes
+        significant_fields = ["locations", "industries", "seniority", "must_have_skills"]
+        
+        for field in significant_fields:
+            old_value = getattr(old_profile, field, None)
+            new_value = getattr(new_profile, field, None)
+            
+            if isinstance(old_value, list) and isinstance(new_value, list):
+                if set(new_value) - set(old_value):  # New items added
+                    logger.info(f"🔄 New {field} added: {set(new_value) - set(old_value)}")
+                    return True
+            elif old_value != new_value and new_value:
+                logger.info(f"🔄 {field} changed: {old_value} → {new_value}")
+                return True
+        
+        return False
+    
+    
+    # ================================================================
+    # FEEDBACK PROCESSING - UPDATED
+    # ================================================================
+    
+    async def process_feedback(
+        self,
+        session_id: str,
+        feedback_type: str,
+        feedback_data: Optional[Dict[str, Any]] = None
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """Process user feedback and regenerate samples."""
+        logger.info(f"Processing feedback: {feedback_type}")
+        
+        state = await self._load_state(session_id)
+        
+        if not state:
+            raise ValueError("Session not found")
+        
+        if state.feedback is None:
+            state.feedback = {}
+        
+        if feedback_type == "too_junior":
+            state.feedback["min_years"] = 5
+            state.feedback["excluded_titles"] = ["student", "intern", "junior", "trainee"]
+            donna_reply = "Got it! I'll focus on more experienced candidates with 5+ years. Searching now... ⚡"
+            
+        elif feedback_type == "need_more_skill":
+            skill = feedback_data.get("skill") if feedback_data else None
+            if skill:
+                if "skill_weights" not in state.feedback:
+                    state.feedback["skill_weights"] = {}
+                state.feedback["skill_weights"][skill] = 2.5
+                donna_reply = f"Understood! I'll prioritize candidates stronger in {skill}. Let me find better matches... ⚡"
+            else:
+                donna_reply = "Which specific skill should I prioritize? (e.g., 'React', 'Python', 'AWS')"
+                await self._save_state(state)
+                return donna_reply, []
+        
+        elif feedback_type == "wrong_industry":
+            industries = feedback_data.get("industries", []) if feedback_data else []
+            if industries:
+                state.ideal_profile.industries = industries
+                donna_reply = f"Switching focus to {', '.join(industries[:2])} industry. Refreshing results... ⚡"
+            else:
+                donna_reply = "Which industries should I focus on? (e.g., 'SaaS', 'Fintech', 'Healthcare')"
+                await self._save_state(state)
+                return donna_reply, []
+        
+        elif feedback_type == "perfect":
+            state.ready_to_search = True
+            state.stage = ConversationStage.READY
+            donna_reply = "Excellent! These matches look great. Ready to run the full search and enrich the top candidates? 🎯"
+            await self._save_state(state)
+            return donna_reply, []
+        
+        else:
+            donna_reply = "I didn't quite catch that. Could you tell me what you'd like to adjust?"
+            await self._save_state(state)
+            return donna_reply, []
+        
+        # Re-generate samples with updated criteria
+        try:
+            samples = await self._generate_sample_candidates(state)
+            
+            if hasattr(state, 'sample_candidates'):
+                state.sample_candidates = samples
+            else:
+                state.__dict__['sample_candidates'] = samples
+            
+            await self._save_state(state)
+            
+            if samples:
+                donna_reply += f"\n\nFound {len(samples)} better matches!"
+            else:
+                donna_reply = "Hmm, those criteria are quite specific. Let me try broadening the search a bit..."
+            
+            return donna_reply, samples
+            
+        except Exception as e:
+            logger.error(f"Error regenerating samples: {e}", exc_info=True)
+            return "Had some trouble finding new matches. Let's try adjusting the criteria differently?", []
+    
+    
+    async def _generate_sample_candidates(
+        self,
+        state: ConversationState
+    ) -> List[Dict[str, Any]]:
+        """Generate sample candidates using FunnelSearchService."""
+        logger.info("🔎 Generating sample candidates (funnel search)...")
+        
+        jd_data = {
+            "role_title": state.ideal_profile.role_title,
+            "required_skills": state.ideal_profile.must_have_skills,
+            "preferred_skills": state.ideal_profile.nice_to_have_skills,
+            "seniority": state.ideal_profile.seniority,
+            "experience_years": state.ideal_profile.experience_years,
+            "industries": state.ideal_profile.industries,
+            "locations": state.ideal_profile.locations,  
+        }
+        
+        user_filters = {
+            "industries": state.ideal_profile.industries,
+            "seniority": state.ideal_profile.seniority,
+            "locations": state.ideal_profile.locations,
+        }
+        
+        if state.feedback:
+            if state.feedback.get("min_years"):
+                user_filters["experience_min"] = state.feedback["min_years"]
+        
+        result = await self.funnel_search.search(
+            jd_data=jd_data,
+            limit=5,
+            user_filters=user_filters
+        )
+        
+        if result["success"] and result["candidates"]:
+            logger.info(f"✅ Found {len(result['candidates'])} sample candidates")
+            return result["candidates"][:5]
+        else:
+            logger.warning("⚠️ No sample candidates found")
+            return []
+    
+    
+    async def _generate_sample_with_funnel_search(
         self,
         state: ConversationState
     ) -> Tuple[str, List[str]]:
-        """
-        Generate sample using fast tiered search.
-        
-        Uses TieredSmartSearch for quick results (~10 seconds).
-        """
-        logger.info("🚀 Starting tiered smart search...")
+        """Generate sample using FunnelSearchService with natural response."""
+        logger.info("Starting funnel search...")
         
         try:
-            # Convert ideal profile to JD format
             jd_data = {
                 "role_title": state.ideal_profile.role_title,
                 "required_skills": state.ideal_profile.must_have_skills,
@@ -488,330 +518,222 @@ What role are you looking to fill?"""
                 "seniority": state.ideal_profile.seniority,
                 "experience_years": state.ideal_profile.experience_years,
                 "industries": state.ideal_profile.industries,
+                "locations": state.ideal_profile.locations,
             }
             
-            # Get current filters (if user provided feedback)
-            filters = None
-            if hasattr(state, 'feedback'):
-                filters = state.feedback
+            user_filters = {
+                "industries": state.ideal_profile.industries,
+                "seniority": state.ideal_profile.seniority,
+                "locations": state.ideal_profile.locations,
+            }
             
-            # Execute tiered search (synchronous)
-            result = await self.tiered_search.search(
+            if hasattr(state, 'feedback') and state.feedback:
+                if state.feedback.get("min_years"):
+                    user_filters["experience_min"] = state.feedback["min_years"]
+            
+            result = await self.funnel_search.search(
                 jd_data=jd_data,
                 limit=5,
-                filters=filters
+                user_filters=user_filters
             )
             
             if result["success"] and result["candidates"]:
-                # Take top candidate for sample profile
                 top_candidate = result["candidates"][0]
                 
-                # Convert to SampleProfile
                 sample_profile = self._candidate_to_sample(top_candidate["candidate"])
                 state.sample_profile = sample_profile
                 
-                # Store search metadata
                 state.last_search_metadata = {
                     "total_found": result["total_found"],
-                    "tier_distribution": result.get("tier_distribution", {}),
-                    "expanded_terms": result.get("expanded_terms", {})
+                    "filters_used": result.get("filters_used", {}),
+                    "search_log": result.get("search_log", [])
                 }
-                state.sample_candidates = result["candidates"][:3]
+                state.sample_candidates = result["candidates"][:5]
                 
-                donna_reply = f"""Great news! I found {result['total_found']} matching candidates.
+                # Build natural response
+                location_info = ""
+                if state.ideal_profile.locations:
+                    location_info = f" in {', '.join(state.ideal_profile.locations[:2])}"
+                
+                match_highlights = top_candidate.get("match_reasons", [])[:3]
+                if not match_highlights:
+                    matched_skills = top_candidate.get("matched_skills", [])
+                    if matched_skills:
+                        match_highlights.append(f"Skills: {', '.join(matched_skills[:3])}")
+                
+                donna_reply = f"""Found {result['total_found']} candidates{location_info}! 🎯
 
 Here's the top match (Score: {top_candidate['score']}/100):
+- {top_candidate['candidate'].get('first_name', '')} {top_candidate['candidate'].get('last_name', '')}
+- {top_candidate['candidate'].get('title', 'N/A')}
+- {top_candidate['candidate'].get('location', 'N/A')}
 
-Match highlights:
-{chr(10).join(['• ' + detail for detail in top_candidate['match_details'][:3]])}
+{chr(10).join(['• ' + detail for detail in match_highlights])}
 
-{self.prompts.present_sample_profile()}"""
+Swipe through the candidates to review them!"""
                 
-                suggestions = ["Perfect!", "Too junior", "Wrong industry", "Need more skill"]
+                suggestions = ["These look good!", "Too junior", "Wrong location", "Need more skills"]
                 
-                logger.info(f"✅ TieredSearch found {result['total_found']} candidates")
+                logger.info(f"✅ FunnelSearch found {result['total_found']} candidates")
                 
             else:
-                # No candidates found
                 state.sample_profile = None
+                state.sample_candidates = []
                 
-                donna_reply = """I couldn't find matching candidates with the current criteria.
+                # Build helpful response for no results
+                criteria_summary = []
+                if state.ideal_profile.role_title:
+                    criteria_summary.append(f"Role: {state.ideal_profile.role_title}")
+                if state.ideal_profile.locations:
+                    criteria_summary.append(f"Location: {', '.join(state.ideal_profile.locations)}")
+                if state.ideal_profile.must_have_skills:
+                    criteria_summary.append(f"Skills: {', '.join(state.ideal_profile.must_have_skills[:3])}")
+                
+                donna_reply = f"""Hmm, I couldn't find candidates matching all these criteria:
+{chr(10).join(['• ' + c for c in criteria_summary])}
 
-Here are some suggestions to improve results:
-- Try broadening the role title
-- Reduce the number of required skills
-- Add more industries
-
-What would you like to adjust?"""
+Would you like to:
+- Broaden the location (try "India" instead of specific cities)
+- Reduce required skills
+- Try different industries"""
                 
-                suggestions = ["Broaden role title", "Reduce skills", "Add industries"]
+                suggestions = ["Broaden location", "Reduce skills", "Try different industries"]
                 
-                logger.warning("⚠️ TieredSearch found no candidates")
+                logger.warning("⚠️ FunnelSearch found no candidates")
                 
         except Exception as e:
-            logger.error(f"TieredSearch failed: {e}", exc_info=True)
-            donna_reply = "I encountered an issue searching. Could you provide more details about what you're looking for?"
-            suggestions = ["Tell me more", "Try again"]
+            logger.error(f"FunnelSearch failed: {e}", exc_info=True)
+            donna_reply = "I ran into an issue while searching. Could you try rephrasing your criteria?"
+            suggestions = ["Start over", "Simplify criteria"]
         
         return donna_reply, suggestions
+
     
+    # ================================================================
+    # START CONVERSATION - Keep existing implementation
+    # ================================================================
+    
+    async def start_conversation(
+        self,
+        session_id: str,
+        username: str,
+        initial_message: Optional[str] = None,
+        jd_data: Optional[Dict] = None
+    ) -> Tuple[str, IdealProfileCard, Optional[SampleProfile], str]:
+        """Start a new conversation with Donna."""
+        
+        state = ConversationState(
+            session_id=session_id,
+            username=username,
+            stage=ConversationStage.GREETING
+        )
+        
+        if jd_data:
+            state.ideal_profile = self._jd_to_profile(jd_data)
+            state.jd_uploaded = True
+            state.stage = ConversationStage.REVIEW
+            
+            sample_profile = None
+            donna_reply = ""
+            
+            if self._has_minimum_info(state.ideal_profile):
+                try:
+                    logger.info("🚀 Starting FunnelSearch...")
+                    donna_reply, suggestions = await self._generate_sample_with_funnel_search(state)
+                    sample_profile = state.sample_profile
+                    
+                except Exception as e:
+                    logger.error(f"Failed to generate sample profile: {e}")
+                    sample_profile = None
+                    donna_reply = """I've analyzed your JD but had some trouble finding matches.
+
+Could you tell me more about the specific skills or location you're targeting?"""
+            else:
+                sample_profile = None
+                donna_reply = """I've analyzed your JD, but I need a bit more detail.
+
+What's the main role you're hiring for, and what are the must-have skills?"""
+        
+        elif initial_message:
+            # Use contextual extraction for initial message too
+            extraction_result = await self._extract_and_respond_with_context(
+                user_message=initial_message,
+                state=state
+            )
+            
+            # Apply updates
+            if extraction_result["profile_updates"]:
+                for key, value in extraction_result["profile_updates"].items():
+                    if value:
+                        setattr(state.ideal_profile, key, value)
+            
+            donna_reply = extraction_result["donna_response"]
+            new_stage = extraction_result.get("suggested_stage", ConversationStage.SKILLS)
+            state.stage = new_stage
+            sample_profile = None
+            
+            # If we have enough info, search
+            if self._has_minimum_info(state.ideal_profile):
+                search_reply, _ = await self._generate_sample_with_funnel_search(state)
+                donna_reply = f"{donna_reply}\n\n{search_reply}"
+                sample_profile = state.sample_profile
+        
+        else:
+            donna_reply = """Hey there! 👋 I'm Donna, your AI recruiting assistant.
+
+Tell me about the role you're hiring for - what position and what skills are must-haves?
+
+Or if you have a job description, you can paste it and I'll extract the key requirements!"""
+            sample_profile = None
+        
+        if initial_message:
+            state.messages.append(ConversationMessage(
+                role="user",
+                content=initial_message
+            ))
+        
+        state.messages.append(ConversationMessage(
+            role="assistant",
+            content=donna_reply
+        ))
+        
+        await self._save_state(state)
+        
+        return donna_reply, state.ideal_profile, sample_profile, state.stage
+    
+    
+    # ================================================================
+    # HELPER METHODS - Keep existing implementations
+    # ================================================================
     
     def _candidate_to_sample(self, candidate: Dict) -> SampleProfile:
-        """
-        Convert candidate dict from search to SampleProfile.
-        
-        Args:
-            candidate: Candidate dictionary from tiered search
-            
-        Returns:
-            SampleProfile object
-        """
-        # Extract skills from expertise string
+        """Convert candidate dict to SampleProfile."""
         expertise_str = candidate.get("expertise", "")
         skills = []
         if expertise_str and expertise_str != "NA":
             skills = [s.strip() for s in expertise_str.split(",")][:5]
-            
-        # Ensure we have at least one skill
+        
         if not skills:
             skills = ["Skills not specified"]
         
         return SampleProfile(
-            profile_id=str(candidate.get("_id", candidate.get("profile_id", ""))),  # Try both fields
+            profile_id=str(candidate.get("_id", candidate.get("profile_id", ""))),
             name=f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}".strip(),
             title=candidate.get("title", "Not specified"),
-            skills=skills if skills else ["Skills not specified"],  # Ensure non-empty
-            experience_years=0,  # Not available in current schema
-            current_company="Not specified",  # Not available in current schema
+            skills=skills,
+            experience_years=candidate.get("experience_years", 0) or 0,
+            current_company="Not specified",
             location=candidate.get("location", "Not specified"),
-            industry=candidate.get("current_industry", "Not specified"),  # ✅ Add industry
-            match_score=85,  # Default score
-            match_reasoning="Found via intelligent tiered search",  # If the model has this field
+            industry=candidate.get("current_industry", "Not specified"),
+            match_score=85,
+            match_reasoning="Found via intelligent funnel search",
             linkedin_url=candidate.get("linkedin_url", ""),
             summary=candidate.get("summary", "")[:200] if candidate.get("summary") else ""
         )
     
     
-    # ================================================================
-    # HELPER METHODS
-    # ================================================================
-    
-    def _detect_sample_request(self, user_message: str, current_stage: str) -> bool:
-        """Detect if user is requesting to see a sample candidate."""
-        
-        if current_stage != ConversationStage.REVIEW:
-            return False
-        
-        message_lower = user_message.lower().strip()
-        
-        positive_phrases = [
-            "yes", "yeah", "sure", "okay", "ok",
-            "show me", "let's see", "lets see",
-            "show sample", "see sample",
-            "show candidate", "see candidate",
-            "show profile", "view sample",
-            "i want to see", "can i see",
-            "please show", "go ahead", "proceed"
-        ]
-        
-        return any(phrase in message_lower for phrase in positive_phrases)
-    
-    
-    async def _extract_info_from_message(
-        self,
-        message: str,
-        current_profile: IdealProfileCard,
-        username: str = None
-    ) -> IdealProfileCard:
-        """Extract structured info from user's message using LLM."""
-        
-        system_prompt = self.prompts.get_llm_extraction_prompt()
-        
-        user_prompt = f"""Current Profile State:
-{json.dumps(current_profile.dict(), indent=2)}
-
-User's Message:
-"{message}"
-
-Extract new information and return updated fields as JSON."""
-        
-        model_config = await self.model_config.get_user_config(username)
-        
-        extraction_response = await self.model_config.call_model(
-            model_config=model_config,
-            model_purpose="extraction",
-            system_prompt=system_prompt,
-            user_message=user_prompt,
-            temperature=0.3,
-            username=username
-        )
-        
-        try:
-            extracted_data = json.loads(extraction_response)
-            
-            updated_profile = current_profile.copy()
-            
-            for field, value in extracted_data.items():
-                if value:
-                    setattr(updated_profile, field, value)
-            
-            return updated_profile
-        
-        except json.JSONDecodeError:
-            return current_profile
-    
-    
-    def _detect_significant_changes(
-        self,
-        old_profile: IdealProfileCard,
-        new_profile: IdealProfileCard
-    ) -> List[str]:
-        """Detect significant changes that warrant sample regeneration."""
-        
-        changes = []
-        
-        significant_fields = [
-            "role_title", "must_have_skills",
-            "seniority", "experience_years",
-            "industries", "locations"
-        ]
-        
-        for field in significant_fields:
-            old_value = getattr(old_profile, field, None)
-            new_value = getattr(new_profile, field, None)
-            
-            if isinstance(old_value, list) and isinstance(new_value, list):
-                if set(old_value) != set(new_value) and new_value:
-                    changes.append(field)
-            elif old_value != new_value and new_value:
-                changes.append(field)
-        
-        return changes
-    
-    
-    async def _decide_next_question(
-        self,
-        state: ConversationState
-    ) -> Tuple[str, str]:
-        """Decide what Donna should ask next."""
-        
-        profile = state.ideal_profile
-        current_stage = state.stage
-        
-        if current_stage == ConversationStage.GREETING:
-            if profile.role_title:
-                donna_question = self.prompts.ask_about_must_have_skills(profile.role_title)
-                new_stage = ConversationStage.SKILLS
-            else:
-                donna_question = "What role are you hiring for?"
-                new_stage = ConversationStage.GREETING
-        
-        elif current_stage == ConversationStage.SKILLS:
-            if not profile.role_title:
-                donna_question = "What role are you hiring for?"
-                new_stage = ConversationStage.SKILLS
-            elif not profile.must_have_skills:
-                donna_question = self.prompts.ask_about_must_have_skills(profile.role_title)
-                new_stage = ConversationStage.SKILLS
-            elif len(profile.must_have_skills) >= 2 and not profile.nice_to_have_skills:
-                donna_question = self.prompts.ask_about_nice_to_have_skills()
-                new_stage = ConversationStage.SKILLS
-            else:
-                donna_question = self.prompts.confirm_skills_and_move_on()
-                new_stage = ConversationStage.EXPERIENCE
-        
-        elif current_stage == ConversationStage.EXPERIENCE:
-            if not profile.seniority:
-                donna_question = self.prompts.ask_about_seniority()
-                new_stage = ConversationStage.EXPERIENCE
-            elif not profile.experience_years:
-                donna_question = self.prompts.ask_about_experience_years()
-                new_stage = ConversationStage.EXPERIENCE
-            else:
-                donna_question = self.prompts.confirm_experience_and_move_on()
-                new_stage = ConversationStage.PREFERENCES
-        
-        elif current_stage == ConversationStage.PREFERENCES:
-            if not profile.industries:
-                donna_question = self.prompts.ask_about_industries()
-                new_stage = ConversationStage.PREFERENCES
-            elif not profile.locations:
-                donna_question = self.prompts.ask_about_locations()
-                new_stage = ConversationStage.PREFERENCES
-            else:
-                donna_question = self.prompts.show_summary_for_review(profile)
-                new_stage = ConversationStage.REVIEW
-        
-        elif current_stage == ConversationStage.REVIEW:
-            if state.sample_profile:
-                donna_question = "Is this the kind of candidate you're looking for?"
-            else:
-                donna_question = "Want to see a sample candidate matching this profile?"
-            new_stage = ConversationStage.REVIEW
-        
-        else:
-            donna_question = self.prompts.ready_to_search_confirmation()
-            new_stage = ConversationStage.READY
-        
-        return donna_question, new_stage
-    
-    
-    def _merge_profiles(
-        self,
-        current: IdealProfileCard,
-        extracted: IdealProfileCard
-    ) -> IdealProfileCard:
-        """Merge extracted info with current profile."""
-        
-        merged = current.copy()
-        
-        # Merge lists
-        if extracted.must_have_skills:
-            merged.must_have_skills = list(set(
-                merged.must_have_skills + extracted.must_have_skills
-            ))
-        
-        if extracted.nice_to_have_skills:
-            merged.nice_to_have_skills = list(set(
-                merged.nice_to_have_skills + extracted.nice_to_have_skills
-            ))
-        
-        if extracted.industries:
-            merged.industries = list(set(
-                merged.industries + extracted.industries
-            ))
-        
-        if extracted.locations:
-            merged.locations = list(set(
-                merged.locations + extracted.locations
-            ))
-        
-        if extracted.company_size:
-            merged.company_size = list(set(
-                merged.company_size + extracted.company_size
-            ))
-        
-        # Replace strings
-        if extracted.role_title:
-            merged.role_title = extracted.role_title
-        
-        if extracted.seniority:
-            merged.seniority = extracted.seniority
-        
-        if extracted.experience_years:
-            merged.experience_years = extracted.experience_years
-        
-        if extracted.additional_requirements:
-            merged.additional_requirements = extracted.additional_requirements
-        
-        merged.updated_at = datetime.utcnow().isoformat()
-        
-        return merged
-    
-    
     def _jd_to_profile(self, jd_data: Dict) -> IdealProfileCard:
         """Convert JD data to ideal profile card."""
-        
         return IdealProfileCard(
             role_title=jd_data.get("role_title", ""),
             must_have_skills=jd_data.get("required_skills", []),
@@ -825,16 +747,15 @@ Extract new information and return updated fields as JSON."""
     
     
     def _has_minimum_info(self, profile: IdealProfileCard) -> bool:
-        """Check if profile has minimum info for sample generation."""
+        """Check if profile has minimum info for search."""
         return bool(
             profile.role_title and
-            len(profile.must_have_skills) >= 2
+            len(profile.must_have_skills) >= 1
         )
     
     
     def _check_if_ready(self, state: ConversationState) -> bool:
-        """Check if conversation has enough info to search."""
-        
+        """Check if conversation is ready for full search."""
         profile = state.ideal_profile
         
         has_minimum = bool(
@@ -857,24 +778,22 @@ Extract new information and return updated fields as JSON."""
     
     def _get_suggestions(self, stage: str, profile: IdealProfileCard) -> List[str]:
         """Get suggestions based on current stage."""
-        
         if stage == ConversationStage.GREETING:
-            return self.prompts.get_role_suggestions()
+            return ["Senior Developer", "Product Manager", "Data Scientist"]
         elif stage == ConversationStage.SKILLS:
-            return ["That's all for must-haves", "Show sample profile"]
+            return ["That's all for skills", "Show sample candidates"]
         elif stage == ConversationStage.EXPERIENCE:
-            return self.prompts.get_seniority_suggestions()
+            return ["Senior (5+ years)", "Mid-level (3-5 years)", "Lead/Principal"]
         elif stage == ConversationStage.PREFERENCES:
-            return self.prompts.get_industry_suggestions()
+            return ["SaaS/Tech", "Fintech", "Any industry"]
         elif stage == ConversationStage.REVIEW:
-            return ["Yes, looks good!", "Make changes", "Show sample"]
+            return ["These look good!", "Need adjustments", "Add more criteria"]
         else:
             return []
     
     
     async def _save_state(self, state: ConversationState):
         """Save conversation state to Redis."""
-        
         await self.redis.store_session_data(
             state.session_id,
             "conversation_state",
@@ -885,10 +804,144 @@ Extract new information and return updated fields as JSON."""
     
     async def _load_state(self, session_id: str) -> Optional[ConversationState]:
         """Load conversation state from Redis."""
-        
         data = await self.redis.get_session_data(session_id, "conversation_state")
         
         if data:
             return ConversationState(**data)
         
         return None
+    
+    async def _process_rejection_with_llm(
+        self,
+        state: ConversationState,
+        rejected_candidate: Dict[str, Any],
+        rejection_reason: str,
+        detailed_feedback: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Use LLM to understand rejection and suggest search refinements.
+        """
+        
+        # Build context
+        candidate_info = f"""
+    Rejected Candidate:
+    - Name: {rejected_candidate.get('first_name', '')} {rejected_candidate.get('last_name', '')}
+    - Title: {rejected_candidate.get('title', 'N/A')}
+    - Location: {rejected_candidate.get('location', 'N/A')}
+    - Industry: {rejected_candidate.get('current_industry', 'N/A')}
+    - Skills: {rejected_candidate.get('expertise', 'N/A')[:200]}
+    - Experience: {rejected_candidate.get('experience_years', 'N/A')} years
+    """
+        
+        profile_json = json.dumps(state.ideal_profile.dict(), indent=2)
+        
+        system_prompt = """You are Donna, an AI recruiting assistant analyzing why a recruiter rejected a candidate.
+
+    Your job is to understand the rejection reason and suggest how to refine the search criteria.
+
+    ANALYZE the rejection and return JSON:
+    {
+        "understood_issue": "What you understood from the rejection",
+        "donna_response": "Friendly message acknowledging feedback and explaining adjustments",
+        "refinements_applied": ["List of changes being made"],
+        "profile_updates": {
+            "must_have_skills": null or ["skill1", "skill2"],
+            "nice_to_have_skills": null or [],
+            "seniority": null or "senior|lead|principal",
+            "experience_years": null or "5+|7+|10+",
+            "industries": null or ["Industry1"],
+            "locations": null or ["Location1"]
+        },
+        "feedback_adjustments": {
+            "min_years": null or 5,
+            "excluded_titles": null or ["junior", "intern"],
+            "required_skills_boost": null or {"skill": 2.0},
+            "excluded_industries": null or ["Industry1"]
+        }
+    }
+
+    RULES:
+    - Only update fields relevant to the rejection reason
+    - Be specific about what you're changing
+    - Explain changes in donna_response
+    - Use feedback_adjustments for search filter tweaks"""
+
+        user_prompt = f"""CURRENT IDEAL PROFILE:
+    {profile_json}
+
+    {candidate_info}
+
+    REJECTION REASON: {rejection_reason}
+    ADDITIONAL FEEDBACK: {detailed_feedback or "None provided"}
+
+    Analyze this rejection and suggest refinements."""
+
+        try:
+            model_config = await self.model_config.get_user_config(state.username)
+            
+            response = await self.model_config.call_model(
+                model_config=model_config,
+                model_purpose="conversation",
+                system_prompt=system_prompt,
+                user_message=user_prompt,
+                temperature=0.3,
+                username=state.username
+            )
+            
+            # Parse response
+            response_text = response.strip()
+            if "```" in response_text:
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.split("```")[0]
+            
+            result = json.loads(response_text)
+            
+            logger.info(f"✅ LLM rejection analysis: {result.get('understood_issue')}")
+            logger.info(f"   Refinements: {result.get('refinements_applied')}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ LLM rejection analysis failed: {e}")
+            
+            # Fallback based on common rejection reasons
+            return self._fallback_rejection_handling(rejection_reason)
+
+
+    def _fallback_rejection_handling(self, reason: str) -> Dict[str, Any]:
+        """Fallback rejection handling without LLM."""
+        
+        reason_lower = reason.lower()
+        
+        result = {
+            "understood_issue": reason,
+            "donna_response": "Got it! Let me adjust the search.",
+            "refinements_applied": [],
+            "profile_updates": {},
+            "feedback_adjustments": {}
+        }
+        
+        if "junior" in reason_lower or "experience" in reason_lower or "senior" in reason_lower:
+            result["feedback_adjustments"]["min_years"] = 5
+            result["feedback_adjustments"]["excluded_titles"] = ["junior", "intern", "trainee", "graduate"]
+            result["refinements_applied"].append("Filtering for 5+ years experience")
+            result["donna_response"] = "Got it! I'll look for more experienced candidates with 5+ years."
+        
+        elif "location" in reason_lower or "remote" in reason_lower:
+            result["refinements_applied"].append("Adjusting location preferences")
+            result["donna_response"] = "I understand the location isn't right. Could you tell me which locations work best?"
+        
+        elif "skill" in reason_lower:
+            result["refinements_applied"].append("Adjusting skill requirements")
+            result["donna_response"] = "I see - which specific skills are most important for this role?"
+        
+        elif "industry" in reason_lower:
+            result["refinements_applied"].append("Filtering industry")
+            result["donna_response"] = "Got it! Which industries should I focus on?"
+        
+        else:
+            result["donna_response"] = f"Understood - '{reason}'. Let me refine the search based on that."
+        
+        return result

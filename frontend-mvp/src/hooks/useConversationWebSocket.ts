@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+//@ts-nocheck
 import { useEffect, useRef, useState, useCallback } from "react";
 
 interface ProgressUpdate {

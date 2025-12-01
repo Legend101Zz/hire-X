@@ -171,7 +171,7 @@ class TieredSmartSearch:
         try:          
             logger.info('Expanding with AI...')
             response = self.ai_client.chat.completions.create(
-                model="anthropic/claude-3.5-sonnet",
+                model="anthropic/claude-haiku-4.5",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,  # Very low for exact matching
                 max_tokens=2000

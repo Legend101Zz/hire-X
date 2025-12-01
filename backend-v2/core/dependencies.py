@@ -24,12 +24,14 @@ from services.candidate_scorer import CandidateScorer
 # Import all V3 services
 from services.conversation_manager import ConversationManager
 from services.enrichment_service import EnrichmentService
+from services.funnel_search_service import FunnelSearchService
 from services.intelligent_enrichment_orchestrator import \
     IntelligentEnrichmentOrchestrator
 from services.intelligent_search_crew import IntelligentSearchCrew
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.model_config_manager import ModelConfigManager
+from services.parallel_enrichment_service import ParallelEnrichmentService
 from services.query_debugger import QueryDebugger
 from services.response_likelihood_scorer import ResponseLikelihoodScorer
 from services.salary_estimator import SalaryEstimator
@@ -38,10 +40,7 @@ from services.salary_estimator import SalaryEstimator
 from services.sample_profile_generator_v3 import SampleProfileGeneratorV3
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
-from services.search_refinement_service import SearchRefinementService
 from services.skill_validator import SkillValidator
-from services.smart_search_service import ProgressiveSmartSearch
-from services.tiered_smart_search import TieredSmartSearch
 from services.web_search_wrapper import WebSearchWrapper
 
 # Security scheme for JWT
@@ -160,33 +159,19 @@ async def initialize_services() -> Dict[str, Any]:
     # Add Query Debugger
     query_debugger = QueryDebugger()
     logger.info("✅ QueryDebugger initialized")
-
-    # # Smart Search Services
-    # smart_search_service = SmartSearchService(
-    #     profiles_collection=mongodb.profiles_collection
-    # )
-    # logger.info("✅ SmartSearchService initialized")
     
-    # refinement_service = SearchRefinementService()
-    # logger.info("✅ SearchRefinementService initialized")
-    tiered_search = TieredSmartSearch(
+    funnel_search = FunnelSearchService(
         profiles_collection=mongodb.profiles_collection,
         openai_api_key=settings.OPENROUTER_API_KEY,
+        openai_base_url="https://openrouter.ai/api/v1"
     )
-    logger.info("✅ TieredSmartSearch initialized")
-    
-    progressive_search = ProgressiveSmartSearch(
-        profiles_collection=mongodb.profiles_collection,
-        openai_api_key=settings.OPENROUTER_API_KEY,
+    logger.info("✅ FunnelSearchService initialized (replaces TieredSmartSearch)")
 
-    )
-    logger.info("✅ ProgressiveSmartSearch initialized")
-        
     # Conversation Manager
     conversation_manager = ConversationManager(
         redis_cache=redis_cache,
         model_config_manager=model_config_manager,
-        tiered_search=tiered_search  
+        funnel_search=funnel_search 
     )
     logger.info("✅ ConversationManager initialized")
     
@@ -211,6 +196,13 @@ async def initialize_services() -> Dict[str, Any]:
         model_config_manager=model_config_manager
     )
     logger.info("✅ IntelligentEnrichmentOrchestrator initialized")
+    
+    parallel_enrichment_service = ParallelEnrichmentService(
+            enrichment_orchestrator=deep_dive_service,
+            redis_cache=redis_cache,
+            mongodb=mongodb
+        )
+    logger.info("✅ ParallelEnrichmentService created")
     
     # ========================================
     # STORE IN GLOBAL DICT
@@ -240,13 +232,13 @@ async def initialize_services() -> Dict[str, Any]:
         "sample_generator_v3": sample_generator_v3, 
         "query_debugger": query_debugger,  # Add debugger
         "conversation_manager": conversation_manager,
-        "tiered_search": tiered_search,  
-        "progressive_search": progressive_search,  
+        "funnel_search": funnel_search,
         # Workflow Orchestrator
         "workflow": workflow,
         
         # deep search
-        "deep_dive_service": deep_dive_service
+        "deep_dive_service": deep_dive_service,
+        "parallel_enrichment_service": parallel_enrichment_service
     }
     
     # Save to global variable
@@ -329,6 +321,10 @@ def get_deep_dive_service() -> IntelligentEnrichmentOrchestrator:
     """Get the deep dive service."""
     return _global_services["deep_dive_service"]
 
+def get_parallel_enrichment_service() -> ParallelEnrichmentService:
+    """Get singleton parallel enrichment service."""
+    return _global_services["parallel_enrichment_service"]
+
 
 # ============================================================================
 # Phase 2B Dependencies (Conversation)
@@ -376,14 +372,10 @@ async def get_jd_generator(
     """Get JD generator service."""
     return _global_services["jd_generator"]
 
-def get_tiered_search() -> TieredSmartSearch:
-    """Get tiered search service."""
-    return _global_services["tiered_search"]
+def get_funnel_search() -> FunnelSearchService:
+    """Get the funnel search service."""
+    return _global_services["funnel_search"]
 
-
-def get_progressive_search() -> ProgressiveSmartSearch:
-    """Get progressive search service."""
-    return _global_services["progressive_search"]
 
 
 def get_current_username(

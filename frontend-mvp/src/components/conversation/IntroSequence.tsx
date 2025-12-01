@@ -1,3 +1,4 @@
+
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
@@ -105,8 +106,8 @@ export default function IntroSequence({ onComplete }: IntroSequenceProps) {
                                 <div
                                     key={idx}
                                     className={`h-2 rounded-full transition-all ${idx === step
-                                            ? "w-8 bg-amber-400"
-                                            : "w-2 bg-gray-600"
+                                        ? "w-8 bg-amber-400"
+                                        : "w-2 bg-gray-600"
                                         }`}
                                 />
                             ))}
@@ -136,7 +137,7 @@ export default function IntroSequence({ onComplete }: IntroSequenceProps) {
                                     </>
                                 ) : (
                                     <>
-                                        Let's Start!
+                                        Let&apos;s Start!
                                         <Sparkles className="w-5 h-5 ml-2" />
                                     </>
                                 )}
