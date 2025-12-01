@@ -91,8 +91,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",  # Alternative localhost
         "http://localhost:3001",  # Alternative port
         "http://127.0.0.1:3001",  # Alternative port
-        "https://hire-x-xi.vercel.app",  # Vercel deployment (without trailing slash)
-        "https://hire-x-xi.vercel.app/",  # Vercel deployment (with trailing slash)
+        "https://app.neuraleap.shop/",  # Vps deployment (without trailing slash)
+        "https://app.neuraleap.shop",  # Vpsdeployment (with trailing slash)
     ],
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods
