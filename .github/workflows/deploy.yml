@@ -1,0 +1,104 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  deploy:
+    name: Deploy to Production VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🚀 Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e  # Exit on any error
+
+            echo "======================================"
+            echo "🚀 Starting Deployment Process"
+            echo "======================================"
+
+            # Navigate to project directory
+            cd /root/hire-X
+
+            echo ""
+            echo "📥 Pulling latest code from GitHub..."
+
+            # Configure git to use PAT
+            git config --global credential.helper store
+            echo "https://Legend101Zz:${{ secrets.GITHUB_PAT }}@github.com" > ~/.git-credentials
+
+            # Pull latest code
+            git fetch origin main
+            git reset --hard origin/main
+            git pull origin main
+
+            echo ""
+            echo "🔨 Building Backend..."
+            cd backend-v2
+
+            # Activate virtual environment and sync dependencies
+            if [ -d ".venv" ]; then
+                source .venv/bin/activate
+                uv sync
+            else
+                echo "❌ Virtual environment not found!"
+                exit 1
+            fi
+
+            cd ..
+
+            echo ""
+            echo "🎨 Building Frontend..."
+            cd frontend-mvp
+
+            # Install dependencies and build
+            npm ci --production=false
+            npm run build
+
+            cd ..
+
+            echo ""
+            echo "♻️  Restarting PM2 Processes..."
+
+            # Restart PM2 applications
+            pm2 restart ecosystem.config.js --update-env
+
+            # Show status
+            pm2 status
+
+            echo ""
+            echo "✅ Deployment completed successfully!"
+            echo ""
+            echo "📊 Application Status:"
+            pm2 list
+
+            echo ""
+            echo "📝 Recent Logs:"
+            pm2 logs --lines 20 --nostream
+
+            echo ""
+            echo "======================================"
+            echo "✨ Deployment Finished"
+            echo "======================================"
+
+            # Clean up git credentials
+            rm -f ~/.git-credentials
+
+      - name: 📢 Deployment Status
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "✅ Deployment succeeded!"
+          else
+            echo "❌ Deployment failed!"
+          fi
