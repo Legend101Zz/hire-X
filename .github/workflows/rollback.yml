@@ -1,0 +1,51 @@
+name: Rollback Deployment
+
+on:
+    workflow_dispatch:
+        inputs:
+            commit_sha:
+                description: "Commit SHA to rollback to"
+                required: true
+
+jobs:
+    rollback:
+        name: Rollback to Previous Version
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: 🔄 Rollback on VPS
+              uses: appleboy/ssh-action@v1.0.3
+              with:
+                  host: ${{ secrets.VPS_HOST }}
+                  username: ${{ secrets.VPS_USER }}
+                  key: ${{ secrets.VPS_SSH_KEY }}
+                  port: 22
+                  script: |
+                      cd /root/hire-X
+
+                      echo "🔄 Rolling back to commit: ${{ github.event.inputs.commit_sha }}"
+
+                      git config --global credential.helper store
+                      echo "https://Legend101Zz:${{ secrets.GITHUB_PAT }}@github.com" > ~/.git-credentials
+
+                      git fetch origin
+                      git checkout ${{ github.event.inputs.commit_sha }}
+
+                      # Rebuild
+                      cd backend-v2
+                      source .venv/bin/activate
+                      uv sync
+                      cd ..
+
+                      cd frontend-mvp
+                      npm ci
+                      npm run build
+                      cd ..
+
+                      # Restart
+                      pm2 restart ecosystem.config.js
+                      pm2 status
+
+                      rm -f ~/.git-credentials
+
+                      echo "✅ Rollback completed!"
