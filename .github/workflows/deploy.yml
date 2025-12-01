@@ -61,6 +61,11 @@ jobs:
             echo "🎨 Building Frontend..."
             cd frontend-mvp
 
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            # -----------------------------------
+            nvm use 22
+
             # Install dependencies and build
             npm ci --production=false
             npm run build
