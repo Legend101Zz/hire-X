@@ -1,8 +1,11 @@
 
+import asyncio
 import json
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.config import settings
 from core.logging_config import get_logger
 from data.redis_cache import RedisCache
 from models.conversation_models import (ConversationMessage, ConversationStage,
@@ -701,6 +704,283 @@ Or if you have a job description, you can paste it and I'll extract the key requ
         
         return donna_reply, state.ideal_profile, sample_profile, state.stage
     
+    
+    async def create_manual_import(
+        self,
+        username: str,
+        jd_text: Optional[str],
+        ideal_profile: Optional[dict],
+        candidates: List[dict],
+        pipeline_name: Optional[str]
+    ) -> dict:
+        """
+        Create a conversation session from manual candidate import.
+        
+        This creates a session similar to what Donna conversation creates,
+        but populated directly from user-provided data.
+        """
+        session_id = f"manual_{uuid.uuid4().hex[:12]}"
+        
+        # Parse JD if provided (no ideal profile)
+        job_data = ideal_profile or {}
+        if jd_text and not ideal_profile:
+            if self.jd_parser:
+                try:
+                    parsed = await self.jd_parser.parse_jd_text(jd_text)
+                    job_data = parsed
+                except Exception as e:
+                    logger.warning(f"JD parsing failed: {e}")
+            job_data["jd_text"] = jd_text
+        
+        # Convert candidates to session format
+        sample_candidates = []
+        for i, c in enumerate(candidates):
+            linkedin_url = c.get("linkedin_url", "").strip()
+            
+            candidate_entry = {
+                "candidate_id": f"cand_{uuid.uuid4().hex[:8]}",
+                "linkedin_url": linkedin_url,
+                "linkedin_id": self._extract_linkedin_id(linkedin_url),
+                "name": "Pending...",
+                "first_name": None,
+                "last_name": None,
+                "headline": None,
+                "title": None,
+                "current_company": None,
+                "location": None,
+                "skills": [],
+                "experience_years": None,
+                "profile_picture_url": None,
+                "match_score": None,
+                "manual_data": {
+                    "expected_salary": c.get("expected_salary"),
+                    "current_salary": c.get("current_salary"),
+                    "notice_period": c.get("notice_period"),
+                    "preferred_location": c.get("preferred_location"),
+                    "notes": c.get("notes"),
+                    "has_resume": bool(c.get("resume_base64")),
+                },
+                "source": "manual_import",
+                "added_at": datetime.utcnow().isoformat(),
+            }
+            
+            # Save resume if provided
+            if c.get("resume_base64"):
+                resume_path = await self._save_resume(
+                    candidate_entry["candidate_id"],
+                    c["resume_base64"],
+                    c.get("resume_filename", "resume.pdf")
+                )
+                candidate_entry["manual_data"]["resume_path"] = resume_path
+            
+            sample_candidates.append(candidate_entry)
+        
+        # Create session document
+        session_doc = {
+            "session_id": session_id,
+            "username": username,
+            "source": "manual_import",
+            "status": "pending_scrape",
+            "stage": "results",
+            "ideal_profile": job_data,
+            "jd_text": jd_text,
+            "sample_candidates": sample_candidates,
+            "search_results": sample_candidates,  # For compatibility
+            "total_candidates": len(sample_candidates),
+            "pipeline_name": pipeline_name,
+            "pipeline_id": None,
+            "pipeline_created_at": None,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "conversation_history": [],
+            "is_manual_import": True,
+        }
+        
+        # Save to database
+        await self.sessions_collection.insert_one(session_doc)
+        
+        logger.info(f"✅ Created manual import session {session_id} with {len(sample_candidates)} candidates")
+        
+        return {
+            "session_id": session_id,
+            "candidates_count": len(sample_candidates)
+        }
+    
+    async def scrape_manual_candidates(self, session_id: str):
+        """
+        Background task to scrape LinkedIn profiles for manual imports.
+        
+        Updates each candidate with:
+        - Name, headline, current company
+        - Skills, experience
+        - Profile picture
+        - Match score (if ideal_profile available)
+        """
+        logger.info(f"🔍 Starting scrape for manual import {session_id}")
+        
+        session = await self.get_session(session_id)
+        if not session:
+            logger.error(f"Session not found: {session_id}")
+            return
+        
+        candidates = session.get("sample_candidates", [])
+        ideal_profile = session.get("ideal_profile", {})
+        updated_candidates = []
+        
+        for candidate in candidates:
+            linkedin_url = candidate.get("linkedin_url")
+            if not linkedin_url:
+                updated_candidates.append(candidate)
+                continue
+            
+            try:
+                # Step 1: Try to find in profiles database
+                profile = await self._lookup_profile_in_db(linkedin_url)
+                
+                # Step 2: Scrape if not found (using Brightdata or similar)
+                if not profile and self.linkedin_scraper:
+                    try:
+                        profile = await self.linkedin_scraper.scrape_profile(linkedin_url)
+                    except Exception as e:
+                        logger.warning(f"Scrape failed for {linkedin_url}: {e}")
+                
+                # Step 3: Update candidate with profile data
+                if profile:
+                    candidate["name"] = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip() or candidate.get("name", "Unknown")
+                    candidate["first_name"] = profile.get("first_name")
+                    candidate["last_name"] = profile.get("last_name")
+                    candidate["headline"] = profile.get("headline") or profile.get("title")
+                    candidate["title"] = profile.get("title") or profile.get("headline")
+                    candidate["current_company"] = profile.get("current_company")
+                    candidate["location"] = profile.get("location")
+                    candidate["skills"] = profile.get("skills", [])[:15]
+                    candidate["experience_years"] = profile.get("experience_years") or profile.get("total_experience_years")
+                    candidate["profile_picture_url"] = profile.get("profile_picture_url")
+                    candidate["profile_id"] = str(profile.get("_id", ""))
+                    candidate["scraped_at"] = datetime.utcnow().isoformat()
+                    
+                    # Calculate match score if we have ideal profile
+                    if ideal_profile and self.scoring_service:
+                        try:
+                            score_result = await self.scoring_service.calculate_match_score(
+                                candidate=profile,
+                                ideal_profile=ideal_profile
+                            )
+                            candidate["match_score"] = score_result.get("overall_score") or score_result.get("score")
+                            candidate["match_label"] = self._score_to_label(candidate["match_score"])
+                        except Exception as e:
+                            logger.warning(f"Scoring failed: {e}")
+                
+                updated_candidates.append(candidate)
+                
+            except Exception as e:
+                logger.error(f"Failed to process {linkedin_url}: {e}")
+                candidate["scrape_error"] = str(e)
+                updated_candidates.append(candidate)
+            
+            # Rate limiting
+            await asyncio.sleep(2)
+        
+        # Update session with scraped data
+        await self.sessions_collection.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "sample_candidates": updated_candidates,
+                    "search_results": updated_candidates,
+                    "status": "ready",
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        
+        logger.info(f"✅ Completed scrape for {session_id}: {len(updated_candidates)} candidates")
+    
+    async def link_session_to_pipeline(self, session_id: str, pipeline_id: str):
+        """Link a conversation session to a created pipeline."""
+        await self.sessions_collection.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "pipeline_id": pipeline_id,
+                    "pipeline_created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        logger.info(f"✅ Linked session {session_id} to pipeline {pipeline_id}")
+    
+    async def _lookup_profile_in_db(self, linkedin_url: str) -> Optional[dict]:
+        """Look up a profile in the profiles database."""
+        try:
+            # Extract LinkedIn ID from URL
+            linkedin_id = self._extract_linkedin_id(linkedin_url)
+            if not linkedin_id:
+                return None
+            
+            # Search profiles collection
+            profile = await self.mongodb.profiles_collection.find_one({
+                "$or": [
+                    {"linkedin_url": {"$regex": linkedin_id, "$options": "i"}},
+                    {"linkedin_id": linkedin_id},
+                    {"public_identifier": linkedin_id}
+                ]
+            })
+            
+            return profile
+        except Exception as e:
+            logger.error(f"Profile lookup failed: {e}")
+            return None
+    
+    def _extract_linkedin_id(self, url: str) -> Optional[str]:
+        """Extract LinkedIn ID/username from URL."""
+        if not url:
+            return None
+        
+        import re
+        match = re.search(r'linkedin\.com/in/([^/?]+)', url, re.IGNORECASE)
+        return match.group(1) if match else None
+    
+    def _score_to_label(self, score: Optional[float]) -> str:
+        """Convert numeric score to label."""
+        if score is None:
+            return "Not Scored"
+        if score >= 85:
+            return "Excellent Match"
+        if score >= 70:
+            return "Great Match"
+        if score >= 55:
+            return "Good Match"
+        if score >= 40:
+            return "Fair Match"
+        return "Below Target"
+    
+    async def _save_resume(self, candidate_id: str, base64_data: str, filename: str) -> str:
+        """Save resume file and return path."""
+        import base64
+        import os
+
+        # Create resumes directory
+        resume_dir = os.path.join(
+            getattr(settings, 'UPLOAD_DIR', './uploads'),
+            "resumes"
+        )
+        os.makedirs(resume_dir, exist_ok=True)
+        
+        # Generate filename
+        ext = os.path.splitext(filename)[1] or '.pdf'
+        saved_filename = f"{candidate_id}{ext}"
+        filepath = os.path.join(resume_dir, saved_filename)
+        
+        # Decode and save
+        try:
+            file_data = base64.b64decode(base64_data)
+            with open(filepath, 'wb') as f:
+                f.write(file_data)
+            return filepath
+        except Exception as e:
+            logger.error(f"Failed to save resume: {e}")
+            return ""
     
     # ================================================================
     # HELPER METHODS - Keep existing implementations

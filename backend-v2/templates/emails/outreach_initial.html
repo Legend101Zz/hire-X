@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p>Hi {{ candidate_first_name }},</p>
+
+<p>{{ opening_line }}</p>
+
+<p>We're looking for a <strong>{{ job_title }}</strong>{% if company_name %} at {{ company_name }}{% endif %} and I think you could be a great fit.</p>
+
+{% if fit_reasons %}
+<p>Here's why I reached out to you specifically:</p>
+<ul>
+{% for reason in fit_reasons %}
+    <li>{{ reason }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+<p>Would you be open to a quick chat? No pressure - just wanted to see if there might be mutual interest.</p>
+
+<p style="text-align: center;">
+    <a href="{{ scheduling_link }}" class="cta-button">Schedule a Chat →</a>
+</p>
+
+<p>{{ closing_line }}</p>
+
+<p>Best,<br>
+{{ sender_name }}<br>
+<span style="color: #9ca3af;">{{ sender_title }}</span></p>
+{% endblock %}

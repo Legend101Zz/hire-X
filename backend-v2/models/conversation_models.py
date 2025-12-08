@@ -306,3 +306,33 @@ class BatchEnrichResponse(BaseModel):
     status: str
     total_candidates: int
     message: str
+    
+# ============================================================================
+# REQUEST/RESPONSE MODELS FOR MANUAL IMPORT
+# ============================================================================
+
+class ManualCandidateEntry(BaseModel):
+    """Single candidate entry from manual import."""
+    linkedin_url: str
+    expected_salary: Optional[str] = None
+    current_salary: Optional[str] = None
+    notice_period: Optional[str] = None
+    preferred_location: Optional[str] = None
+    notes: Optional[str] = None
+    resume_base64: Optional[str] = None
+    resume_filename: Optional[str] = None
+
+
+class ManualImportRequest(BaseModel):
+    """Request to create session from manual import."""
+    jd_text: Optional[str] = None
+    ideal_profile: Optional[dict] = None
+    candidates: List[ManualCandidateEntry] = Field(..., min_length=1)
+    pipeline_name: Optional[str] = None
+    auto_scrape: bool = True
+
+
+class CreatePipelineRequest(BaseModel):
+    """Request to create pipeline from session."""
+    shortlisted_candidate_ids: List[str] = Field(..., min_length=1)
+    pipeline_name: Optional[str] = None

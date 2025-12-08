@@ -400,3 +400,121 @@ export const enrichAcceptedCandidates = async (
 
   return response.json();
 };
+
+/**
+ * Manual candidate entry for import
+ */
+export interface ManualCandidateEntry {
+  linkedin_url: string;
+  expected_salary?: string;
+  current_salary?: string;
+  notice_period?: string;
+  preferred_location?: string;
+  notes?: string;
+  resume_base64?: string;
+  resume_filename?: string;
+}
+
+/**
+ * Create session from manual import
+ */
+export const createManualImport = async (
+  token: string,
+  data: {
+    jd_text?: string;
+    ideal_profile?: any;
+    candidates: ManualCandidateEntry[];
+    pipeline_name?: string;
+    auto_scrape?: boolean;
+  }
+): Promise<{
+  success: boolean;
+  session_id: string;
+  candidates_count: number;
+  message: string;
+  status: string;
+}> => {
+  const response = await apiCall("/conversation/manual-import", {
+    method: "POST",
+    body: JSON.stringify({
+      ...data,
+      auto_scrape: data.auto_scrape ?? true,
+    }),
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Get session results for results page
+ */
+export const getSessionResults = async (
+  sessionId: string,
+  token: string
+): Promise<{
+  success: boolean;
+  session_id: string;
+  source: "donna_search" | "manual_import";
+  status: string;
+  candidates: Array<{
+    candidate_id: string;
+    linkedin_url: string;
+    name: string;
+    headline: string | null;
+    current_company: string | null;
+    current_title: string | null;
+    location: string | null;
+    experience_years: number | null;
+    skills: string[];
+    match_score: number | null;
+    match_label: string | null;
+    profile_picture_url: string | null;
+    manual_data?: {
+      expected_salary?: string;
+      current_salary?: string;
+      notice_period?: string;
+      notes?: string;
+      has_resume?: boolean;
+    };
+    source: string;
+    profile_id: string;
+  }>;
+  total_candidates: number;
+  ideal_profile: any;
+  pipeline_id: string | null;
+  pipeline_created_at: string | null;
+  created_at: string;
+}> => {
+  const response = await apiCall(`/conversation/${sessionId}/results`, {
+    method: "GET",
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+/**
+ * Create pipeline from session with shortlisted candidates
+ */
+export const createPipelineFromSession = async (
+  sessionId: string,
+  token: string,
+  data: {
+    shortlisted_candidate_ids: string[];
+    pipeline_name?: string;
+  }
+): Promise<{
+  success: boolean;
+  pipeline_id: string;
+  shortlisted_count: number;
+  message: string;
+}> => {
+  const response = await apiCall(`/conversation/${sessionId}/create-pipeline`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    token,
+  });
+
+  return handleApiResponse(response);
+};

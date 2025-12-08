@@ -1,0 +1,1383 @@
+"""
+Pipeline API
+============
+REST API endpoints for the recruitment pipeline.
+
+Endpoints:
+- Pipeline CRUD
+- Candidate management
+- Shortlisting
+- Enrichment
+- Outreach
+- Dashboard
+
+Author: NeuraLeap Engineering
+Version: 2.0
+"""
+
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import (APIRouter, BackgroundTasks, Body, Depends, HTTPException,
+                     Query)
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from core.dependencies import (get_current_username, get_email_service,
+                               get_pipeline_service)
+from core.logging_config import get_logger
+from models.pipeline_models import (STAGE_METADATA, CandidateStage, JobContext,
+                                    PipelineCandidate, PipelineSettings,
+                                    RecruitmentPipeline)
+from services.email_outreach_service import EmailOutreachService
+from services.pipeline_service import PipelineService
+
+logger = get_logger(__name__)
+
+router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
+
+
+# ============================================================================
+# REQUEST/RESPONSE MODELS
+# ============================================================================
+
+class CreatePipelineFromSearchRequest(BaseModel):
+    """Create pipeline from Donna search results."""
+    conversation_session_id: str = Field(..., description="Donna conversation session ID")
+    search_session_id: str = Field(..., description="Search results session ID")
+    job_data: Dict[str, Any] = Field(..., description="Ideal profile / job requirements")
+    candidates: List[Dict[str, Any]] = Field(..., description="Search result candidates")
+    pipeline_name: Optional[str] = Field(None, description="Custom pipeline name")
+    auto_shortlist: bool = Field(False, description="Auto-shortlist all candidates")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "conversation_session_id": "conv-abc123",
+                "search_session_id": "search-xyz789",
+                "job_data": {
+                    "role_title": "Senior Backend Engineer",
+                    "must_have_skills": ["Python", "FastAPI", "MongoDB"],
+                    "experience_years": "5+ years",
+                    "locations": ["Bangalore", "Remote"]
+                },
+                "candidates": [
+                    {
+                        "linkedin_url": "https://linkedin.com/in/johndoe",
+                        "name": "John Doe",
+                        "title": "Backend Engineer",
+                        "current_company": "Google",
+                        "experience_years": 6,
+                        "skills": ["Python", "Django", "PostgreSQL"]
+                    }
+                ],
+                "pipeline_name": "Backend Engineer - Dec 2024",
+                "auto_shortlist": False
+            }
+        }
+
+
+class CreatePipelineFromImportRequest(BaseModel):
+    """Create pipeline from CSV import."""
+    jd_text: str = Field(..., min_length=50, description="Job description text")
+    candidates_csv: str = Field(..., description="CSV content with LinkedIn URLs")
+    pipeline_name: Optional[str] = Field(None, description="Custom pipeline name")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "jd_text": "We are looking for a Senior Backend Engineer with 5+ years of experience in Python...",
+                "candidates_csv": "linkedin_url,expected_salary,notice_period\nhttps://linkedin.com/in/johndoe,25 LPA,30 days\nhttps://linkedin.com/in/janedoe,28 LPA,60 days",
+                "pipeline_name": "Backend Import - Dec 2024"
+            }
+        }
+
+
+class PipelineResponse(BaseModel):
+    """Standard pipeline response."""
+    success: bool
+    pipeline_id: str
+    message: str
+    data: Optional[Dict[str, Any]] = None
+
+
+class ShortlistRequest(BaseModel):
+    """Request to shortlist candidates."""
+    candidate_ids: List[str] = Field(..., min_length=1, description="Candidate IDs to shortlist")
+
+
+class EnrichmentRequest(BaseModel):
+    """Request to start enrichment."""
+    candidate_ids: Optional[List[str]] = Field(None, description="Specific candidates (None = all shortlisted)")
+    include_contact_fetch: bool = Field(True, description="Fetch contact info via Hatch")
+
+
+class OutreachRequest(BaseModel):
+    """Request to start outreach."""
+    candidate_ids: Optional[List[str]] = Field(None, description="Specific candidates (None = all enriched)")
+
+
+class UpdateStageRequest(BaseModel):
+    """Request to update candidate stage."""
+    new_stage: CandidateStage
+    notes: Optional[str] = Field(None, description="Notes for stage change")
+
+
+class AddNoteRequest(BaseModel):
+    """Request to add a note."""
+    note: str = Field(..., min_length=1, max_length=2000)
+
+
+class RejectCandidateRequest(BaseModel):
+    """Request to reject a candidate."""
+    reason: str = Field(..., min_length=1, description="Rejection reason")
+    feedback: Optional[str] = Field(None, description="Detailed feedback")
+
+
+class UpdateSettingsRequest(BaseModel):
+    """Request to update pipeline settings."""
+    auto_send_outreach: Optional[bool] = None
+    outreach_delay_hours: Optional[int] = None
+    reminder_delay_hours: Optional[int] = None
+    max_reminders: Optional[int] = None
+    no_response_timeout_hours: Optional[int] = None
+    auto_enrich_on_shortlist: Optional[bool] = None
+    notify_on_response: Optional[bool] = None
+    notify_on_schedule: Optional[bool] = None
+    notification_email: Optional[str] = None
+
+
+class BulkActionRequest(BaseModel):
+    """Request for bulk actions."""
+    candidate_ids: List[str] = Field(..., min_length=1)
+    action: str = Field(..., description="Action: shortlist, remove, reject, favorite")
+    reason: Optional[str] = Field(None, description="Reason (for reject)")
+
+
+# ============================================================================
+# PIPELINE CRUD ENDPOINTS
+# ============================================================================
+
+@router.post(
+    "/create/from-search",
+    response_model=PipelineResponse,
+    summary="Create Pipeline from Search",
+    description="Create a new recruitment pipeline from Donna search results"
+)
+async def create_pipeline_from_search(
+    request: CreatePipelineFromSearchRequest,
+    background_tasks: BackgroundTasks,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """
+    Create a recruitment pipeline from Donna conversation search results.
+    
+    This is typically called after a user completes a search flow with Donna
+    and wants to start the recruitment process for the found candidates.
+    """
+    try:
+        pipeline = await pipeline_service.create_pipeline_from_search(
+            username=current_user["username"],
+            conversation_session_id=request.conversation_session_id,
+            search_session_id=request.search_session_id,
+            job_data=request.job_data,
+            candidates=request.candidates,
+            pipeline_name=request.pipeline_name,
+            auto_shortlist=request.auto_shortlist
+        )
+        
+        logger.info(f"✅ Pipeline created: {pipeline.pipeline_id} for {current_user['username']}")
+        
+        return PipelineResponse(
+            success=True,
+            pipeline_id=pipeline.pipeline_id,
+            message=f"Pipeline created with {len(pipeline.candidates)} candidates",
+            data={
+                "name": pipeline.display_name,
+                "total_candidates": len(pipeline.candidates),
+                "job_title": pipeline.job.job_title
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Pipeline creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/create/from-import",
+    response_model=PipelineResponse,
+    summary="Create Pipeline from Import",
+    description="Create a new recruitment pipeline from CSV import"
+)
+async def create_pipeline_from_import(
+    request: CreatePipelineFromImportRequest,
+    background_tasks: BackgroundTasks,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """
+    Create a recruitment pipeline from manual CSV import.
+    
+    CSV format should have columns:
+    - linkedin_url (required)
+    - expected_salary (optional)
+    - notice_period (optional)
+    - preferred_location (optional)
+    - notes (optional)
+    """
+    try:
+        pipeline = await pipeline_service.create_pipeline_from_import(
+            username=current_user["username"],
+            jd_text=request.jd_text,
+            candidates_csv=request.candidates_csv,
+            pipeline_name=request.pipeline_name
+        )
+        
+        return PipelineResponse(
+            success=True,
+            pipeline_id=pipeline.pipeline_id,
+            message=f"Pipeline created with {len(pipeline.candidates)} candidates",
+            data={
+                "name": pipeline.display_name,
+                "total_candidates": len(pipeline.candidates),
+                "job_title": pipeline.job.job_title
+            }
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Pipeline import failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/list",
+    summary="List Pipelines",
+    description="List all pipelines for the current user"
+)
+async def list_pipelines(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = Query(None, description="Filter by status: active, paused, completed, archived"),
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """List all pipelines for the current user with pagination."""
+    try:
+        pipelines, total = await pipeline_service.list_pipelines(
+            username=current_user["username"],
+            limit=limit,
+            offset=offset,
+            status=status
+        )
+        
+        return {
+            "success": True,
+            "pipelines": pipelines,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(pipelines) < total
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list pipelines: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/{pipeline_id}",
+    summary="Get Pipeline",
+    description="Get pipeline details"
+)
+async def get_pipeline(
+    pipeline_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Get full pipeline details including all candidates."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        return {
+            "success": True,
+            "pipeline": pipeline.model_dump()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/{pipeline_id}/dashboard",
+    summary="Get Pipeline Dashboard",
+    description="Get visual dashboard data for pipeline tracking"
+)
+async def get_pipeline_dashboard(
+    pipeline_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """
+    Get dashboard data for visual pipeline tracking.
+    
+    Returns structured data for the pipeline tracking UI,
+    similar to order delivery status tracking.
+    """
+    try:
+        dashboard = await pipeline_service.get_dashboard(
+            pipeline_id=pipeline_id,
+            username=current_user["username"]
+        )
+        
+        return {
+            "success": True,
+            **dashboard
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to get dashboard: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put(
+    "/{pipeline_id}/settings",
+    summary="Update Pipeline Settings",
+    description="Update pipeline configuration settings"
+)
+async def update_pipeline_settings(
+    pipeline_id: str,
+    request: UpdateSettingsRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Update pipeline settings."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Update settings
+        updates = request.model_dump(exclude_none=True)
+        for key, value in updates.items():
+            if hasattr(pipeline.settings, key):
+                setattr(pipeline.settings, key, value)
+        
+        await pipeline_service._save_pipeline(pipeline)
+        
+        return {
+            "success": True,
+            "message": "Settings updated",
+            "settings": pipeline.settings.model_dump()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/{pipeline_id}",
+    summary="Archive Pipeline",
+    description="Archive a pipeline (soft delete)"
+)
+async def archive_pipeline(
+    pipeline_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Archive a pipeline (soft delete)."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        pipeline.status = "archived"
+        pipeline.is_active = False
+        pipeline.archived_at = datetime.utcnow().isoformat()
+        
+        await pipeline_service._save_pipeline(pipeline)
+        
+        return {
+            "success": True,
+            "message": "Pipeline archived"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to archive pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# SHORTLISTING ENDPOINTS
+# ============================================================================
+
+@router.post(
+    "/{pipeline_id}/shortlist",
+    summary="Shortlist Candidates",
+    description="Move candidates to shortlist stage"
+)
+async def shortlist_candidates(
+    pipeline_id: str,
+    request: ShortlistRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """
+    Shortlist candidates for enrichment and outreach.
+    
+    This is the gateway to Phase 2 - once shortlisted, candidates
+    can be enriched and contacted.
+    """
+    try:
+        pipeline, count = await pipeline_service.shortlist_candidates(
+            pipeline_id=pipeline_id,
+            candidate_ids=request.candidate_ids,
+            username=current_user["username"]
+        )
+        
+        return {
+            "success": True,
+            "message": f"Shortlisted {count} candidates",
+            "shortlisted_count": count,
+            "stats": pipeline.stats.model_dump()
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Shortlisting failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/{pipeline_id}/remove-from-shortlist",
+    summary="Remove from Shortlist",
+    description="Move candidates back to sourced stage"
+)
+async def remove_from_shortlist(
+    pipeline_id: str,
+    request: ShortlistRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Remove candidates from shortlist (move back to sourced)."""
+    try:
+        pipeline, count = await pipeline_service.remove_from_shortlist(
+            pipeline_id=pipeline_id,
+            candidate_ids=request.candidate_ids,
+            username=current_user["username"]
+        )
+        
+        return {
+            "success": True,
+            "message": f"Removed {count} candidates from shortlist",
+            "removed_count": count
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Remove from shortlist failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ENRICHMENT ENDPOINTS
+# ============================================================================
+
+@router.post(
+    "/{pipeline_id}/enrich",
+    summary="Start Enrichment",
+    description="Start deep analysis for shortlisted candidates"
+)
+async def start_enrichment(
+    pipeline_id: str,
+    request: EnrichmentRequest,
+    background_tasks: BackgroundTasks,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """
+    Start deep enrichment for shortlisted candidates.
+    
+    This triggers:
+    1. Contact info fetch via Hatch (email first, then phone)
+    2. Deep analysis via IntelligentEnrichmentOrchestrator
+    
+    Runs in background - poll the dashboard for progress.
+    """
+    try:
+        result = await pipeline_service.start_enrichment(
+            pipeline_id=pipeline_id,
+            username=current_user["username"],
+            candidate_ids=request.candidate_ids,
+            include_contact_fetch=request.include_contact_fetch
+        )
+        
+        return {
+            "success": True,
+            **result
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Enrichment start failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/{pipeline_id}/enrichment-status",
+    summary="Get Enrichment Status",
+    description="Get status of ongoing enrichment"
+)
+async def get_enrichment_status(
+    pipeline_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Get current enrichment status for all candidates."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Build enrichment status
+        status = {
+            "enriching": [],
+            "enriched": [],
+            "failed": [],
+            "pending": []
+        }
+        
+        for c in pipeline.candidates:
+            candidate_info = {
+                "candidate_id": c.candidate_id,
+                "name": c.display_name,
+                "stage": c.stage.value
+            }
+            
+            if c.stage == CandidateStage.ENRICHING:
+                status["enriching"].append(candidate_info)
+            elif c.stage == CandidateStage.ENRICHED:
+                candidate_info["match_score"] = c.enrichment.match_score
+                candidate_info["has_email"] = bool(c.contact.email)
+                status["enriched"].append(candidate_info)
+            elif c.stage == CandidateStage.ENRICHMENT_FAILED:
+                candidate_info["error"] = c.enrichment.enrichment_error
+                status["failed"].append(candidate_info)
+            elif c.stage == CandidateStage.SHORTLISTED:
+                status["pending"].append(candidate_info)
+        
+        return {
+            "success": True,
+            "pipeline_id": pipeline_id,
+            "status": status,
+            "summary": {
+                "enriching": len(status["enriching"]),
+                "enriched": len(status["enriched"]),
+                "failed": len(status["failed"]),
+                "pending": len(status["pending"])
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get enrichment status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# OUTREACH ENDPOINTS
+# ============================================================================
+
+@router.post(
+    "/{pipeline_id}/outreach",
+    summary="Start Outreach",
+    description="Send personalized emails to enriched candidates"
+)
+async def start_outreach(
+    pipeline_id: str,
+    request: OutreachRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """
+    Start email outreach for enriched candidates.
+    
+    This:
+    1. Generates personalized emails using AI
+    2. Sends emails with scheduling links
+    3. Tracks delivery and engagement
+    """
+    try:
+        result = await pipeline_service.start_outreach(
+            pipeline_id=pipeline_id,
+            username=current_user["username"],
+            candidate_ids=request.candidate_ids
+        )
+        
+        return {
+            "success": True,
+            **result
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Outreach start failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/{pipeline_id}/send-reminders",
+    summary="Send Reminder Emails",
+    description="Send reminder emails to non-responders"
+)
+async def send_reminders(
+    pipeline_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Send reminder emails to candidates who haven't responded."""
+    try:
+        # Verify ownership first
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        result = await pipeline_service.send_reminder_emails(pipeline_id)
+        
+        return {
+            "success": True,
+            **result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Send reminders failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/{pipeline_id}/outreach-status",
+    summary="Get Outreach Status",
+    description="Get email engagement status"
+)
+async def get_outreach_status(
+    pipeline_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Get outreach status and engagement metrics."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        outreach_data = []
+        
+        for c in pipeline.candidates:
+            if c.outreach:
+                outreach_data.append({
+                    "candidate_id": c.candidate_id,
+                    "name": c.display_name,
+                    "email": c.contact.email,
+                    "stage": c.stage.value,
+                    "initial_sent_at": c.outreach.initial_email_sent_at,
+                    "reminder_count": c.outreach.reminder_count,
+                    "last_reminder_at": c.outreach.last_reminder_sent_at,
+                    "opens": c.outreach.total_opens,
+                    "clicks": c.outreach.total_clicks,
+                    "first_opened_at": c.outreach.first_opened_at,
+                    "first_clicked_at": c.outreach.first_clicked_at,
+                    "responded": c.outreach.candidate_responded,
+                    "response_type": c.outreach.response_type
+                })
+        
+        return {
+            "success": True,
+            "pipeline_id": pipeline_id,
+            "outreach": outreach_data,
+            "summary": {
+                "total_contacted": pipeline.stats.total_contacted,
+                "total_opened": pipeline.stats.total_opened,
+                "total_clicked": pipeline.stats.total_clicked,
+                "total_responded": pipeline.stats.total_responded,
+                "response_rate": pipeline.stats.response_rate
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get outreach status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# CANDIDATE MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@router.get(
+    "/{pipeline_id}/candidates",
+    summary="List Candidates",
+    description="List all candidates in a pipeline"
+)
+async def list_candidates(
+    pipeline_id: str,
+    stage: Optional[str] = Query(None, description="Filter by stage"),
+    search: Optional[str] = Query(None, description="Search by name"),
+    sort_by: str = Query("added_at", description="Sort field"),
+    sort_order: str = Query("desc", description="Sort order: asc or desc"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """List candidates with filtering, searching, and pagination."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Filter candidates
+        candidates = pipeline.get_active_candidates()
+        
+        # Filter by stage
+        if stage:
+            try:
+                stage_enum = CandidateStage(stage)
+                candidates = [c for c in candidates if c.stage == stage_enum]
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid stage: {stage}")
+        
+        # Search by name
+        if search:
+            search_lower = search.lower()
+            candidates = [
+                c for c in candidates 
+                if search_lower in c.display_name.lower() or
+                   (c.current_company and search_lower in c.current_company.lower()) or
+                   (c.current_title and search_lower in c.current_title.lower())
+            ]
+        
+        # Sort
+        reverse = sort_order == "desc"
+        if sort_by == "added_at":
+            candidates.sort(key=lambda c: c.added_at, reverse=reverse)
+        elif sort_by == "name":
+            candidates.sort(key=lambda c: c.display_name.lower(), reverse=reverse)
+        elif sort_by == "match_score":
+            candidates.sort(key=lambda c: c.enrichment.match_score or 0, reverse=reverse)
+        elif sort_by == "stage":
+            candidates.sort(key=lambda c: c.stage.value, reverse=reverse)
+        
+        # Paginate
+        total = len(candidates)
+        candidates = candidates[offset:offset + limit]
+        
+        # Build response
+        candidates_data = []
+        for c in candidates:
+            stage_meta = c.get_stage_metadata()
+            candidates_data.append({
+                "candidate_id": c.candidate_id,
+                "name": c.display_name,
+                "headline": c.headline,
+                "current_title": c.current_title,
+                "current_company": c.current_company,
+                "location": c.location,
+                "experience_years": c.experience_years,
+                "linkedin_url": c.linkedin_url,
+                "profile_picture_url": c.profile_picture_url,
+                "stage": c.stage.value,
+                "stage_label": stage_meta.get("label"),
+                "stage_icon": stage_meta.get("icon"),
+                "stage_color": stage_meta.get("color"),
+                "match_score": c.enrichment.match_score,
+                "match_label": c.enrichment.match_label,
+                "has_email": bool(c.contact.email),
+                "has_phone": bool(c.contact.phone),
+                "is_favorite": c.is_favorite,
+                "priority": c.priority,
+                "tags": c.tags,
+                "added_at": c.added_at
+            })
+        
+        return {
+            "success": True,
+            "candidates": candidates_data,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(candidates_data) < total
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list candidates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/{pipeline_id}/candidates/{candidate_id}",
+    summary="Get Candidate Detail",
+    description="Get full candidate details"
+)
+async def get_candidate_detail(
+    pipeline_id: str,
+    candidate_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Get complete candidate details including enrichment and timeline."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        candidate = pipeline.get_candidate(candidate_id)
+        
+        if not candidate:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        
+        # Build timeline from stage history
+        timeline = []
+        for entry in candidate.stage_history:
+            stage_meta = STAGE_METADATA.get(CandidateStage(entry.to_stage), {})
+            timeline.append({
+                "from_stage": entry.from_stage,
+                "to_stage": entry.to_stage,
+                "stage_label": stage_meta.get("label", entry.to_stage),
+                "stage_icon": stage_meta.get("icon", "•"),
+                "timestamp": entry.transitioned_at,
+                "triggered_by": entry.triggered_by,
+                "notes": entry.notes
+            })
+        
+        # Add outreach events to timeline
+        if candidate.outreach:
+            if candidate.outreach.initial_email_sent_at:
+                timeline.append({
+                    "event": "email_sent",
+                    "label": "Initial Email Sent",
+                    "icon": "📧",
+                    "timestamp": candidate.outreach.initial_email_sent_at
+                })
+            if candidate.outreach.first_opened_at:
+                timeline.append({
+                    "event": "email_opened",
+                    "label": "Email Opened",
+                    "icon": "👀",
+                    "timestamp": candidate.outreach.first_opened_at
+                })
+            if candidate.outreach.first_clicked_at:
+                timeline.append({
+                    "event": "link_clicked",
+                    "label": "Scheduling Link Clicked",
+                    "icon": "🔗",
+                    "timestamp": candidate.outreach.first_clicked_at
+                })
+        
+        # Add interview events
+        if candidate.interview.scheduled_datetime:
+            timeline.append({
+                "event": "interview_scheduled",
+                "label": "Interview Scheduled",
+                "icon": "📅",
+                "timestamp": candidate.interview.scheduled_datetime
+            })
+        if candidate.interview.call_ended_at:
+            timeline.append({
+                "event": "interview_completed",
+                "label": "Interview Completed",
+                "icon": "🎤",
+                "timestamp": candidate.interview.call_ended_at
+            })
+        
+        # Sort timeline by timestamp
+        timeline.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        
+        return {
+            "success": True,
+            "candidate": candidate.model_dump(),
+            "stage_metadata": candidate.get_stage_metadata(),
+            "job_context": pipeline.job.model_dump(),
+            "timeline": timeline
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get candidate detail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put(
+    "/{pipeline_id}/candidates/{candidate_id}/stage",
+    summary="Update Candidate Stage",
+    description="Manually update candidate stage"
+)
+async def update_candidate_stage(
+    pipeline_id: str,
+    candidate_id: str,
+    request: UpdateStageRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Manually update a candidate's stage."""
+    try:
+        candidate = await pipeline_service.update_candidate_stage(
+            pipeline_id=pipeline_id,
+            candidate_id=candidate_id,
+            new_stage=request.new_stage,
+            username=current_user["username"],
+            notes=request.notes
+        )
+        
+        return {
+            "success": True,
+            "message": f"Stage updated to {request.new_stage.value}",
+            "candidate_id": candidate.candidate_id,
+            "new_stage": candidate.stage.value
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update stage: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/{pipeline_id}/candidates/{candidate_id}/notes",
+    summary="Add Note",
+    description="Add a note to a candidate"
+)
+async def add_candidate_note(
+    pipeline_id: str,
+    candidate_id: str,
+    request: AddNoteRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Add a recruiter note to a candidate."""
+    try:
+        candidate = await pipeline_service.add_candidate_note(
+            pipeline_id=pipeline_id,
+            candidate_id=candidate_id,
+            note=request.note,
+            username=current_user["username"]
+        )
+        
+        return {
+            "success": True,
+            "message": "Note added",
+            "notes_count": len(candidate.recruiter_notes)
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to add note: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/{pipeline_id}/candidates/{candidate_id}/favorite",
+    summary="Toggle Favorite",
+    description="Toggle favorite status"
+)
+async def toggle_favorite(
+    pipeline_id: str,
+    candidate_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Toggle favorite status for a candidate."""
+    try:
+        is_favorite = await pipeline_service.toggle_candidate_favorite(
+            pipeline_id=pipeline_id,
+            candidate_id=candidate_id,
+            username=current_user["username"]
+        )
+        
+        return {
+            "success": True,
+            "is_favorite": is_favorite
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to toggle favorite: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/{pipeline_id}/candidates/{candidate_id}/reject",
+    summary="Reject Candidate",
+    description="Reject a candidate with reason"
+)
+async def reject_candidate(
+    pipeline_id: str,
+    candidate_id: str,
+    request: RejectCandidateRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Reject a candidate with reason and optional feedback."""
+    try:
+        candidate = await pipeline_service.reject_candidate(
+            pipeline_id=pipeline_id,
+            candidate_id=candidate_id,
+            username=current_user["username"],
+            reason=request.reason,
+            feedback=request.feedback
+        )
+        
+        return {
+            "success": True,
+            "message": "Candidate rejected",
+            "candidate_id": candidate.candidate_id
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to reject candidate: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# BULK ACTIONS
+# ============================================================================
+
+@router.post(
+    "/{pipeline_id}/bulk-action",
+    summary="Bulk Action",
+    description="Perform bulk actions on multiple candidates"
+)
+async def bulk_action(
+    pipeline_id: str,
+    request: BulkActionRequest,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """
+    Perform bulk actions on multiple candidates.
+    
+    Actions:
+    - shortlist: Move to shortlist stage
+    - remove: Remove from pipeline (soft delete)
+    - reject: Reject with reason
+    - favorite: Toggle favorite
+    """
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        action = request.action.lower()
+        affected_count = 0
+        errors = []
+        
+        for candidate_id in request.candidate_ids:
+            try:
+                candidate = pipeline.get_candidate(candidate_id)
+                if not candidate:
+                    errors.append(f"{candidate_id}: not found")
+                    continue
+                
+                if action == "shortlist":
+                    if candidate.stage == CandidateStage.SOURCED:
+                        candidate.update_stage(CandidateStage.SHORTLISTED, triggered_by="user")
+                        affected_count += 1
+                
+                elif action == "remove":
+                    candidate.is_removed = True
+                    candidate.removed_at = datetime.utcnow().isoformat()
+                    candidate.removed_reason = request.reason
+                    affected_count += 1
+                
+                elif action == "reject":
+                    if not request.reason:
+                        errors.append(f"{candidate_id}: reason required for rejection")
+                        continue
+                    candidate.update_stage(CandidateStage.REJECTED, triggered_by="user")
+                    candidate.final_decision = "rejected"
+                    candidate.rejection_reason = request.reason
+                    affected_count += 1
+                
+                elif action == "favorite":
+                    candidate.is_favorite = not candidate.is_favorite
+                    affected_count += 1
+                
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+                
+                pipeline.update_candidate(candidate)
+                
+            except Exception as e:
+                errors.append(f"{candidate_id}: {str(e)}")
+        
+        pipeline.recalculate_stats()
+        await pipeline_service._save_pipeline(pipeline)
+        
+        return {
+            "success": True,
+            "action": action,
+            "affected_count": affected_count,
+            "errors": errors if errors else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk action failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ANALYTICS ENDPOINTS
+# ============================================================================
+
+@router.get(
+    "/{pipeline_id}/analytics",
+    summary="Get Analytics",
+    description="Get detailed pipeline analytics"
+)
+async def get_pipeline_analytics(
+    pipeline_id: str,
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: Dict = Depends(get_current_username)
+):
+    """Get detailed analytics for a pipeline."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        
+        if pipeline.username != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Recalculate stats
+        pipeline.recalculate_stats()
+        
+        # Stage distribution
+        stage_distribution = {}
+        for c in pipeline.get_active_candidates():
+            stage = c.stage.value
+            stage_distribution[stage] = stage_distribution.get(stage, 0) + 1
+        
+        # Score distribution
+        score_buckets = {
+            "excellent (85-100)": 0,
+            "great (70-84)": 0,
+            "good (55-69)": 0,
+            "fair (40-54)": 0,
+            "below (<40)": 0,
+            "not scored": 0
+        }
+        
+        for c in pipeline.get_active_candidates():
+            score = c.enrichment.match_score
+            if score is None:
+                score_buckets["not scored"] += 1
+            elif score >= 85:
+                score_buckets["excellent (85-100)"] += 1
+            elif score >= 70:
+                score_buckets["great (70-84)"] += 1
+            elif score >= 55:
+                score_buckets["good (55-69)"] += 1
+            elif score >= 40:
+                score_buckets["fair (40-54)"] += 1
+            else:
+                score_buckets["below (<40)"] += 1
+        
+        # Email engagement
+        email_stats = {
+            "sent": 0,
+            "delivered": 0,
+            "opened": 0,
+            "clicked": 0,
+            "responded": 0
+        }
+        
+        for c in pipeline.candidates:
+            if c.outreach:
+                if c.outreach.initial_email_sent_at:
+                    email_stats["sent"] += 1
+                if c.outreach.total_opens > 0:
+                    email_stats["opened"] += 1
+                if c.outreach.total_clicks > 0:
+                    email_stats["clicked"] += 1
+                if c.outreach.candidate_responded:
+                    email_stats["responded"] += 1
+        
+        # Conversion funnel
+        funnel = [
+            {"stage": "Sourced", "count": pipeline.stats.total_sourced},
+            {"stage": "Shortlisted", "count": pipeline.stats.total_shortlisted},
+            {"stage": "Enriched", "count": pipeline.stats.total_enriched},
+            {"stage": "Contacted", "count": pipeline.stats.total_contacted},
+            {"stage": "Responded", "count": pipeline.stats.total_responded},
+            {"stage": "Scheduled", "count": pipeline.stats.total_scheduled},
+            {"stage": "Interviewed", "count": pipeline.stats.total_interviewed},
+            {"stage": "Hired", "count": pipeline.stats.total_hired}
+        ]
+        
+        return {
+            "success": True,
+            "pipeline_id": pipeline_id,
+            "stats": pipeline.stats.model_dump(),
+            "stage_distribution": stage_distribution,
+            "score_distribution": score_buckets,
+            "email_engagement": email_stats,
+            "conversion_funnel": funnel,
+            "calculated_at": datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# STAGE METADATA ENDPOINT
+# ============================================================================
+
+@router.get(
+    "/stages/metadata",
+    summary="Get Stage Metadata",
+    description="Get metadata for all pipeline stages"
+)
+async def get_stage_metadata():
+    """Get metadata for all pipeline stages (icons, colors, labels)."""
+    stages = []
+    
+    for stage in CandidateStage:
+        meta = STAGE_METADATA.get(stage, {})
+        stages.append({
+            "value": stage.value,
+            "label": meta.get("label", stage.value),
+            "icon": meta.get("icon", "•"),
+            "color": meta.get("color", "gray"),
+            "description": meta.get("description", "")
+        })
+    
+    return {
+        "success": True,
+        "stages": stages
+    }
+
+
+# ============================================================================
+# HEALTH CHECK
+# ============================================================================
+
+@router.get(
+    "/health",
+    summary="Health Check",
+    description="Check pipeline service health"
+)
+async def health_check(
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    email_service: EmailOutreachService = Depends(get_email_service)
+):
+    """Check health of pipeline and email services."""
+    try:
+        # Check email service
+        email_health = await email_service.check_health()
+        
+        return {
+            "success": True,
+            "pipeline_service": "healthy",
+            "email_service": email_health
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================================
+# EXPORT
+# ============================================================================
+
+__all__ = ["router"]

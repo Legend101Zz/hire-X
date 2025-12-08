@@ -15,7 +15,8 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
 from core.dependencies import (get_conversation_manager, get_current_username,
                                get_enrichment_service, get_jd_generator,
                                get_jd_parser, get_mongodb,
-                               get_parallel_enrichment_service, get_workflow)
+                               get_parallel_enrichment_service,
+                               get_pipeline_service)
 from core.logging_config import get_logger
 from data.mongodb import MongoDB
 from models.conversation_models import (ConversationFinalizeRequest,
@@ -24,15 +25,18 @@ from models.conversation_models import (ConversationFinalizeRequest,
                                         ConversationMessageResponse,
                                         ConversationStartRequest,
                                         ConversationStartResponse,
-                                        FeedbackRequest, FeedbackResponse,
-                                        GenerateJDRequest, GenerateJDResponse,
-                                        RefineJDRequest, RefineJDResponse,
-                                        RefineSearchRequest)
+                                        CreatePipelineRequest, FeedbackRequest,
+                                        FeedbackResponse, GenerateJDRequest,
+                                        GenerateJDResponse,
+                                        ManualCandidateEntry,
+                                        ManualImportRequest, RefineJDRequest,
+                                        RefineJDResponse, RefineSearchRequest)
 from services.conversation_manager import ConversationManager
 from services.enrichment_service import EnrichmentService
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.parallel_enrichment_service import ParallelEnrichmentService
+from services.pipeline_service import PipelineService
 from services.scorecard_workflow import ScorecardWorkflow
 
 # ================================================================
@@ -1014,6 +1018,186 @@ async def enrich_accepted_candidates(
         raise
     except Exception as e:
         logger.error(f"Error starting batch enrichment: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/manual-import")
+async def create_manual_import(
+    request: ManualImportRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """
+    Create a conversation session from manual candidate import.
+    
+    This allows HR to:
+    1. Paste/upload JD or provide ideal profile
+    2. Add candidates manually with LinkedIn URLs + extra info
+    3. Creates a session that shows in results page
+    4. Optionally scrapes LinkedIn profiles in background
+    """
+    try:
+        result = await conversation_manager.create_manual_import(
+            username=current_user["username"],
+            jd_text=request.jd_text,
+            ideal_profile=request.ideal_profile,
+            candidates=[c.model_dump() for c in request.candidates],
+            pipeline_name=request.pipeline_name
+        )
+        
+        # Background scrape if enabled
+        if request.auto_scrape:
+            background_tasks.add_task(
+                conversation_manager.scrape_manual_candidates,
+                result["session_id"]
+            )
+        
+        return {
+            "success": True,
+            "session_id": result["session_id"],
+            "candidates_count": len(request.candidates),
+            "message": f"Created import with {len(request.candidates)} candidates",
+            "status": "pending_scrape" if request.auto_scrape else "ready"
+        }
+        
+    except Exception as e:
+        logger.error(f"Manual import failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{session_id}/create-pipeline")
+async def create_pipeline_from_session(
+    session_id: str,
+    request: CreatePipelineRequest,
+    current_user: dict = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    pipeline_service: PipelineService = Depends(get_pipeline_service)
+):
+    """
+    Create a pipeline from conversation session with shortlisted candidates.
+    
+    Called from results page when user clicks "Create Pipeline".
+    """
+    try:
+        # Get session
+        session = await conversation_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        if session.get("username") != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get candidates from session
+        all_candidates = session.get("search_results", []) or session.get("sample_candidates", [])
+        
+        # Filter to shortlisted candidates
+        shortlisted = [
+            c for c in all_candidates 
+            if c.get("candidate_id") in request.shortlisted_candidate_ids or
+               c.get("_id") in request.shortlisted_candidate_ids or
+               str(c.get("_id")) in request.shortlisted_candidate_ids
+        ]
+        
+        if not shortlisted:
+            raise HTTPException(status_code=400, detail="No valid candidates selected")
+        
+        # Get job data from session
+        job_data = session.get("ideal_profile", {})
+        
+        # Create pipeline
+        pipeline = await pipeline_service.create_pipeline_from_search(
+            username=current_user["username"],
+            conversation_session_id=session_id,
+            search_session_id=session_id,
+            job_data=job_data,
+            candidates=shortlisted,
+            pipeline_name=request.pipeline_name,
+            auto_shortlist=True
+        )
+        
+        # Update session with pipeline link
+        await conversation_manager.link_session_to_pipeline(session_id, pipeline.pipeline_id)
+        
+        return {
+            "success": True,
+            "pipeline_id": pipeline.pipeline_id,
+            "shortlisted_count": len(shortlisted),
+            "message": f"Pipeline created with {len(shortlisted)} candidates"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Create pipeline failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{session_id}/results")
+async def get_session_results(
+    session_id: str,
+    current_user: dict = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """
+    Get session results for the results page.
+    
+    Returns candidates from either:
+    - Donna search (search_results)
+    - Manual import (sample_candidates with manual_data)
+    """
+    try:
+        session = await conversation_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        if session.get("username") != current_user["username"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get candidates from appropriate field
+        candidates = (
+            session.get("search_results") or 
+            session.get("sample_candidates") or 
+            session.get("candidates") or 
+            []
+        )
+        
+        # Normalize candidate format
+        normalized = []
+        for c in candidates:
+            normalized.append({
+                "candidate_id": str(c.get("candidate_id") or c.get("_id") or c.get("linkedin_id", "")),
+                "linkedin_url": c.get("linkedin_url", ""),
+                "name": c.get("name") or c.get("full_name") or f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unknown",
+                "headline": c.get("headline") or c.get("title"),
+                "current_company": c.get("current_company"),
+                "current_title": c.get("current_title") or c.get("title"),
+                "location": c.get("location"),
+                "experience_years": c.get("experience_years") or c.get("total_experience_years"),
+                "skills": c.get("skills", [])[:15],
+                "match_score": c.get("match_score") or c.get("score"),
+                "match_label": c.get("match_label"),
+                "profile_picture_url": c.get("profile_picture_url"),
+                "manual_data": c.get("manual_data"),
+                "source": c.get("source", "donna_search"),
+                "profile_id": str(c.get("_id", "")),
+            })
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "source": session.get("source", "donna_search"),
+            "status": session.get("status", "ready"),
+            "candidates": normalized,
+            "total_candidates": len(normalized),
+            "ideal_profile": session.get("ideal_profile", {}),
+            "pipeline_id": session.get("pipeline_id"),
+            "pipeline_created_at": session.get("pipeline_created_at"),
+            "created_at": session.get("created_at"),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get results failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

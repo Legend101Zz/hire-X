@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p>Hi {{ candidate_first_name }},</p>
+
+<p>Just a friendly reminder that your interview for the <strong>{{ job_title }}</strong> role is coming up! ⏰</p>
+
+<div class="highlight-box" style="background: #fef3c7; border-color: #f59e0b;">
+    <h2 style="color: #b45309;">📅 {{ formatted_datetime }}</h2>
+    <p style="margin: 8px 0 0 0; color: #92400e;">That's in {{ hours_until }} hours!</p>
+</div>
+
+<p>Make sure you're in a quiet place with good phone reception. You'll receive a call from <strong>Neura</strong>, our AI interviewer.</p>
+
+<p>See you soon!</p>
+
+<p>Best,<br>
+{{ sender_name }}</p>
+{% endblock %}

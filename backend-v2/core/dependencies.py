@@ -23,6 +23,7 @@ from services.availability_checker import AvailabilityChecker
 from services.candidate_scorer import CandidateScorer
 # Import all V3 services
 from services.conversation_manager import ConversationManager
+from services.email_outreach_service import EmailOutreachService
 from services.enrichment_service import EnrichmentService
 from services.funnel_search_service import FunnelSearchService
 from services.intelligent_enrichment_orchestrator import \
@@ -32,6 +33,7 @@ from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
 from services.model_config_manager import ModelConfigManager
 from services.parallel_enrichment_service import ParallelEnrichmentService
+from services.pipeline_service import PipelineService
 from services.query_debugger import QueryDebugger
 from services.response_likelihood_scorer import ResponseLikelihoodScorer
 from services.salary_estimator import SalaryEstimator
@@ -211,6 +213,26 @@ async def initialize_services() -> Dict[str, Any]:
         )
     
     logger.info("✅ VapiInterviewService created")
+    
+    # Initialize Email Service
+    email_service = EmailOutreachService(
+        provider=settings.EMAIL_PROVIDER,
+        openrouter_api_key=settings.OPENROUTER_API_KEY
+    )
+    logger.info("✅ EmailOutreachService initialized")
+
+    # # Initialize Pipeline Service
+    # pipeline_service = PipelineService(
+    #     mongodb=mongodb,
+    #     redis_cache=redis_cache,
+    #     jd_parser=jd_parser,
+    #     enrichment_orchestrator=deep_dive_service,
+    #     hatch_service=hatch_service,  # You'll need to initialize this
+    #     email_service=email_service,
+    #     vapi_service=VapiInterviewService,  # Will be added when you integrate VapiInterviewService
+    #     base_url=settings.APP_BASE_URL
+    # )
+    # logger.info("✅ PipelineService initialized")
     # ========================================
     # STORE IN GLOBAL DICT
     # ========================================
@@ -247,8 +269,10 @@ async def initialize_services() -> Dict[str, Any]:
         "deep_dive_service": deep_dive_service,
         "parallel_enrichment_service": parallel_enrichment_service,
         
-        # interview 
-        "vapi_interview_service" : vapi_interview_service
+        # pipeline
+        "vapi_interview_service" : vapi_interview_service,
+        "email_service": email_service,
+        # "pipeline_service": pipeline_service,
     }
     
     # Save to global variable
@@ -391,6 +415,13 @@ def get_vapi_interview_service() -> VapiInterviewService:
     """Get singleton vapi_interview_service"""
     return _global_services["vapi_interview_service"]
 
+def get_pipeline_service() -> PipelineService:
+    """Get the pipeline service."""
+    return _global_services["pipeline_service"]
+
+def get_email_service() -> EmailOutreachService:
+    """Get the email service."""
+    return _global_services["email_service"]
 
 
 def get_current_username(
