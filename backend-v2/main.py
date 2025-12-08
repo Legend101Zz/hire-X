@@ -24,7 +24,8 @@ load_dotenv()
 
 # Import API routes
 from api import (auth, configuration, conversation, dashboard, deep_dive,
-                 enriched_results, intelligent_search, scorecard)
+                 enriched_results, intelligent_search, scorecard,
+                 voice_interview)
 # Import core components
 from core.config import settings
 from core.dependencies import initialize_services
@@ -180,6 +181,11 @@ app.include_router(
 app.include_router(
     dashboard.router,
     tags=["Dashboard"]
+)
+
+app.include_router(
+    voice_interview.router,
+    tags=["VoiceInterview"]
 )
 
 # ============================================================================
