@@ -40,6 +40,13 @@ pydantic-settings
 email-validator
 
 # --------------------------------------------
+# Voice Utilities
+# --------------------------------------------
+cartesia 
+pydub 
+ffmpeg-python 
+
+# --------------------------------------------
 # Utilities
 # --------------------------------------------
 python-dateutil

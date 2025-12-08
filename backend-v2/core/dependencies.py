@@ -41,6 +41,7 @@ from services.sample_profile_generator_v3 import SampleProfileGeneratorV3
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
 from services.skill_validator import SkillValidator
+from services.vapi_interview_service import VapiInterviewService
 from services.web_search_wrapper import WebSearchWrapper
 
 # Security scheme for JWT
@@ -204,6 +205,12 @@ async def initialize_services() -> Dict[str, Any]:
         )
     logger.info("✅ ParallelEnrichmentService created")
     
+    vapi_interview_service = VapiInterviewService(
+            mongodb=mongodb,
+            redis_cache=redis_cache
+        )
+    
+    logger.info("✅ VapiInterviewService created")
     # ========================================
     # STORE IN GLOBAL DICT
     # ========================================
@@ -238,7 +245,10 @@ async def initialize_services() -> Dict[str, Any]:
         
         # deep search
         "deep_dive_service": deep_dive_service,
-        "parallel_enrichment_service": parallel_enrichment_service
+        "parallel_enrichment_service": parallel_enrichment_service,
+        
+        # interview 
+        "vapi_interview_service" : vapi_interview_service
     }
     
     # Save to global variable
@@ -326,6 +336,7 @@ def get_parallel_enrichment_service() -> ParallelEnrichmentService:
     return _global_services["parallel_enrichment_service"]
 
 
+
 # ============================================================================
 # Phase 2B Dependencies (Conversation)
 # ============================================================================
@@ -375,6 +386,10 @@ async def get_jd_generator(
 def get_funnel_search() -> FunnelSearchService:
     """Get the funnel search service."""
     return _global_services["funnel_search"]
+
+def get_vapi_interview_service() -> VapiInterviewService:
+    """Get singleton vapi_interview_service"""
+    return _global_services["vapi_interview_service"]
 
 
 
