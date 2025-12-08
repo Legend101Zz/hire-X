@@ -96,6 +96,26 @@ class Settings:
     # Batch size for parallel scoring
     SCORING_BATCH_SIZE: int = int(os.getenv("SCORING_BATCH_SIZE", "50"))
     
+    # Email Configuration
+    EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "mock")
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "careers@neuraleap.co")
+    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "NeuraLeap Careers")
+    SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+
+    SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+
+    AWS_SES_REGION: str = os.getenv("AWS_SES_REGION", "ap-south-1")
+    AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "https://neuraleap.shop")
+    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./uploads")
+    
     # ========================================================================
     # Logging Configuration
     # ========================================================================

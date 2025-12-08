@@ -60,6 +60,19 @@ crewai-tools
 langchain
 langchain-openai
 
+# Email
+aiosmtplib
+sendgrid
+boto3
+resend
+email-validator
+python-multipart
+jinja2
+premailer
+
+#Scheduling
+apscheduler
+
 # --------------------------------------------
 # Development & Testing (optional)
 # --------------------------------------------

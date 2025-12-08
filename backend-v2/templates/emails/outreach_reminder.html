@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p>Hi {{ candidate_first_name }},</p>
+
+<p>Just wanted to follow up on my earlier email about the <strong>{{ job_title }}</strong> role.</p>
+
+<p>I know you're probably busy, but if you're at all interested in exploring this opportunity, I'd love to chat.</p>
+
+<p style="text-align: center;">
+    <a href="{{ scheduling_link }}" class="cta-button">Schedule a Chat →</a>
+</p>
+
+<p>Either way, hope you're doing well!</p>
+
+<p>Best,<br>
+{{ sender_name }}</p>
+{% endblock %}
