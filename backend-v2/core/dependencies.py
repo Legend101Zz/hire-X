@@ -26,6 +26,7 @@ from services.conversation_manager import ConversationManager
 from services.email_outreach_service import EmailOutreachService
 from services.enrichment_service import EnrichmentService
 from services.funnel_search_service import FunnelSearchService
+from services.hatch_service import HatchService
 from services.intelligent_enrichment_orchestrator import \
     IntelligentEnrichmentOrchestrator
 from services.intelligent_search_crew import IntelligentSearchCrew
@@ -174,7 +175,8 @@ async def initialize_services() -> Dict[str, Any]:
     conversation_manager = ConversationManager(
         redis_cache=redis_cache,
         model_config_manager=model_config_manager,
-        funnel_search=funnel_search 
+        funnel_search=funnel_search,
+        mongodb=mongodb 
     )
     logger.info("✅ ConversationManager initialized")
     
@@ -220,19 +222,25 @@ async def initialize_services() -> Dict[str, Any]:
         openrouter_api_key=settings.OPENROUTER_API_KEY
     )
     logger.info("✅ EmailOutreachService initialized")
+    
+    hatch_service = HatchService(
+    mongodb=mongodb,
+    redis_cache=redis_cache
+    )
+    logger.info("✅ HatchService initialized")
 
-    # # Initialize Pipeline Service
-    # pipeline_service = PipelineService(
-    #     mongodb=mongodb,
-    #     redis_cache=redis_cache,
-    #     jd_parser=jd_parser,
-    #     enrichment_orchestrator=deep_dive_service,
-    #     hatch_service=hatch_service,  # You'll need to initialize this
-    #     email_service=email_service,
-    #     vapi_service=VapiInterviewService,  # Will be added when you integrate VapiInterviewService
-    #     base_url=settings.APP_BASE_URL
-    # )
-    # logger.info("✅ PipelineService initialized")
+    # Initialize Pipeline Service
+    pipeline_service = PipelineService(
+        mongodb=mongodb,
+        redis_cache=redis_cache,
+        jd_parser=jd_parser,
+        enrichment_orchestrator=deep_dive_service,
+        hatch_service=hatch_service, 
+        email_service=email_service,
+        vapi_service=VapiInterviewService,  # Will be added when you integrate VapiInterviewService
+        base_url=settings.APP_BASE_URL
+    )
+    logger.info("✅ PipelineService initialized")
     # ========================================
     # STORE IN GLOBAL DICT
     # ========================================
@@ -272,7 +280,8 @@ async def initialize_services() -> Dict[str, Any]:
         # pipeline
         "vapi_interview_service" : vapi_interview_service,
         "email_service": email_service,
-        # "pipeline_service": pipeline_service,
+        "pipeline_service": pipeline_service,
+        "hatch_service": hatch_service,
     }
     
     # Save to global variable

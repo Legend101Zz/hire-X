@@ -79,6 +79,7 @@ export function ManualImportPanel() {
     };
 
     // Update candidate
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updateCandidate = (id: string, field: keyof CandidateEntry, value: any) => {
         setCandidates(prev => prev.map(c => {
             if (c.id !== id) return c;

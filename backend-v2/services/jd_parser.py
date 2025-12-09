@@ -103,7 +103,6 @@ class JDParser:
         logger.debug('decoded JD',text)
         # Use LLM to extract structured data
         structured_data = await self._llm_extract_jd_data(text, username)
-        print('LLM JD',structured_data)
         return structured_data
     
     

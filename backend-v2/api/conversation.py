@@ -7,15 +7,13 @@ FastAPI routes for the conversational interface with Donna.
 import base64
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
                      UploadFile)
 
 from core.dependencies import (get_conversation_manager, get_current_username,
-                               get_enrichment_service, get_jd_generator,
-                               get_jd_parser, get_mongodb,
-                               get_parallel_enrichment_service,
+                               get_jd_generator, get_jd_parser, get_mongodb,
                                get_pipeline_service)
 from core.logging_config import get_logger
 from data.mongodb import MongoDB
@@ -28,16 +26,12 @@ from models.conversation_models import (ConversationFinalizeRequest,
                                         CreatePipelineRequest, FeedbackRequest,
                                         FeedbackResponse, GenerateJDRequest,
                                         GenerateJDResponse,
-                                        ManualCandidateEntry,
                                         ManualImportRequest, RefineJDRequest,
                                         RefineJDResponse, RefineSearchRequest)
 from services.conversation_manager import ConversationManager
-from services.enrichment_service import EnrichmentService
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
-from services.parallel_enrichment_service import ParallelEnrichmentService
 from services.pipeline_service import PipelineService
-from services.scorecard_workflow import ScorecardWorkflow
 
 # ================================================================
 # ROUTER SETUP
@@ -221,6 +215,10 @@ async def get_conversation(
 # FINALIZE CONVERSATION 
 # ================================================================
 
+# ================================================================
+# FINALIZE CONVERSATION - SIMPLIFIED RANKING
+# ================================================================
+
 @router.post("/{session_id}/finalize", response_model=ConversationFinalizeResponse)
 async def finalize_conversation(
     session_id: str,
@@ -228,19 +226,16 @@ async def finalize_conversation(
     background_tasks: BackgroundTasks,
     username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
-    enrichment_service: EnrichmentService = Depends(get_enrichment_service),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
     """
-    Finalize conversation and enrich top 5 candidates with FULL enrichment.
+    Finalize conversation and rank candidates using LLM.
     
-    This triggers comprehensive enrichment including:
-    - Salary estimation (career progression with web search)
-    - Skills validation (GitHub, StackOverflow, blogs)
-    - Response likelihood (detailed factor analysis)
-    - Availability checking (company health, urgency)
-    - Web intelligence (press mentions, online presence)
-    - Recruiter summary (AI-generated actionable insights)
+    This triggers simple ranking based on:
+    - Skills match
+    - Experience fit
+    - Location match
+    - Industry relevance
     """
     
     try:
@@ -256,7 +251,8 @@ async def finalize_conversation(
         if request.final_profile_adjustments:
             adjustments_dict = request.final_profile_adjustments.dict(exclude_unset=True)
             for key, value in adjustments_dict.items():
-                setattr(state.ideal_profile, key, value)
+                if value:
+                    setattr(state.ideal_profile, key, value)
         
         # Validation
         if not state.ideal_profile.role_title:
@@ -274,31 +270,44 @@ async def finalize_conversation(
                 detail="No sample candidates found. Please review candidates first."
             )
         
-        # Take top 5 candidates
-        top_5 = sample_candidates[:5]
+        logger.info(f"✅ Ranking {len(sample_candidates)} candidates using LLM")
         
-        logger.info(f"✅ Enriching {len(top_5)} candidates with FULL enrichment")
+        # Store immediately in MongoDB with "processing" status
+        results_session_id = f"results_{uuid.uuid4().hex[:12]}"
         
-        # Generate enrichment session ID
-        enrichment_session_id = str(uuid.uuid4())
+        results_doc = {
+            "session_id": results_session_id,
+            "conversation_session_id": session_id,
+            "username": username,
+            "ideal_profile": state.ideal_profile.dict(),
+            "total_found": len(sample_candidates),
+            "candidates": sample_candidates,  # for backward compat
+            "search_results": sample_candidates,  # matches manual import
+            "selected_candidate_ids": [],
+            "source": "donna_search", 
+            "created_at": datetime.utcnow().isoformat(),
+            "status": "processing"
+        }
         
-        # Trigger enrichment in background
+        await mongodb.main_db["conversation_sessions"].insert_one(results_doc)
+        
+        # Trigger ranking in background
         background_tasks.add_task(
-            _enrich_and_store_results,
-            enrichment_session_id=enrichment_session_id,
+            _rank_and_update_results,
+            results_session_id=results_session_id,
             conversation_session_id=session_id,
             username=username,
             ideal_profile=state.ideal_profile.dict(),
-            candidates=top_5,
-            enrichment_service=enrichment_service,
+            candidates=sample_candidates,
+            conversation_manager=conversation_manager,
             mongodb=mongodb
         )
         
         return ConversationFinalizeResponse(
-            session_id=enrichment_session_id,
+            session_id=results_session_id,
             search_triggered=True,
-            message="Enriching top 5 candidates with salary, skills, response likelihood, availability, and recruiter insights!",
-            estimated_candidates=len(top_5)
+            message=f"Ranking {len(sample_candidates)} candidates using AI! This will take ~30 seconds.",
+            estimated_candidates=len(sample_candidates)
         )
     
     except HTTPException:
@@ -308,92 +317,253 @@ async def finalize_conversation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _enrich_and_store_results(
-    enrichment_session_id: str,
+async def _rank_and_update_results(
+    results_session_id: str,
     conversation_session_id: str,
     username: str,
     ideal_profile: Dict,
     candidates: List[Dict],
-    enrichment_service: EnrichmentService,
+    conversation_manager: ConversationManager,
     mongodb: MongoDB
 ):
-    """Background task for comprehensive enrichment."""
+    """Background task for LLM-based ranking."""
     
     try:
-        logger.info(f"🚀 Starting FULL enrichment for {enrichment_session_id}")
+        logger.info(f"🚀 Starting LLM ranking for {results_session_id}")
         
-        # Initialize progress
-        await enrichment_service.redis.store_session_data(
-            enrichment_session_id,
-            "enrichment_progress",
-            {
-                "status": "enriching",
-                "total_candidates": len(candidates),
-                "enriched_count": 0,
-                "progress_percentage": 0,
-                "message": "Starting comprehensive enrichment..."
-            },
-            expire_seconds=3600
-        )
-        
-        # Run FULL enrichment (all types including recruiter summary)
-        enriched_candidates = await enrichment_service.enrich_candidates(
-            session_id=enrichment_session_id,
+        # Rank candidates using LLM
+        ranked_candidates = await _rank_candidates_with_llm(
             candidates=candidates,
-            enrichment_types=[
-                "salary", "response_likelihood", "skills", 
-                "availability", "web_intelligence", "recruiter_summary"
-            ],
+            ideal_profile=ideal_profile,
+            conversation_manager=conversation_manager,
             username=username
         )
         
-        # ✅ FIX: Store results using the save_enriched_results method
-        results_doc = {
-            "session_id": enrichment_session_id,
-            "conversation_session_id": conversation_session_id,
-            "username": username,
-            "ideal_profile": ideal_profile,
-            "total_found": len(enriched_candidates),
-            "enriched_count": len([c for c in enriched_candidates if c.enrichment_status == "completed"]),
-            "candidates": [c.dict() for c in enriched_candidates],
-            "created_at": datetime.utcnow().isoformat(),
-            "status": "completed"
-        }
-        
-        # ✅ Use the proper MongoDB method
-        await mongodb.save_enriched_results(results_doc)
-        
-        logger.info(f"✅ Enrichment completed for {enrichment_session_id}")
-        
-        # Update progress to completed
-        await enrichment_service.redis.store_session_data(
-            enrichment_session_id,
-            "enrichment_progress",
+        # Update results in MongoDB
+        await mongodb.main_db["conversation_sessions"].update_one(
+            {"session_id": results_session_id},
             {
-                "status": "completed",
-                "total_candidates": len(candidates),
-                "enriched_count": len([c for c in enriched_candidates if c.enrichment_status == "completed"]),
-                "progress_percentage": 100,
-                "message": "Enrichment complete! View your results now."
-            },
-            expire_seconds=3600
+                "$set": {
+                    "candidates": ranked_candidates,
+                    "status": "ready",
+                    "ranked_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+            }
         )
+        
+        logger.info(f"✅ Ranking completed for {results_session_id}")
         
     except Exception as e:
-        logger.error(f"❌ Enrichment failed for {enrichment_session_id}: {e}", exc_info=True)
+        logger.error(f"❌ Ranking failed for {results_session_id}: {e}", exc_info=True)
         
-        await enrichment_service.redis.store_session_data(
-            enrichment_session_id,
-            "enrichment_progress",
+        # Update status to failed
+        await mongodb.main_db["conversation_sessions"].update_one(
+            {"session_id": results_session_id},
             {
-                "status": "failed",
-                "total_candidates": len(candidates),
-                "enriched_count": 0,
-                "progress_percentage": 0,
-                "message": f"Enrichment failed: {str(e)}"
-            },
-            expire_seconds=3600
+                "$set": {
+                    "status": "failed",
+                    "error": str(e),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+            }
         )
+
+async def _rank_manual_import_candidates(
+    session_id: str,
+    username: str,
+    ideal_profile: Dict,
+    conversation_manager: ConversationManager,
+    mongodb: MongoDB
+):
+    """Rank manual import candidates."""
+    try:
+        session = await mongodb.main_db["conversation_sessions"].find_one(
+            {"session_id": session_id}
+        )
+        
+        if not session:
+            return
+        
+        candidates = session.get("search_results", [])
+        
+        # Rank using same logic as Donna
+        ranked = await _rank_candidates_with_llm(
+            candidates=candidates,
+            ideal_profile=ideal_profile,
+            conversation_manager=conversation_manager,
+            username=username
+        )
+        
+        # Update with ranked results
+        await mongodb.main_db["conversation_sessions"].update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "search_results": ranked,
+                    "sample_candidates": ranked,
+                    "status": "ready",
+                    "ranked_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        
+        logger.info(f"✅ Ranked {len(ranked)} manual import candidates")
+        
+    except Exception as e:
+        logger.error(f"❌ Manual import ranking failed: {e}")
+
+async def _rank_candidates_with_llm(
+    candidates: List[Dict],
+    ideal_profile: Dict,
+    conversation_manager: ConversationManager,
+    username: str
+) -> List[Dict]:
+    """
+    Use LLM to rank candidates based on fit.
+    
+    Returns candidates sorted by relevance with match scores.
+    """
+    
+    import json
+
+    # Prepare candidate summaries for LLM
+    candidate_summaries = []
+    for idx, c in enumerate(candidates):
+        candidate_info = c.get("candidate", {})
+        
+        summary = {
+            "id": idx,
+            "name": f"{candidate_info.get('first_name', '')} {candidate_info.get('last_name', '')}".strip(),
+            "title": candidate_info.get("title", "Unknown"),
+            "location": candidate_info.get("location", "Unknown"),
+            "company": candidate_info.get("current_company", "Unknown"),
+            "experience_years": candidate_info.get("experience_years", 0),
+            "skills": candidate_info.get("expertise", "").split(",")[:10] if candidate_info.get("expertise") else [],
+            "industry": candidate_info.get("current_industry", "Unknown")
+        }
+        candidate_summaries.append(summary)
+    
+    # Build prompt for LLM
+    system_prompt = """You are an expert recruiter analyzing candidate fit for a job position.
+
+Your task is to rank candidates from best to worst based on how well they match the ideal profile.
+
+Consider:
+1. **Skills Match**: Do they have the required technical skills?
+2. **Experience Level**: Does their seniority match the requirement?
+3. **Industry Fit**: Do they have relevant industry experience?
+4. **Location**: Are they in preferred locations?
+
+For each candidate, provide:
+- overall_match_score: 0-100 (higher = better fit)
+- match_label: "Excellent Match" | "Great Match" | "Good Match" | "Fair Match" | "Below Target"
+- strengths: List of 2-3 key strengths
+- concerns: List of 1-2 concerns (if any)
+- summary: 1-2 sentence explanation of fit
+
+Return JSON array sorted by match score (highest first):
+[
+  {
+    "id": 0,
+    "overall_match_score": 85,
+    "match_label": "Excellent Match",
+    "summary": "Strong skills in React and Node.js with 7+ years experience",
+    "strengths": ["Expert in React", "7 years experience", "SaaS background"],
+    "concerns": ["Location not ideal"]
+  },
+  ...
+]
+
+Be objective and specific. Only give high scores (80+) to truly excellent matches."""
+
+    user_prompt = f"""IDEAL PROFILE:
+Role: {ideal_profile.get('role_title', 'Unknown')}
+Required Skills: {', '.join(ideal_profile.get('must_have_skills', []))}
+Preferred Skills: {', '.join(ideal_profile.get('nice_to_have_skills', []))}
+Seniority: {ideal_profile.get('seniority', 'Not specified')}
+Experience: {ideal_profile.get('experience_years', 'Not specified')}
+Industries: {', '.join(ideal_profile.get('industries', []))}
+Locations: {', '.join(ideal_profile.get('locations', []))}
+
+CANDIDATES TO RANK:
+{json.dumps(candidate_summaries, indent=2)}
+
+Rank these candidates from best to worst fit. Return ONLY the JSON array."""
+
+    try:
+        model_config = await conversation_manager.model_config.get_user_config(username)
+        
+        response = await conversation_manager.model_config.call_model(
+            model_config=model_config,
+            model_purpose="json_extraction",  # Use JSON model
+            system_prompt=system_prompt,
+            user_message=user_prompt,
+            temperature=0.3,
+            username=username
+        )
+        
+        # Parse JSON response
+        response_text = response.strip()
+        
+        # Handle markdown code blocks
+        if "```" in response_text:
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+            response_text = response_text.split("```")[0]
+        
+        rankings = json.loads(response_text)
+        
+        # Apply rankings to original candidates
+        ranked_candidates = []
+        for rank in rankings:
+            candidate_idx = rank["id"]
+            if candidate_idx < len(candidates):
+                candidate = candidates[candidate_idx].copy()
+                
+                # Add match analysis
+                candidate["match_analysis"] = {
+                    "overall_match_score": rank["overall_match_score"],
+                    "match_label": rank["match_label"],
+                    "summary": rank["summary"],
+                    "strengths": [{"strength": s} for s in rank.get("strengths", [])],
+                    "concerns": [{"concern": c} for c in rank.get("concerns", [])]
+                }
+                
+                # Backward compatibility
+                candidate["match_score"] = rank["overall_match_score"]
+                candidate["score"] = rank["overall_match_score"]
+                
+                ranked_candidates.append(candidate)
+        
+        logger.info(f"✅ LLM ranked {len(ranked_candidates)} candidates")
+        return ranked_candidates
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ Failed to parse LLM ranking response: {e}")
+        logger.error(f"   Raw response: {response[:500]}")
+        
+        # Fallback: return candidates with default scores
+        return [
+            {
+                **c,
+                "match_score": 50,
+                "match_analysis": {
+                    "overall_match_score": 50,
+                    "match_label": "Needs Review",
+                    "summary": "Unable to rank automatically. Please review manually.",
+                    "strengths": [],
+                    "concerns": []
+                }
+            }
+            for c in candidates
+        ]
+        
+    except Exception as e:
+        logger.error(f"❌ LLM ranking failed: {e}", exc_info=True)
+        # Return original candidates unchanged
+        return candidates
 
 # ================================================================
 # UPLOAD JD (ALTERNATIVE ENDPOINT)
@@ -507,7 +677,7 @@ async def generate_jd(
             username=username
         )
         
-        # Store in Redis for refinement tracking
+        # Store in Redis for re`fin`ement tracking
         await conversation_manager.redis.store_session_data(
             session_id,
             "jd_generation",
@@ -778,90 +948,6 @@ async def reset_conversation(
         logger.error(f"Error resetting conversation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
-# ================================================================
-# ENRICH SINGLE CANDIDATE (Called when user accepts)
-# ================================================================
-
-@router.post("/{session_id}/enrich-candidate")
-async def enrich_candidate(
-    session_id: str,
-    request: dict,  # {candidate_id: str, candidate: dict}
-    background_tasks: BackgroundTasks,
-    username: str = Depends(get_current_username),
-    conversation_manager: ConversationManager = Depends(get_conversation_manager),
-    parallel_service: ParallelEnrichmentService = Depends(get_parallel_enrichment_service)
-):
-    """
-    Enrich a single candidate when user accepts them.
-    
-    Runs in background and returns immediately.
-    Poll /enrichment-status/{candidate_id} for progress.
-    """
-    try:
-        # Load conversation state for ideal profile
-        state = await conversation_manager._load_state(session_id)
-        if not state:
-            raise HTTPException(status_code=404, detail="Session not found")
-        
-        candidate = request.get("candidate")
-        candidate_id = request.get("candidate_id")
-        
-        if not candidate:
-            raise HTTPException(status_code=400, detail="Candidate data required")
-        
-        logger.info(f"🔄 Queuing enrichment for candidate {candidate_id}")
-        
-        # Add to background tasks
-        background_tasks.add_task(
-            parallel_service.enrich_single_candidate,
-            session_id=session_id,
-            candidate=candidate,
-            ideal_profile=state.ideal_profile.dict(),
-            enrichment_types=["salary", "response_likelihood", "skills", "availability"]
-        )
-        
-        return {
-            "status": "queued",
-            "candidate_id": candidate_id,
-            "message": "Enrichment started in background"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error queueing enrichment: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ================================================================
-# GET ENRICHMENT STATUS
-# ================================================================
-
-@router.get("/{session_id}/enrichment-status")
-async def get_enrichment_status(
-    session_id: str,
-    candidate_id: Optional[str] = None,
-    username: str = Depends(get_current_username),
-    parallel_service: ParallelEnrichmentService = Depends(get_parallel_enrichment_service)
-):
-    """
-    Get enrichment progress.
-    
-    If candidate_id provided, returns status for that candidate.
-    Otherwise returns overall session progress.
-    """
-    try:
-        if candidate_id:
-            result = await parallel_service.get_candidate_enrichment(
-                session_id, candidate_id
-            )
-            return result or {"status": "not_found"}
-        else:
-            return await parallel_service.get_enrichment_progress(session_id)
-            
-    except Exception as e:
-        logger.error(f"Error getting enrichment status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ================================================================
@@ -940,92 +1026,54 @@ async def process_rejection_feedback(
 # BATCH ENRICH ACCEPTED CANDIDATES
 # ================================================================
 
+
 @router.post("/{session_id}/enrich-accepted")
 async def enrich_accepted_candidates(
     session_id: str,
-    request: dict,  # {accepted_candidates: List[dict]}
+    request: dict,
     background_tasks: BackgroundTasks,
     username: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
-    parallel_service: ParallelEnrichmentService = Depends(get_parallel_enrichment_service),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
-    """
-    Start deep analysis of accepted candidates (capped at 5).
-    
-    This triggers comprehensive enrichment:
-    - Match analysis with strengths/concerns
-    - Salary estimation with career progression
-    - Skills validation with evidence
-    - Response likelihood with factors
-    - Notice period estimation
-    """
     try:
         state = await conversation_manager._load_state(session_id)
         if not state:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        accepted_candidates = request.get("accepted_candidates", [])
+        accepted = request.get("accepted_candidates", [])
+        candidates = [a.get("candidate") for a in accepted if a.get("candidate")]
         
-        if not accepted_candidates:
-            raise HTTPException(status_code=400, detail="No candidates to analyze")
-        
-        # Cap at 5 candidates
-        candidates_to_enrich = accepted_candidates[:5]
-        
-        logger.info(f"🚀 Starting deep analysis for {len(candidates_to_enrich)} candidates (session: {session_id})")
-        
-        # Initialize progress immediately so frontend can start polling
-        await parallel_service.redis.store_session_data(
-            session_id,
-            "enrichment_progress",
-            {
-                "status": "starting",
-                "phase": "initializing",
-                "total": len(candidates_to_enrich),
-                "completed": 0,
-                "failed": 0,
-                "progress_percentage": 0,
-                "current_candidate": "",
-                "message": f"Preparing deep analysis for {len(candidates_to_enrich)} candidates...",
-                "candidates": {},
-                "started_at": datetime.utcnow().isoformat()
-            },
-            expire_seconds=3600
-        )
-        
-        # Inject MongoDB into parallel service if not already set
-        if not parallel_service.mongodb:
-            parallel_service.mongodb = mongodb
-        
-        # Start enrichment in background
-        background_tasks.add_task(
-            parallel_service.enrich_candidates_parallel,
-            session_id=session_id,
-            candidates=candidates_to_enrich,
+        # Trigger ranking
+        await conversation_manager.rank_and_save_candidates(
+            session_id=session_id,  # Same session
+            username=username,
             ideal_profile=state.ideal_profile.dict(),
-            username=username
+            candidates=candidates,
+            mongodb=mongodb
         )
         
         return {
             "status": "started",
-            "session_id": session_id,
-            "total_candidates": len(candidates_to_enrich),
-            "message": f"Deep analysis started for {len(candidates_to_enrich)} candidates. This may take 1-2 minutes."
+            "session_id": session_id,  # Return original session_id
+            "total_candidates": len(candidates),
+            "message": "Ranking candidates..."
         }
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error starting batch enrichment: {e}", exc_info=True)
+        logger.error(f"Error starting ranking: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+# ================================================================
+# Manual Import
+# ================================================================
+
 @router.post("/manual-import")
 async def create_manual_import(
     request: ManualImportRequest,
-    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_username),
-    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    mongodb: MongoDB = Depends(get_mongodb),
+    jd_parser: JDParser = Depends(get_jd_parser)
 ):
     """
     Create a conversation session from manual candidate import.
@@ -1037,32 +1085,52 @@ async def create_manual_import(
     4. Optionally scrapes LinkedIn profiles in background
     """
     try:
+        # Parse JD if only jd_text provided
+        ideal_profile = request.ideal_profile
+        if request.jd_text and not ideal_profile:
+            parsed_jd = await jd_parser.parse_jd_text(
+                jd_text=request.jd_text,
+                username=current_user
+            )
+            ideal_profile = parsed_jd  # Now we have structured data
+            
         result = await conversation_manager.create_manual_import(
-            username=current_user["username"],
+            username=current_user,
             jd_text=request.jd_text,
-            ideal_profile=request.ideal_profile,
+            ideal_profile=ideal_profile,
             candidates=[c.model_dump() for c in request.candidates],
             pipeline_name=request.pipeline_name
         )
         
+        session_id = result["session_id"]
+        print('result',result,ideal_profile)
         # Background scrape if enabled
         if request.auto_scrape:
-            background_tasks.add_task(
-                conversation_manager.scrape_manual_candidates,
-                result["session_id"]
-            )
+            logger.info(f"Waiting for candidate lookup for session {result['session_id']}...")
+            await conversation_manager.scrape_manual_candidates(result["session_id"])
+            if ideal_profile: 
+                await _rank_manual_import_candidates(                                    session_id=session_id,
+                    username=current_user,
+                    ideal_profile=ideal_profile,
+                    conversation_manager=conversation_manager,
+                    mongodb=mongodb)
+        
         
         return {
             "success": True,
             "session_id": result["session_id"],
             "candidates_count": len(request.candidates),
             "message": f"Created import with {len(request.candidates)} candidates",
-            "status": "pending_scrape" if request.auto_scrape else "ready"
+            "status": "ready"
         }
         
     except Exception as e:
         logger.error(f"Manual import failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ================================================================
+# Results page api's
+# ================================================================
 
 
 @router.post("/{session_id}/create-pipeline")
@@ -1084,20 +1152,27 @@ async def create_pipeline_from_session(
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        if session.get("username") != current_user["username"]:
+        if session.get("username") != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get candidates from session
         all_candidates = session.get("search_results", []) or session.get("sample_candidates", [])
         
         # Filter to shortlisted candidates
-        shortlisted = [
-            c for c in all_candidates 
-            if c.get("candidate_id") in request.shortlisted_candidate_ids or
-               c.get("_id") in request.shortlisted_candidate_ids or
-               str(c.get("_id")) in request.shortlisted_candidate_ids
-        ]
-        
+        shortlisted = []
+        for c in all_candidates:
+            # Handle both nested (Donna) and flat (manual) structures
+            candidate_data = c.get("candidate", c)
+            
+            candidate_id = str(
+                candidate_data.get("candidate_id") or 
+                candidate_data.get("_id") or 
+                c.get("candidate_id") or  # Check wrapper too
+                ""
+            )
+            
+            if candidate_id in request.shortlisted_candidate_ids:
+                shortlisted.append(c)
         if not shortlisted:
             raise HTTPException(status_code=400, detail="No valid candidates selected")
         
@@ -1106,7 +1181,7 @@ async def create_pipeline_from_session(
         
         # Create pipeline
         pipeline = await pipeline_service.create_pipeline_from_search(
-            username=current_user["username"],
+            username=current_user,
             conversation_session_id=session_id,
             search_session_id=session_id,
             job_data=job_data,
@@ -1149,7 +1224,7 @@ async def get_session_results(
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        if session.get("username") != current_user["username"]:
+        if session.get("username") != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get candidates from appropriate field
@@ -1159,26 +1234,44 @@ async def get_session_results(
             session.get("candidates") or 
             []
         )
+        # Get selected IDs
+        selected_ids = set(session.get("selected_candidate_ids", []))
         
-        # Normalize candidate format
         normalized = []
         for c in candidates:
+            # Handle nested structure (Donna) vs flat structure (manual import)
+            candidate_data = c.get("candidate", c)  # Extract nested data or use as-is
+            
+            candidate_id = str(
+                candidate_data.get("candidate_id") or 
+                candidate_data.get("_id") or 
+                c.get("candidate_id") or  # Check wrapper too
+                ""
+            )
+            
             normalized.append({
-                "candidate_id": str(c.get("candidate_id") or c.get("_id") or c.get("linkedin_id", "")),
-                "linkedin_url": c.get("linkedin_url", ""),
-                "name": c.get("name") or c.get("full_name") or f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() or "Unknown",
-                "headline": c.get("headline") or c.get("title"),
-                "current_company": c.get("current_company"),
-                "current_title": c.get("current_title") or c.get("title"),
-                "location": c.get("location"),
-                "experience_years": c.get("experience_years") or c.get("total_experience_years"),
-                "skills": c.get("skills", [])[:15],
-                "match_score": c.get("match_score") or c.get("score"),
-                "match_label": c.get("match_label"),
-                "profile_picture_url": c.get("profile_picture_url"),
-                "manual_data": c.get("manual_data"),
+                "candidate_id": candidate_id,
+                "linkedin_url": candidate_data.get("linkedin_url", ""),
+                "name": (
+                    candidate_data.get("name") or 
+                    candidate_data.get("full_name") or 
+                    f"{candidate_data.get('first_name', '')} {candidate_data.get('last_name', '')}".strip() or 
+                    "Unknown"
+                ),
+                "headline": candidate_data.get("headline") or candidate_data.get("title"),
+                "current_company": candidate_data.get("current_company"),
+                "current_title": candidate_data.get("current_title") or candidate_data.get("title"),
+                "location": candidate_data.get("location"),
+                "experience_years": candidate_data.get("experience_years") or candidate_data.get("total_experience_years"),
+                "skills": candidate_data.get("skills", [])[:15],
+                "match_score": c.get("match_score") or c.get("score"),  # Score on wrapper
+                "match_label": c.get("match_label"),  # Label on wrapper
+                "match_analysis": c.get("match_analysis"),
+                "profile_picture_url": candidate_data.get("profile_picture_url"),
+                "is_selected": candidate_id in selected_ids,
+                "manual_data": candidate_data.get("manual_data"),
                 "source": c.get("source", "donna_search"),
-                "profile_id": str(c.get("_id", "")),
+                "profile_id": str(candidate_data.get("_id", "")),
             })
         
         return {
@@ -1187,6 +1280,7 @@ async def get_session_results(
             "source": session.get("source", "donna_search"),
             "status": session.get("status", "ready"),
             "candidates": normalized,
+            "selected_candidate_ids": list(selected_ids),
             "total_candidates": len(normalized),
             "ideal_profile": session.get("ideal_profile", {}),
             "pipeline_id": session.get("pipeline_id"),
@@ -1200,42 +1294,39 @@ async def get_session_results(
         logger.error(f"Get results failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ================================================================
-# GET ENRICHMENT STATUS 
-# ================================================================
-
-@router.get("/{session_id}/enrichment-status")
-async def get_enrichment_status(
+@router.post("/{session_id}/select-candidates")
+async def select_candidates(
     session_id: str,
-    username: str = Depends(get_current_username),
-    parallel_service: ParallelEnrichmentService = Depends(get_parallel_enrichment_service)
+    request: dict,  # {candidate_ids: List[str], selected: bool}
+    current_user: dict = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
 ):
-    """
-    Get current enrichment progress.
-    
-    Returns:
-        - status: starting | in_progress | completed | failed
-        - phase: initializing | deep_analysis | complete
-        - total: total candidates being enriched
-        - completed: number completed
-        - failed: number failed
-        - progress_percentage: 0-100
-        - current_candidate: name of candidate currently being analyzed
-        - message: human-readable status message
-        - candidates: dict of candidate statuses
-    """
+    """Mark candidates as selected/unselected."""
     try:
-        progress = await parallel_service.get_enrichment_progress(session_id)
-        return progress
+        result = await conversation_manager.mark_candidates_selected(
+            session_id=session_id,
+            candidate_ids=request.get("candidate_ids", []),
+            selected=request.get("selected", True)
+        )
+        
+        return result
         
     except Exception as e:
-        logger.error(f"Error getting enrichment status: {e}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "total": 0,
-            "completed": 0,
-            "failed": 0,
-            "progress_percentage": 0
-        }
+        logger.error(f"Selection update failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{session_id}/selected")
+async def get_selected_candidates(
+    session_id: str,
+    current_user: dict = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """Get selected candidate IDs."""
+    try:
+        selected_ids = await conversation_manager.get_selected_candidates(session_id)
+        return {"selected_candidate_ids": selected_ids}
+        
+    except Exception as e:
+        logger.error(f"Get selected failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -96,6 +96,9 @@ class Settings:
     # Batch size for parallel scoring
     SCORING_BATCH_SIZE: int = int(os.getenv("SCORING_BATCH_SIZE", "50"))
     
+    # hatch
+    HATCH_API_KEY: str = os.getenv("HATCH_API_KEY", "")
+    
     # Email Configuration
     EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "mock")
     SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")

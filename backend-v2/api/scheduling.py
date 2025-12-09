@@ -6,19 +6,15 @@ Public API endpoints for candidate interview scheduling.
 
 These endpoints are accessed by candidates via scheduling links in emails.
 No authentication required - uses scheduling tokens.
-
-Author: NeuraLeap Engineering
-Version: 2.0
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
-
 from core.dependencies import get_pipeline_service
 from core.logging_config import get_logger
+from fastapi import APIRouter, Depends, HTTPException, Query
 from models.scheduling_models import RescheduleReason
+from pydantic import BaseModel, Field
 from services.pipeline_service import PipelineService
 
 logger = get_logger(__name__)

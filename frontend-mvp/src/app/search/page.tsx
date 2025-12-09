@@ -48,7 +48,7 @@ import { ManualImportPanel } from '@/components/search/ManualImportPanel';
 
 export default function SearchPage() {
   const router = useRouter();
-  const { token } = useAuth();
+  const { token, isLoading: authLoading } = useAuth();
   const { setSessionId, setIdealProfile, setIsSearching, setSearchError } = useSearch();
 
   // --- Global Page Mode State ---
@@ -84,6 +84,14 @@ export default function SearchPage() {
   const cardRef = useRef<HTMLDivElement>(null);
 
   const [useIntelligentSearch, setUseIntelligentSearch] = useState(true);
+
+  useEffect(() => {
+    // If we are done loading auth status, and there is no token...
+    if (!authLoading && !token) {
+      router.push("/login");
+    }
+  }, [token, router, authLoading]);
+
 
   // Validate input
   useEffect(() => {
@@ -135,6 +143,8 @@ export default function SearchPage() {
     }
   };
 
+
+
   const handleSearch = async () => {
     if (!isValidInput) {
       setError(
@@ -154,6 +164,13 @@ export default function SearchPage() {
     setError(null);
 
     try {
+      // 1. Construct a context string from filters
+      let filterContext = "";
+      if (filters.locationEnabled && filters.location) filterContext += `\nLocation: ${filters.location}`;
+      if (filters.seniority) filterContext += `\nSeniority: ${filters.seniority}`;
+      if (filters.industry) filterContext += `\nIndustry: ${filters.industry}`;
+      if (useIntelligentSearch) filterContext += `\n[System: Use Intelligent Multi-agent Search]`;
+
       if (searchMode === "jd" && jdFile) {
         const reader = new FileReader();
         reader.readAsDataURL(jdFile);
@@ -162,15 +179,21 @@ export default function SearchPage() {
         });
         const base64 = (reader.result as string).split(",")[1];
 
+        // 2. Pass filters as initial_message
         const response = await conversationApi.startConversation(token, {
           jd_file_content: base64,
           jd_file_name: jdFile.name,
+          initial_message: filterContext.trim()
         });
 
         router.push(`/conversation?session=${response.session_id}`);
       } else {
         setOriginalQuery(query);
-        const jdResponse = await conversationApi.generateJD(token, query);
+
+        // 3. Append filters to query for better JD generation
+        const enhancedQuery = `${query} ${filterContext}`;
+
+        const jdResponse = await conversationApi.generateJD(token, enhancedQuery);
         setGeneratedJD(jdResponse.jd_text);
         setJdSessionId(jdResponse.session_id);
         setJdGenerationMode(true);
@@ -1148,7 +1171,7 @@ export default function SearchPage() {
               )}
             </motion.div>
           ) : (
-            // --- NEW MANUAL IMPORT PANEL ---
+            // --- MANUAL IMPORT PANEL ---
             <motion.div
               key="manual-mode"
               initial={{ opacity: 0, x: 20 }}

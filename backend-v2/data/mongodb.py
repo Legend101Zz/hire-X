@@ -90,7 +90,8 @@ class MongoDB:
             self.users_collection = self.main_db["users"]
             self.prompts_collection = self.main_db["prompts"]
             self.logs_collection = self.main_db["user_logs"]
-            self.sessions_collection = self.main_db["sessions"]
+            self.sessions_collection = self.main_db["sessions"]  # Keep for generic sessions depreciated
+            self.conversation_sessions_collection = self.main_db["conversation_sessions"]  # For Donna and manual import in conversation manager
             self.user_history_collection = self.main_db["user_history"]
             self.enriched_results_collection = self.main_db["enriched_results"]
             

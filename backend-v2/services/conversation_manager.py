@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import settings
 from core.logging_config import get_logger
+from data.mongodb import MongoDB
 from data.redis_cache import RedisCache
 from models.conversation_models import (ConversationMessage, ConversationStage,
                                         ConversationState, IdealProfileCard,
@@ -49,14 +50,22 @@ class ConversationManager:
         self,
         redis_cache: RedisCache,
         model_config_manager: ModelConfigManager,
-        funnel_search: FunnelSearchService 
+        funnel_search: FunnelSearchService ,
+        mongodb: MongoDB,
     ):
         self.redis = redis_cache
         self.model_config = model_config_manager
         self.funnel_search = funnel_search 
+        self.mongodb = mongodb
         self.prompts = ConversationPrompts()
         
-        logger.info("✅ ConversationManager initialized with contextual LLM")
+        # Sessions collection
+        if mongodb:
+            self.conversation_sessions = mongodb.conversation_sessions_collection
+        else:
+            raise Exception("Need MongoDB")
+        
+        logger.info("✅ ConversationManager initialized")
     
     
     # ================================================================
@@ -704,52 +713,62 @@ Or if you have a job description, you can paste it and I'll extract the key requ
         
         return donna_reply, state.ideal_profile, sample_profile, state.stage
     
+    async def get_session(self, session_id: str) -> Optional[Dict]:
+        """Get session document from MongoDB."""
+        if self.conversation_sessions is None:
+            return None
+        return await self.conversation_sessions.find_one({"session_id": session_id})
+    
+    # ================================================================
+    # MANUAL IMPORT METHODS
+    # ================================================================
     
     async def create_manual_import(
         self,
         username: str,
         jd_text: Optional[str],
-        ideal_profile: Optional[dict],
-        candidates: List[dict],
-        pipeline_name: Optional[str]
-    ) -> dict:
+        ideal_profile: Optional[Dict],
+        candidates: List[Dict],
+        pipeline_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Create a conversation session from manual candidate import.
+        Create a search session from manually imported candidates.
         
-        This creates a session similar to what Donna conversation creates,
-        but populated directly from user-provided data.
+        Flow:
+        1. User provides JD text or ideal profile
+        2. User provides list of candidates (LinkedIn URL + extra info)
+        3. We create a session that goes directly to results page
+        4. User can shortlist and create pipeline from there
         """
-        session_id = f"manual_{uuid.uuid4().hex[:12]}"
+        session_id = f"manual-{uuid.uuid4().hex[:12]}"
         
-        # Parse JD if provided (no ideal profile)
+        logger.info(f"Creating manual import session: {session_id}")
+        logger.info(f"  Candidates provided: {len(candidates)}")
+        
+        # Parse JD if provided to get job requirements
         job_data = ideal_profile or {}
         if jd_text and not ideal_profile:
-            if self.jd_parser:
-                try:
-                    parsed = await self.jd_parser.parse_jd_text(jd_text)
-                    job_data = parsed
-                except Exception as e:
-                    logger.warning(f"JD parsing failed: {e}")
-            job_data["jd_text"] = jd_text
+            # You can use JD parser here if needed
+            job_data = {
+                "jd_text": jd_text,
+                "role_title": "Imported Position",
+            }
         
-        # Convert candidates to session format
+        # Create candidate entries
         sample_candidates = []
-        for i, c in enumerate(candidates):
-            linkedin_url = c.get("linkedin_url", "").strip()
+        for idx, c in enumerate(candidates):
+            candidate_id = f"manual-{uuid.uuid4().hex[:8]}"
             
             candidate_entry = {
-                "candidate_id": f"cand_{uuid.uuid4().hex[:8]}",
-                "linkedin_url": linkedin_url,
-                "linkedin_id": self._extract_linkedin_id(linkedin_url),
-                "name": "Pending...",
-                "first_name": None,
-                "last_name": None,
+                "candidate_id": candidate_id,
+                "linkedin_url": c.get("linkedin_url", ""),
+                "name": c.get("name", f"Candidate {idx + 1}"),
                 "headline": None,
-                "title": None,
                 "current_company": None,
-                "location": None,
-                "skills": [],
+                "current_title": None,
+                "location": c.get("preferred_location"),
                 "experience_years": None,
+                "skills": [],
                 "profile_picture_url": None,
                 "match_score": None,
                 "manual_data": {
@@ -761,13 +780,14 @@ Or if you have a job description, you can paste it and I'll extract the key requ
                     "has_resume": bool(c.get("resume_base64")),
                 },
                 "source": "manual_import",
+                "is_preview": True,
                 "added_at": datetime.utcnow().isoformat(),
             }
             
             # Save resume if provided
             if c.get("resume_base64"):
                 resume_path = await self._save_resume(
-                    candidate_entry["candidate_id"],
+                    candidate_id,
                     c["resume_base64"],
                     c.get("resume_filename", "resume.pdf")
                 )
@@ -780,125 +800,176 @@ Or if you have a job description, you can paste it and I'll extract the key requ
             "session_id": session_id,
             "username": username,
             "source": "manual_import",
-            "status": "pending_scrape",
+            "status": "pending_scrape",  # Will scrape LinkedIn data
             "stage": "results",
             "ideal_profile": job_data,
             "jd_text": jd_text,
             "sample_candidates": sample_candidates,
-            "search_results": sample_candidates,  # For compatibility
+            "search_results": sample_candidates,
             "total_candidates": len(sample_candidates),
             "pipeline_name": pipeline_name,
             "pipeline_id": None,
-            "pipeline_created_at": None,
+            "selected_candidate_ids": [],
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
-            "conversation_history": [],
             "is_manual_import": True,
         }
         
         # Save to database
-        await self.sessions_collection.insert_one(session_doc)
+        if self.conversation_sessions is not None:
+            await self.conversation_sessions.insert_one(session_doc)
         
-        logger.info(f"✅ Created manual import session {session_id} with {len(sample_candidates)} candidates")
+        logger.info(f"Created manual import session {session_id} with {len(sample_candidates)} candidates")
         
         return {
             "session_id": session_id,
             "candidates_count": len(sample_candidates)
         }
-    
-    async def scrape_manual_candidates(self, session_id: str):
-        """
-        Background task to scrape LinkedIn profiles for manual imports.
         
-        Updates each candidate with:
-        - Name, headline, current company
-        - Skills, experience
-        - Profile picture
-        - Match score (if ideal_profile available)
-        """
-        logger.info(f"🔍 Starting scrape for manual import {session_id}")
-        
-        session = await self.get_session(session_id)
-        if not session:
-            logger.error(f"Session not found: {session_id}")
-            return
-        
-        candidates = session.get("sample_candidates", [])
-        ideal_profile = session.get("ideal_profile", {})
-        updated_candidates = []
-        
-        for candidate in candidates:
-            linkedin_url = candidate.get("linkedin_url")
-            if not linkedin_url:
-                updated_candidates.append(candidate)
-                continue
+    def _normalize_linkedin_url_for_db(self, url: str) -> List[str]:
+            """
+            Converts full URL to the relative path format stored in DB.
+            Returns a list of potential formats to try against the index.
+            Example: 'https://www.linkedin.com/in/abeer-rizvi' -> ['/in/abeer-rizvi/', '/in/abeer-rizvi']
+            """
+            if not url:
+                return []
+                
+            # 1. Extract the username part
+            import re
+
+            # Matches /in/username and captures username
+            match = re.search(r'/in/([^/?]+)', url, re.IGNORECASE)
             
+            if not match:
+                # Handle case where user just provides "abeer-rizvi"
+                if "linkedin.com" not in url and "/" not in url:
+                    username = url.strip()
+                else:
+                    return []
+            else:
+                username = match.group(1)
+                
+            # 2. Return formats that match your DB storage patterns
+            # Your DB seems to store trailing slashes: '/in/--abeerrizvi/'
+            return [
+                f"/in/{username}/",  # Most likely match based on your sample
+                f"/in/{username}"    # Fallback
+            ]
+
+    async def _lookup_profile_in_db(self, linkedin_url: str) -> Optional[dict]:
+            """
+            Ultra-fast lookup using the 'idx_linkedin_url' index.
+            Zero regex, zero collection scans.
+            """
             try:
-                # Step 1: Try to find in profiles database
-                profile = await self._lookup_profile_in_db(linkedin_url)
+                potential_keys = self._normalize_linkedin_url_for_db(linkedin_url)
                 
-                # Step 2: Scrape if not found (using Brightdata or similar)
-                if not profile and self.linkedin_scraper:
-                    try:
-                        profile = await self.linkedin_scraper.scrape_profile(linkedin_url)
-                    except Exception as e:
-                        logger.warning(f"Scrape failed for {linkedin_url}: {e}")
+                if not potential_keys:
+                    return None
                 
-                # Step 3: Update candidate with profile data
-                if profile:
-                    candidate["name"] = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip() or candidate.get("name", "Unknown")
-                    candidate["first_name"] = profile.get("first_name")
-                    candidate["last_name"] = profile.get("last_name")
-                    candidate["headline"] = profile.get("headline") or profile.get("title")
-                    candidate["title"] = profile.get("title") or profile.get("headline")
-                    candidate["current_company"] = profile.get("current_company")
-                    candidate["location"] = profile.get("location")
-                    candidate["skills"] = profile.get("skills", [])[:15]
-                    candidate["experience_years"] = profile.get("experience_years") or profile.get("total_experience_years")
-                    candidate["profile_picture_url"] = profile.get("profile_picture_url")
-                    candidate["profile_id"] = str(profile.get("_id", ""))
-                    candidate["scraped_at"] = datetime.utcnow().isoformat()
-                    
-                    # Calculate match score if we have ideal profile
-                    if ideal_profile and self.scoring_service:
-                        try:
-                            score_result = await self.scoring_service.calculate_match_score(
-                                candidate=profile,
-                                ideal_profile=ideal_profile
-                            )
-                            candidate["match_score"] = score_result.get("overall_score") or score_result.get("score")
-                            candidate["match_label"] = self._score_to_label(candidate["match_score"])
-                        except Exception as e:
-                            logger.warning(f"Scoring failed: {e}")
+                # Try to find exactly one match using the normalized keys
+                # $in operator works well with indexes
+                profile = await self.mongodb.profiles_collection.find_one({
+                    "linkedin_url": {"$in": potential_keys}
+                })
                 
-                updated_candidates.append(candidate)
-                
+                return profile
             except Exception as e:
-                logger.error(f"Failed to process {linkedin_url}: {e}")
-                candidate["scrape_error"] = str(e)
-                updated_candidates.append(candidate)
+                logger.error(f"Profile lookup failed: {e}")
+                return None
+
+    async def scrape_manual_candidates(self, session_id: str):
+            """
+            Enrich candidates using local 56M profile database.
+            """
+            logger.info(f"DB lookup for manual import {session_id}")
             
-            # Rate limiting
-            await asyncio.sleep(2)
-        
-        # Update session with scraped data
-        await self.sessions_collection.update_one(
-            {"session_id": session_id},
-            {
-                "$set": {
-                    "sample_candidates": updated_candidates,
-                    "search_results": updated_candidates,
-                    "status": "ready",
-                    "updated_at": datetime.utcnow().isoformat()
+            session = await self.get_session(session_id)
+            if not session:
+                logger.error(f"Session not found: {session_id}")
+                return
+            
+            candidates = session.get("sample_candidates", [])
+            updated_candidates = []
+            db_hit_count = 0
+            
+            for candidate in candidates:
+                linkedin_url = candidate.get("linkedin_url")
+                
+                # Skip if no URL
+                if not linkedin_url:
+                    updated_candidates.append(candidate)
+                    continue
+                
+                try:
+                    profile = await self._lookup_profile_in_db(linkedin_url)
+                    
+                    if profile:
+                        db_hit_count += 1
+                        
+                        # Parse 'expertise' string into a list (DB format is comma-separated)
+                        db_skills = []
+                        if "expertise" in profile and isinstance(profile["expertise"], str):
+                            db_skills = [s.strip() for s in profile["expertise"].split(",") if s.strip() != 'NA']
+                        
+                        # Map DB fields to Application fields
+                        candidate.update({
+                            "name": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
+                            "first_name": profile.get("first_name"),
+                            "last_name": profile.get("last_name"),
+                            
+                            # DB has 'title', App uses 'headline'/'title'
+                            "headline": profile.get("title", "NA"), 
+                            "title": profile.get("title", "NA"),
+                            
+                            # Parsing location
+                            "location": profile.get("location") if profile.get("location") != 'NA' else candidate.get("preferred_location"),
+                            
+                            "skills": db_skills[:15], # Top 15 skills
+                            
+                            # Handle images (DB has 'profile_picture': 'NA')
+                            "profile_picture_url": profile.get("profile_picture") if profile.get("profile_picture") != 'NA' else None,
+                            
+                            # Education mapping (if useful for you)
+                            "education": profile.get("education", []),
+                            
+                            "profile_id": str(profile.get("_id", "")),
+                            "data_source": "database",
+                            "needs_enrichment": False
+                        })
+                        logger.info(f"Found in DB: {candidate['name']}")
+                    else:
+                        logger.info(f"Not in DB: {linkedin_url}")
+                        candidate["data_source"] = "manual_only"
+                        candidate["needs_enrichment"] = True
+                    
+                    updated_candidates.append(candidate)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing {linkedin_url}: {e}")
+                    candidate["lookup_error"] = str(e)
+                    candidate["data_source"] = "manual_only"
+                    updated_candidates.append(candidate)
+            
+            # Batch update the session
+            await self.conversation_sessions.update_one(
+                {"session_id": session_id},
+                {
+                    "$set": {
+                        "sample_candidates": updated_candidates,
+                        "search_results": updated_candidates,
+                        "status": "ready",
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
                 }
-            }
-        )
+            )
+            
+            logger.info(f"✅ Completed: {db_hit_count}/{len(updated_candidates)} found in DB")
         
-        logger.info(f"✅ Completed scrape for {session_id}: {len(updated_candidates)} candidates")
-    
     async def link_session_to_pipeline(self, session_id: str, pipeline_id: str):
         """Link a conversation session to a created pipeline."""
-        await self.sessions_collection.update_one(
+        await self.conversation_sessions.update_one(
             {"session_id": session_id},
             {
                 "$set": {
@@ -909,37 +980,7 @@ Or if you have a job description, you can paste it and I'll extract the key requ
             }
         )
         logger.info(f"✅ Linked session {session_id} to pipeline {pipeline_id}")
-    
-    async def _lookup_profile_in_db(self, linkedin_url: str) -> Optional[dict]:
-        """Look up a profile in the profiles database."""
-        try:
-            # Extract LinkedIn ID from URL
-            linkedin_id = self._extract_linkedin_id(linkedin_url)
-            if not linkedin_id:
-                return None
-            
-            # Search profiles collection
-            profile = await self.mongodb.profiles_collection.find_one({
-                "$or": [
-                    {"linkedin_url": {"$regex": linkedin_id, "$options": "i"}},
-                    {"linkedin_id": linkedin_id},
-                    {"public_identifier": linkedin_id}
-                ]
-            })
-            
-            return profile
-        except Exception as e:
-            logger.error(f"Profile lookup failed: {e}")
-            return None
-    
-    def _extract_linkedin_id(self, url: str) -> Optional[str]:
-        """Extract LinkedIn ID/username from URL."""
-        if not url:
-            return None
-        
-        import re
-        match = re.search(r'linkedin\.com/in/([^/?]+)', url, re.IGNORECASE)
-        return match.group(1) if match else None
+
     
     def _score_to_label(self, score: Optional[float]) -> str:
         """Convert numeric score to label."""
@@ -981,7 +1022,78 @@ Or if you have a job description, you can paste it and I'll extract the key requ
         except Exception as e:
             logger.error(f"Failed to save resume: {e}")
             return ""
+        
+    async def get_session_results(self, session_id: str) -> Optional[Dict]:
+        """Get session results for results page."""
+        if self.conversation_sessions is None:
+            return None
+        
+        session = await self.conversation_sessions.find_one({"session_id": session_id})
+        if not session:
+            return None
+        
+        return {
+            "session_id": session["session_id"],
+            "source": session.get("source", "donna_search"),
+            "status": session.get("status", "ready"),
+            "candidates": session.get("sample_candidates", []),
+            "total_candidates": session.get("total_candidates", 0),
+            "ideal_profile": session.get("ideal_profile", {}),
+            "pipeline_id": session.get("pipeline_id"),
+            "pipeline_created_at": session.get("pipeline_created_at"),
+            "created_at": session.get("created_at"),
+            "is_manual_import": session.get("is_manual_import", False),
+        }
     
+    
+    async def mark_candidates_selected(
+        self,
+        session_id: str,
+        candidate_ids: List[str],
+        selected: bool = True
+    ) -> Dict[str, Any]:
+        """Mark candidates as selected/unselected in DB."""
+        if self.conversation_sessions is None:
+            return {"success": False, "error": "DB not available"}
+        
+        # Build correct update operation
+        if selected:
+            update_op = {
+                "$addToSet": {
+                    "selected_candidate_ids": {"$each": candidate_ids}
+                },
+                "$set": {"updated_at": datetime.utcnow().isoformat()}
+            }
+        else:
+            update_op = {
+                "$pull": {
+                    "selected_candidate_ids": {"$in": candidate_ids}
+                },
+                "$set": {"updated_at": datetime.utcnow().isoformat()}
+            }
+        
+        result = await self.conversation_sessions.update_one(
+            {"session_id": session_id},
+            update_op
+        )
+        
+        return {
+            "success": result.modified_count > 0,
+            "modified_count": result.modified_count
+        }
+
+    async def get_selected_candidates(self, session_id: str) -> List[str]:
+        """Get list of selected candidate IDs."""
+        if self.conversation_sessions is None:
+            return []
+        
+        session = await self.conversation_sessions.find_one(
+            {"session_id": session_id},
+            {"selected_candidate_ids": 1}
+        )
+        
+        return session.get("selected_candidate_ids", []) if session else []    
+
     # ================================================================
     # HELPER METHODS - Keep existing implementations
     # ================================================================
@@ -1189,6 +1301,198 @@ Or if you have a job description, you can paste it and I'll extract the key requ
             # Fallback based on common rejection reasons
             return self._fallback_rejection_handling(rejection_reason)
 
+
+    async def rank_and_save_candidates(
+        self,
+        session_id: str,  # Use original session_id
+        username: str,
+        ideal_profile: Dict,
+        candidates: List[Dict],
+        mongodb: MongoDB
+    ):
+        """Rank candidates and update SAME session."""
+        
+        try:
+            logger.info(f"🚀 Starting LLM ranking for {session_id}")
+            
+            # Rank candidates
+            ranked = await self._rank_candidates_with_llm(
+                candidates=candidates,
+                ideal_profile=ideal_profile,
+                username=username
+            )
+            
+            # Update EXISTING session (don't create new one)
+            await mongodb.main_db["conversation_sessions"].update_one(
+                {"session_id": session_id},
+                {
+                    "$set": {
+                        "username": username, 
+                        "candidates": ranked,
+                        "search_results": ranked,  # For get_session_results
+                        "status": "ready",
+                        "ranked_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
+                },
+                upsert=True  # Create if doesn't exist
+            )
+            
+            logger.info(f"✅ Ranking completed for {session_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ranking failed: {e}", exc_info=True)
+            
+            await mongodb.main_db["conversation_sessions"].update_one(
+                {"session_id": session_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": str(e),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
+                }
+            )
+
+    async def _rank_candidates_with_llm(
+        self,
+        candidates: List[Dict],
+        ideal_profile: Dict,
+        username: str
+    ) -> List[Dict]:
+        """Rank candidates using LLM (moved from routes for reusability)."""
+        
+        import json
+
+        # Prepare summaries
+        candidate_summaries = []
+        for idx, c in enumerate(candidates):
+            summary = {
+                "id": idx,
+                "name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip(),
+                "title": c.get("title", "Unknown"),
+                "location": c.get("location", "Unknown"),
+                "company": c.get("current_company", "Unknown"),
+                "experience_years": c.get("experience_years", 0),
+                "skills": c.get("expertise", "").split(",")[:10] if c.get("expertise") else [],
+                "industry": c.get("current_industry", "Unknown")
+            }
+            candidate_summaries.append(summary)
+        
+        system_prompt = """You are an expert recruiter analyzing candidate fit for a job position.
+
+    Your task is to rank candidates from best to worst based on how well they match the ideal profile.
+
+    Consider:
+    1. **Skills Match**: Do they have the required technical skills?
+    2. **Experience Level**: Does their seniority match the requirement?
+    3. **Industry Fit**: Do they have relevant industry experience?
+    4. **Location**: Are they in preferred locations?
+
+    For each candidate, provide:
+    - overall_match_score: 0-100 (higher = better fit)
+    - match_label: "Excellent Match" | "Great Match" | "Good Match" | "Fair Match" | "Below Target"
+    - strengths: List of 2-3 key strengths
+    - concerns: List of 1-2 concerns (if any)
+    - summary: 1-2 sentence explanation of fit
+
+    Return JSON array sorted by match score (highest first):
+    [
+    {
+        "id": 0,
+        "overall_match_score": 85,
+        "match_label": "Excellent Match",
+        "summary": "Strong skills in React and Node.js with 7+ years experience",
+        "strengths": ["Expert in React", "7 years experience", "SaaS background"],
+        "concerns": ["Location not ideal"]
+    },
+    ...
+    ]
+
+    Be objective and specific. Only give high scores (80+) to truly excellent matches."""
+
+        user_prompt = f"""IDEAL PROFILE:
+    Role: {ideal_profile.get('role_title', 'Unknown')}
+    Required Skills: {', '.join(ideal_profile.get('must_have_skills', []))}
+    Preferred Skills: {', '.join(ideal_profile.get('nice_to_have_skills', []))}
+    Seniority: {ideal_profile.get('seniority', 'Not specified')}
+    Experience: {ideal_profile.get('experience_years', 'Not specified')}
+    Industries: {', '.join(ideal_profile.get('industries', []))}
+    Locations: {', '.join(ideal_profile.get('locations', []))}
+
+    CANDIDATES TO RANK:
+    {json.dumps(candidate_summaries, indent=2)}
+
+    Rank these candidates from best to worst fit. Return ONLY the JSON array."""
+
+        try:
+            model_config = await self.model_config.get_user_config(username)
+            
+            response = await self.model_config.call_model(
+                model_config=model_config,
+                model_purpose="json_extraction",
+                system_prompt=system_prompt,
+                user_message=user_prompt,
+                temperature=0.3,
+                username=username
+            )
+            
+            # Parse JSON
+            response_text = response.strip()
+            if "```" in response_text:
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.split("```")[0]
+            
+            rankings = json.loads(response_text)
+            
+            # Apply rankings to original candidates
+            ranked_candidates = []
+            for rank in rankings:
+                candidate_idx = rank["id"]
+                if candidate_idx < len(candidates):
+                    candidate = candidates[candidate_idx].copy()
+                    
+                    # Add match analysis
+                    candidate["match_analysis"] = {
+                        "overall_match_score": rank["overall_match_score"],
+                        "match_label": rank["match_label"],
+                        "summary": rank["summary"],
+                        "strengths": [{"strength": s} for s in rank.get("strengths", [])],
+                        "concerns": [{"concern": c} for c in rank.get("concerns", [])]
+                    }
+                    
+                    candidate["match_score"] = rank["overall_match_score"]
+                    candidate["score"] = rank["overall_match_score"]
+                    
+                    # Wrap in expected structure for results page
+                    ranked_candidates.append({
+                        "candidate": candidate,
+                        "match_analysis": candidate["match_analysis"],
+                        "match_score": rank["overall_match_score"]
+                    })
+            
+            logger.info(f"✅ LLM ranked {len(ranked_candidates)} candidates")
+            return ranked_candidates
+            
+        except Exception as e:
+            logger.error(f"❌ LLM ranking failed: {e}", exc_info=True)
+            # Return candidates with default structure
+            return [
+                {
+                    "candidate": c,
+                    "match_score": 50,
+                    "match_analysis": {
+                        "overall_match_score": 50,
+                        "match_label": "Needs Review",
+                        "summary": "Unable to rank automatically.",
+                        "strengths": [],
+                        "concerns": []
+                    }
+                }
+                for c in candidates
+            ]
 
     def _fallback_rejection_handling(self, reason: str) -> Dict[str, Any]:
         """Fallback rejection handling without LLM."""
