@@ -178,7 +178,7 @@ async def create_pipeline_from_search(
     """
     try:
         pipeline = await pipeline_service.create_pipeline_from_search(
-            username=current_user["username"],
+            username=current_user,
             conversation_session_id=request.conversation_session_id,
             search_session_id=request.search_session_id,
             job_data=request.job_data,
@@ -229,7 +229,7 @@ async def create_pipeline_from_import(
     """
     try:
         pipeline = await pipeline_service.create_pipeline_from_import(
-            username=current_user["username"],
+            username=current_user,
             jd_text=request.jd_text,
             candidates_csv=request.candidates_csv,
             pipeline_name=request.pipeline_name
@@ -268,7 +268,7 @@ async def list_pipelines(
     """List all pipelines for the current user with pagination."""
     try:
         pipelines, total = await pipeline_service.list_pipelines(
-            username=current_user["username"],
+            username=current_user,
             limit=limit,
             offset=offset,
             status=status
@@ -305,7 +305,7 @@ async def get_pipeline(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         return {
@@ -339,7 +339,7 @@ async def get_pipeline_dashboard(
     try:
         dashboard = await pipeline_service.get_dashboard(
             pipeline_id=pipeline_id,
-            username=current_user["username"]
+            username=current_user
         )
         
         return {
@@ -374,7 +374,7 @@ async def update_pipeline_settings(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Update settings
@@ -415,7 +415,7 @@ async def archive_pipeline(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         pipeline.status = "archived"
@@ -461,7 +461,7 @@ async def shortlist_candidates(
         pipeline, count = await pipeline_service.shortlist_candidates(
             pipeline_id=pipeline_id,
             candidate_ids=request.candidate_ids,
-            username=current_user["username"]
+            username=current_user
         )
         
         return {
@@ -496,7 +496,7 @@ async def remove_from_shortlist(
         pipeline, count = await pipeline_service.remove_from_shortlist(
             pipeline_id=pipeline_id,
             candidate_ids=request.candidate_ids,
-            username=current_user["username"]
+            username=current_user
         )
         
         return {
@@ -542,7 +542,7 @@ async def start_enrichment(
     try:
         result = await pipeline_service.start_enrichment(
             pipeline_id=pipeline_id,
-            username=current_user["username"],
+            username=current_user,
             candidate_ids=request.candidate_ids,
             include_contact_fetch=request.include_contact_fetch
         )
@@ -578,7 +578,7 @@ async def get_enrichment_status(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Build enrichment status
@@ -653,7 +653,7 @@ async def start_outreach(
     try:
         result = await pipeline_service.start_outreach(
             pipeline_id=pipeline_id,
-            username=current_user["username"],
+            username=current_user,
             candidate_ids=request.candidate_ids
         )
         
@@ -687,7 +687,7 @@ async def send_reminders(
         pipeline = await pipeline_service.get_pipeline(pipeline_id)
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         result = await pipeline_service.send_reminder_emails(pipeline_id)
@@ -721,7 +721,7 @@ async def get_outreach_status(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         outreach_data = []
@@ -791,7 +791,7 @@ async def list_candidates(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Filter candidates
@@ -892,7 +892,7 @@ async def get_candidate_detail(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         candidate = pipeline.get_candidate(candidate_id)
@@ -990,7 +990,7 @@ async def update_candidate_stage(
             pipeline_id=pipeline_id,
             candidate_id=candidate_id,
             new_stage=request.new_stage,
-            username=current_user["username"],
+            username=current_user,
             notes=request.notes
         )
         
@@ -1028,7 +1028,7 @@ async def add_candidate_note(
             pipeline_id=pipeline_id,
             candidate_id=candidate_id,
             note=request.note,
-            username=current_user["username"]
+            username=current_user
         )
         
         return {
@@ -1062,7 +1062,7 @@ async def toggle_favorite(
         is_favorite = await pipeline_service.toggle_candidate_favorite(
             pipeline_id=pipeline_id,
             candidate_id=candidate_id,
-            username=current_user["username"]
+            username=current_user
         )
         
         return {
@@ -1096,7 +1096,7 @@ async def reject_candidate(
         candidate = await pipeline_service.reject_candidate(
             pipeline_id=pipeline_id,
             candidate_id=candidate_id,
-            username=current_user["username"],
+            username=current_user,
             reason=request.reason,
             feedback=request.feedback
         )
@@ -1146,7 +1146,7 @@ async def bulk_action(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         action = request.action.lower()
@@ -1230,7 +1230,7 @@ async def get_pipeline_analytics(
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         
-        if pipeline.username != current_user["username"]:
+        if pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Recalculate stats

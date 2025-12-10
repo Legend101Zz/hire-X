@@ -1156,9 +1156,15 @@ async def create_pipeline_from_session(
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get candidates from session
-        all_candidates = session.get("search_results", []) or session.get("sample_candidates", [])
+        all_candidates = (
+                    session.get("search_results") or 
+                    session.get("sample_candidates") or 
+                    session.get("candidates") or 
+                    []
+                )
         
         # Filter to shortlisted candidates
+        target_ids = set(request.shortlisted_candidate_ids)
         shortlisted = []
         for c in all_candidates:
             # Handle both nested (Donna) and flat (manual) structures
@@ -1171,8 +1177,9 @@ async def create_pipeline_from_session(
                 ""
             )
             
-            if candidate_id in request.shortlisted_candidate_ids:
+            if candidate_id in target_ids:
                 shortlisted.append(c)
+                
         if not shortlisted:
             raise HTTPException(status_code=400, detail="No valid candidates selected")
         

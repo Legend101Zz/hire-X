@@ -117,7 +117,7 @@ def verify_token(token: str) -> dict:
         
     Raises:
         jwt.ExpiredSignatureError: If token has expired
-        jwt.JWTError: If token is invalid
+        jwt.PyJWTError: If token is invalid
     """
     try:
         # Decode and verify token
@@ -126,7 +126,7 @@ def verify_token(token: str) -> dict:
         
         if username is None:
             logger.warning("Token verification failed: No username in payload")
-            raise jwt.JWTError("Invalid token payload")
+            raise jwt.PyJWTError("Invalid token payload")
         
         logger.debug("Token verification successful", extra={
             "username": username
@@ -138,7 +138,7 @@ def verify_token(token: str) -> dict:
         logger.warning("Token verification failed: Token expired")
         raise
         
-    except jwt.JWTError as e:
+    except jwt.PyJWTError as e:
         logger.error(f"Token verification failed: {e}", exc_info=True)
         raise
 
@@ -159,7 +159,7 @@ def decode_token(token: str) -> Optional[str]:
     try:
         payload = verify_token(token)
         return payload.get("sub")
-    except (jwt.ExpiredSignatureError, jwt.JWTError):
+    except (jwt.ExpiredSignatureError, jwt.PyJWTError):
         return None
 
 

@@ -1,13 +1,5 @@
 """
 Dashboard API
-=============
-API endpoints for user dashboard, metrics, and history.
-
-Endpoints:
-- GET /dashboard - Get dashboard overview with metrics
-- GET /dashboard/searches - List all searches with pagination
-- GET /dashboard/deep-dives - List deep dive analyses
-- GET /dashboard/activity - Recent activity feed
 """
 
 from datetime import datetime, timedelta
@@ -30,19 +22,17 @@ logger = get_logger(__name__)
 # ================================================================
 
 class DashboardMetrics(BaseModel):
-    """Dashboard metrics summary."""
     total_searches: int = 0
     total_candidates_analyzed: int = 0
     total_candidates_shortlisted: int = 0
     total_deep_dives: int = 0
-    credits_remaining: int = 100  # Dummy for now
+    credits_remaining: int = 100
     credits_used: int = 0
     searches_this_month: int = 0
     avg_match_score: float = 0.0
 
 
 class SearchSummary(BaseModel):
-    """Summary of a search session."""
     session_id: str
     conversation_session_id: Optional[str] = None
     role_title: str = ""
@@ -54,10 +44,12 @@ class SearchSummary(BaseModel):
     status: str = "completed"
     created_at: str = ""
     avg_match_score: Optional[float] = None
+    source: Optional[str] = None  # donna_search or manual_import
+    pipeline_id: Optional[str] = None
+    pipeline_created_at: Optional[str] = None
 
 
 class DeepDiveSummary(BaseModel):
-    """Summary of a deep dive analysis."""
     result_id: str
     candidate_name: str = ""
     candidate_title: str = ""
@@ -67,7 +59,6 @@ class DeepDiveSummary(BaseModel):
 
 
 class DashboardResponse(BaseModel):
-    """Full dashboard response."""
     metrics: DashboardMetrics
     recent_searches: List[SearchSummary]
     recent_deep_dives: List[DeepDiveSummary]
@@ -83,11 +74,8 @@ async def get_dashboard(
     username: str = Depends(get_current_username),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
-    """
-    Get dashboard overview with metrics and recent activity.
-    """
+    """Get dashboard overview with metrics and recent activity."""
     try:
-        # Get user info
         user = await mongodb.get_user(username)
         user_info = {
             "username": username,
@@ -96,13 +84,8 @@ async def get_dashboard(
             "plan": user.get("plan", "free") if user else "free"
         }
         
-        # Calculate metrics
         metrics = await _calculate_metrics(username, mongodb)
-        
-        # Get recent searches (last 5)
         recent_searches = await _get_recent_searches(username, mongodb, limit=5)
-        
-        # Get recent deep dives (last 5)
         recent_deep_dives = await _get_recent_deep_dives(username, mongodb, limit=5)
         
         return DashboardResponse(
@@ -111,7 +94,6 @@ async def get_dashboard(
             recent_deep_dives=recent_deep_dives,
             user=user_info
         )
-        
     except Exception as e:
         logger.error(f"Error getting dashboard: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -121,68 +103,26 @@ async def get_dashboard(
 async def get_searches(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status: Optional[str] = Query(None),
     username: str = Depends(get_current_username),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
-    """
-    Get paginated list of all searches.
-    Supports infinite scroll.
-    """
+    """Get paginated list of all searches from conversation_sessions."""
     try:
         skip = (page - 1) * page_size
         
-        # Build query
+        # Query conversation_sessions collection
         query = {"username": username}
         if status:
             query["status"] = status
         
-        # Get total count
-        total = await mongodb.enriched_results_collection.count_documents(query)
+        total = await mongodb.conversation_sessions_collection.count_documents(query)
         
-        # Get searches
-        cursor = mongodb.enriched_results_collection.find(
-            query,
-            {
-                "session_id": 1,
-                "conversation_session_id": 1,
-                "ideal_profile": 1,
-                "total_found": 1,
-                "enriched_count": 1,
-                "candidates": 1,  # Need this for shortlist count
-                "status": 1,
-                "created_at": 1
-            }
-        ).sort("created_at", -1).skip(skip).limit(page_size)
+        cursor = mongodb.conversation_sessions_collection.find(query).sort("created_at", -1).skip(skip).limit(page_size)
         
         searches = []
         async for doc in cursor:
-            # Count shortlisted
-            candidates = doc.get("candidates", [])
-            shortlisted = sum(1 for c in candidates if c.get("is_shortlisted"))
-            
-            # Calculate avg match score
-            scores = [
-                c.get("match_analysis", {}).get("overall_match_score", 0) 
-                for c in candidates
-            ]
-            avg_score = sum(scores) / len(scores) if scores else 0
-            
-            profile = doc.get("ideal_profile", {})
-            
-            searches.append(SearchSummary(
-                session_id=doc.get("session_id", ""),
-                conversation_session_id=doc.get("conversation_session_id"),
-                role_title=profile.get("role_title", "Untitled Search"),
-                skills=profile.get("must_have_skills", [])[:5],
-                locations=profile.get("locations", []),
-                total_candidates=doc.get("total_found", 0),
-                enriched_count=doc.get("enriched_count", 0),
-                shortlisted_count=shortlisted,
-                status=doc.get("status", "completed"),
-                created_at=doc.get("created_at", ""),
-                avg_match_score=round(avg_score, 1)
-            ))
+            searches.append(_session_to_summary(doc))
         
         return {
             "searches": searches,
@@ -194,7 +134,6 @@ async def get_searches(
                 "has_more": (page * page_size) < total
             }
         }
-        
     except Exception as e:
         logger.error(f"Error getting searches: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -207,21 +146,13 @@ async def get_deep_dives(
     username: str = Depends(get_current_username),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
-    """
-    Get paginated list of deep dive analyses.
-    """
+    """Get paginated list of deep dive analyses."""
     try:
         skip = (page - 1) * page_size
-        
         collection = mongodb.main_db.deep_dive_results
         
-        # Get total
         total = await collection.count_documents({"created_by": username})
-        
-        # Get deep dives
-        cursor = collection.find(
-            {"created_by": username}
-        ).sort("created_at", -1).skip(skip).limit(page_size)
+        cursor = collection.find({"created_by": username}).sort("created_at", -1).skip(skip).limit(page_size)
         
         deep_dives = []
         async for doc in cursor:
@@ -248,39 +179,8 @@ async def get_deep_dives(
                 "has_more": (page * page_size) < total
             }
         }
-        
     except Exception as e:
         logger.error(f"Error getting deep dives: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/activity")
-async def get_activity(
-    limit: int = Query(20, ge=1, le=100),
-    username: str = Depends(get_current_username),
-    mongodb: MongoDB = Depends(get_mongodb)
-):
-    """
-    Get recent activity feed.
-    """
-    try:
-        # Get recent logs
-        cursor = mongodb.logs_collection.find(
-            {"username": username}
-        ).sort("timestamp", -1).limit(limit)
-        
-        activities = []
-        async for log in cursor:
-            activities.append({
-                "action": log.get("action", ""),
-                "details": log.get("details", {}),
-                "timestamp": log.get("timestamp", datetime.utcnow()).isoformat() if isinstance(log.get("timestamp"), datetime) else str(log.get("timestamp", ""))
-            })
-        
-        return {"activities": activities}
-        
-    except Exception as e:
-        logger.error(f"Error getting activity: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -290,12 +190,9 @@ async def delete_search(
     username: str = Depends(get_current_username),
     mongodb: MongoDB = Depends(get_mongodb)
 ):
-    """
-    Delete a search result.
-    """
+    """Delete a search result."""
     try:
-        # Verify ownership
-        result = await mongodb.enriched_results_collection.find_one({
+        result = await mongodb.conversation_sessions_collection.find_one({
             "session_id": session_id,
             "username": username
         })
@@ -303,11 +200,8 @@ async def delete_search(
         if not result:
             raise HTTPException(status_code=404, detail="Search not found")
         
-        # Delete
-        await mongodb.enriched_results_collection.delete_one({"session_id": session_id})
-        
+        await mongodb.conversation_sessions_collection.delete_one({"session_id": session_id})
         return {"success": True, "message": "Search deleted"}
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -320,116 +214,142 @@ async def delete_search(
 # ================================================================
 
 async def _calculate_metrics(username: str, mongodb: MongoDB) -> DashboardMetrics:
-    """Calculate dashboard metrics for a user."""
+    """Calculate dashboard metrics from conversation_sessions."""
     
-    # Count total searches
-    total_searches = await mongodb.enriched_results_collection.count_documents(
+    total_searches = await mongodb.conversation_sessions_collection.count_documents(
         {"username": username}
     )
     
-    # Get this month's start
     now = datetime.utcnow()
-    month_start = datetime(now.year, now.month, 1)
+    month_start = datetime(now.year, now.month, 1).isoformat()
     
-    # Count searches this month
-    searches_this_month = await mongodb.enriched_results_collection.count_documents({
+    searches_this_month = await mongodb.conversation_sessions_collection.count_documents({
         "username": username,
-        "created_at": {"$gte": month_start.isoformat()}
+        "created_at": {"$gte": month_start}
     })
     
-    # Count deep dives
     total_deep_dives = await mongodb.main_db.deep_dive_results.count_documents(
         {"created_by": username}
     )
     
-    # Aggregate candidate stats
+    # Aggregate candidate stats from conversation_sessions
     pipeline = [
         {"$match": {"username": username}},
         {"$project": {
-            "total_found": 1,
-            "enriched_count": 1,
-            "candidates": 1
+            "total_candidates": 1,
+            "candidates": {"$ifNull": [
+                "$search_results", 
+                {"$ifNull": ["$sample_candidates", "$candidates"]}
+            ]},
+            "selected_ids": "$selected_candidate_ids"
         }},
-        {"$unwind": {"path": "$candidates", "preserveNullAndEmptyArrays": True}},
         {"$group": {
             "_id": None,
-            "total_candidates": {"$sum": "$total_found"},
-            "total_enriched": {"$sum": "$enriched_count"},
-            "total_shortlisted": {
-                "$sum": {"$cond": [{"$eq": ["$candidates.is_shortlisted", True]}, 1, 0]}
-            },
-            "avg_score": {
-                "$avg": "$candidates.match_analysis.overall_match_score"
-            }
+            "total_analyzed": {"$sum": "$total_candidates"},
+            "total_shortlisted": {"$sum": {"$size": {"$ifNull": ["$selected_ids", []]}}},
+            "all_candidates": {"$push": "$candidates"}
         }}
     ]
     
     try:
-        result = await mongodb.enriched_results_collection.aggregate(pipeline).to_list(1)
+        result = await mongodb.conversation_sessions_collection.aggregate(pipeline).to_list(1)
         stats = result[0] if result else {}
-    except:
+        
+        # Calculate avg score
+        all_cands = stats.get("all_candidates", [])
+        scores = []
+        for cand_list in all_cands:
+            if isinstance(cand_list, list):
+                for c in cand_list:
+                    score = (c.get("match_score") or 
+                            c.get("match_analysis", {}).get("overall_match_score") or 
+                            c.get("candidate", {}).get("match_score"))
+                    if score:
+                        scores.append(score)
+        
+        avg_score = sum(scores) / len(scores) if scores else 0
+    except Exception as e:
+        logger.error(f"Metrics calculation error: {e}")
         stats = {}
+        avg_score = 0
     
-    # Dummy credits calculation (replace with real logic later)
     credits_used = total_searches * 5 + total_deep_dives * 10
     credits_remaining = max(0, 100 - credits_used)
     
     return DashboardMetrics(
         total_searches=total_searches,
-        total_candidates_analyzed=stats.get("total_enriched", 0),
+        total_candidates_analyzed=stats.get("total_analyzed", 0),
         total_candidates_shortlisted=stats.get("total_shortlisted", 0),
         total_deep_dives=total_deep_dives,
         credits_remaining=credits_remaining,
         credits_used=credits_used,
         searches_this_month=searches_this_month,
-        avg_match_score=round(stats.get("avg_score", 0) or 0, 1)
+        avg_match_score=round(avg_score, 1)
+    )
+
+
+def _session_to_summary(doc: dict) -> SearchSummary:
+    """Convert conversation_session document to SearchSummary."""
+    profile = doc.get("ideal_profile", {})
+    
+    # Get candidates from various possible fields
+    candidates = (
+        doc.get("search_results") or 
+        doc.get("sample_candidates") or 
+        doc.get("candidates") or 
+        []
+    )
+    
+    # Count selected
+    selected_ids = set(doc.get("selected_candidate_ids", []))
+    shortlisted_count = len(selected_ids)
+    
+    # Calculate avg score
+    scores = []
+    for c in candidates:
+        score = (c.get("match_score") or 
+                c.get("match_analysis", {}).get("overall_match_score") or 
+                c.get("candidate", {}).get("match_score"))
+        if score:
+            scores.append(score)
+    
+    avg_score = sum(scores) / len(scores) if scores else None
+    
+    return SearchSummary(
+        session_id=doc.get("session_id", ""),
+        conversation_session_id=doc.get("conversation_session_id"),
+        role_title=profile.get("role_title", "Untitled Search"),
+        skills=profile.get("must_have_skills", [])[:5],
+        locations=profile.get("locations", []),
+        total_candidates=doc.get("total_candidates", len(candidates)),
+        enriched_count=len(candidates),
+        shortlisted_count=shortlisted_count,
+        status=doc.get("status", "ready"),
+        created_at=doc.get("created_at", ""),
+        avg_match_score=round(avg_score, 1) if avg_score else None,
+        source=doc.get("source", "donna_search"),
+        pipeline_id=doc.get("pipeline_id"),
+        pipeline_created_at=doc.get("pipeline_created_at")
     )
 
 
 async def _get_recent_searches(username: str, mongodb: MongoDB, limit: int = 5) -> List[SearchSummary]:
-    """Get recent searches for a user."""
-    
-    cursor = mongodb.enriched_results_collection.find(
+    """Get recent searches from conversation_sessions."""
+    cursor = mongodb.conversation_sessions_collection.find(
         {"username": username}
     ).sort("created_at", -1).limit(limit)
     
     searches = []
     async for doc in cursor:
-        candidates = doc.get("candidates", [])
-        shortlisted = sum(1 for c in candidates if c.get("is_shortlisted"))
-        
-        scores = [
-            c.get("match_analysis", {}).get("overall_match_score", 0) 
-            for c in candidates
-        ]
-        avg_score = sum(scores) / len(scores) if scores else 0
-        
-        profile = doc.get("ideal_profile", {})
-        
-        searches.append(SearchSummary(
-            session_id=doc.get("session_id", ""),
-            conversation_session_id=doc.get("conversation_session_id"),
-            role_title=profile.get("role_title", "Untitled Search"),
-            skills=profile.get("must_have_skills", [])[:5],
-            locations=profile.get("locations", []),
-            total_candidates=doc.get("total_found", 0),
-            enriched_count=doc.get("enriched_count", 0),
-            shortlisted_count=shortlisted,
-            status=doc.get("status", "completed"),
-            created_at=doc.get("created_at", ""),
-            avg_match_score=round(avg_score, 1)
-        ))
+        searches.append(_session_to_summary(doc))
     
     return searches
 
 
 async def _get_recent_deep_dives(username: str, mongodb: MongoDB, limit: int = 5) -> List[DeepDiveSummary]:
-    """Get recent deep dives for a user."""
-    
+    """Get recent deep dives."""
     collection = mongodb.main_db.deep_dive_results
-    cursor = collection.find(
-        {"created_by": username}
-    ).sort("created_at", -1).limit(limit)
+    cursor = collection.find({"created_by": username}).sort("created_at", -1).limit(limit)
     
     deep_dives = []
     async for doc in cursor:

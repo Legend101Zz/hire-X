@@ -6,10 +6,7 @@ const getHeaders = (token: string) => ({
   "Content-Type": "application/json",
 });
 
-// ================================================================
 // Types
-// ================================================================
-
 export interface DashboardMetrics {
   total_searches: number;
   total_candidates_analyzed: number;
@@ -33,6 +30,9 @@ export interface SearchSummary {
   status: string;
   created_at: string;
   avg_match_score?: number;
+  source?: string;
+  pipeline_id?: string;
+  pipeline_created_at?: string;
 }
 
 export interface DeepDiveSummary {
@@ -77,10 +77,7 @@ export interface PaginatedDeepDives {
   };
 }
 
-// ================================================================
 // API Functions
-// ================================================================
-
 export const getDashboard = async (token: string): Promise<DashboardData> => {
   const response = await fetch(`${API_BASE}/dashboard`, {
     headers: getHeaders(token),
