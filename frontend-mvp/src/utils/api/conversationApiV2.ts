@@ -10,6 +10,7 @@ import type {
   SampleProfile,
   ConversationState,
   IdealProfileCard,
+  PipelineSession,
 } from "@/types";
 
 const API_BASE =
@@ -430,8 +431,9 @@ export const createPipelineFromSession = async (
   }
 ): Promise<{
   success: boolean;
-  pipeline_id: string;
-  shortlisted_count: number;
+  batch_id: string;
+  pipeline_ids: string[];
+  count: number;
   message: string;
 }> => {
   const response = await apiCall(`/conversation/${sessionId}/create-pipeline`, {
@@ -469,5 +471,23 @@ export const getSelectedCandidates = async (
     method: "GET",
     token,
   });
+  return handleApiResponse(response);
+};
+
+/**
+ * List all pipeline sessions
+ */
+export const getPipelineSessions = async (
+  token: string
+): Promise<{
+  success: boolean;
+  sessions: PipelineSession[];
+  total: number;
+}> => {
+  const response = await apiCall("/conversation/list/pipeline-sessions", {
+    method: "GET",
+    token,
+  });
+
   return handleApiResponse(response);
 };

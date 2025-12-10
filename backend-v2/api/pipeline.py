@@ -26,9 +26,11 @@ from pydantic import BaseModel, Field
 from core.dependencies import (get_current_username, get_email_service,
                                get_pipeline_service)
 from core.logging_config import get_logger
-from models.pipeline_models import (STAGE_METADATA, CandidateStage, JobContext,
+from models.pipeline_models import (STAGE_METADATA, CandidateStage,
+                                    ContactFetchSource, JobContext,
                                     PipelineCandidate, PipelineSettings,
                                     RecruitmentPipeline)
+from models.scheduling_models import get_current_timestamp
 from services.email_outreach_service import EmailOutreachService
 from services.pipeline_service import PipelineService
 
@@ -43,7 +45,7 @@ router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
 
 class CreatePipelineFromSearchRequest(BaseModel):
     """Create pipeline from Donna search results."""
-    conversation_session_id: str = Field(..., description="Donna conversation session ID")
+    conversation_session_id: str = Field(..., description="Donna/manual conversation session ID")
     search_session_id: str = Field(..., description="Search results session ID")
     job_data: Dict[str, Any] = Field(..., description="Ideal profile / job requirements")
     candidates: List[Dict[str, Any]] = Field(..., description="Search result candidates")
@@ -165,43 +167,32 @@ class BulkActionRequest(BaseModel):
     description="Create a new recruitment pipeline from Donna search results"
 )
 async def create_pipeline_from_search(
-    request: CreatePipelineFromSearchRequest,
-    background_tasks: BackgroundTasks,
+    conversation_session_id: str = Body(...),
+    search_session_id: str = Body(...),
+    job_data: Dict[str, Any] = Body(...),
+    candidate_ids: List[str] = Body(..., description="Selected candidate IDs"),
     pipeline_service: PipelineService = Depends(get_pipeline_service),
-    current_user: Dict = Depends(get_current_username)
+    current_user: str = Depends(get_current_username)
 ):
     """
-    Create a recruitment pipeline from Donna conversation search results.
-    
-    This is typically called after a user completes a search flow with Donna
-    and wants to start the recruitment process for the found candidates.
+    Create individual pipelines for selected candidates.
+    Each candidate gets their own pipeline.
     """
     try:
-        pipeline = await pipeline_service.create_pipeline_from_search(
+        pipeline_ids = await pipeline_service.create_pipelines_from_search(
             username=current_user,
-            conversation_session_id=request.conversation_session_id,
-            search_session_id=request.search_session_id,
-            job_data=request.job_data,
-            candidates=request.candidates,
-            pipeline_name=request.pipeline_name,
-            auto_shortlist=request.auto_shortlist
+            conversation_session_id=conversation_session_id,
+            search_session_id=search_session_id,
+            job_data=job_data,
+            candidate_ids=candidate_ids
         )
         
-        logger.info(f"✅ Pipeline created: {pipeline.pipeline_id} for {current_user['username']}")
-        
-        return PipelineResponse(
-            success=True,
-            pipeline_id=pipeline.pipeline_id,
-            message=f"Pipeline created with {len(pipeline.candidates)} candidates",
-            data={
-                "name": pipeline.display_name,
-                "total_candidates": len(pipeline.candidates),
-                "job_title": pipeline.job.job_title
-            }
-        )
-        
+        return {
+            "success": True,
+            "message": f"Created {len(pipeline_ids)} pipelines",
+            "pipeline_ids": pipeline_ids
+        }
     except Exception as e:
-        logger.error(f"Pipeline creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -253,26 +244,67 @@ async def create_pipeline_from_import(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get(
-    "/list",
-    summary="List Pipelines",
-    description="List all pipelines for the current user"
-)
+@router.get("/list")
 async def list_pipelines(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    status: Optional[str] = Query(None, description="Filter by status: active, paused, completed, archived"),
+    status: Optional[str] = Query(None),
     pipeline_service: PipelineService = Depends(get_pipeline_service),
-    current_user: Dict = Depends(get_current_username)
+    current_user: str = Depends(get_current_username)
 ):
-    """List all pipelines for the current user with pagination."""
+    """List all pipelines with single-candidate format."""
     try:
-        pipelines, total = await pipeline_service.list_pipelines(
-            username=current_user,
-            limit=limit,
-            offset=offset,
-            status=status
-        )
+        query = {"username": current_user}
+        if status:
+            query["status"] = status
+        
+        total = await pipeline_service.pipelines_collection.count_documents(query)
+        cursor = pipeline_service.pipelines_collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
+        pipeline_docs = await cursor.to_list(length=limit)
+        
+        pipelines = []
+        for doc in pipeline_docs:
+            doc.pop("_id", None)
+            candidate = doc.get("candidate", {})
+            job = doc.get("job", {})
+            
+            pipelines.append({
+                "pipeline_id": doc.get("pipeline_id"),
+                "name": f"{candidate.get('name', 'Unknown')} - {job.get('job_title', 'Position')}",
+                "source": "donna_search",  # or doc.get("source", "donna_search")
+                "status": doc.get("status", "active"),
+                "conversation_session_id": doc.get("conversation_session_id"),
+                "stage": candidate.get("stage", "enriching"),
+                "stage_label": STAGE_METADATA.get(
+                    CandidateStage(candidate.get("stage", "enriching")), {}
+                ).get("label", "Unknown"),
+                "candidate": {
+                    "candidate_id": candidate.get("candidate_id"),
+                    "name": candidate.get("name", "Unknown"),
+                    "headline": candidate.get("headline"),
+                    "current_title": candidate.get("current_title"),
+                    "current_company": candidate.get("current_company"),
+                    "location": candidate.get("location"),
+                    "linkedin_url": candidate.get("linkedin_url"),
+                    "profile_picture_url": candidate.get("profile_picture_url"),
+                    "enrichment": {
+                        "match_score": candidate.get("enrichment", {}).get("match_score")
+                    }
+                },
+                "job": {
+                    "job_title": job.get("job_title"),
+                    "company_name": job.get("company_name")
+                },
+                "stats": {
+                    "total_sourced": 1,
+                    "total_responded": 1 if candidate.get("stage") in ["outreach_sent", "scheduled"] else 0,
+                    "total_scheduled": 1 if candidate.get("stage") == "scheduled" else 0,
+                    "total_hired": 1 if candidate.get("stage") == "hired" else 0,
+                    "total_contacted": 1 if candidate.get("stage") in ["outreach_sent", "scheduled"] else 0,
+                },
+                "created_at": doc.get("created_at"),
+                "updated_at": doc.get("updated_at")
+            })
         
         return {
             "success": True,
@@ -286,7 +318,6 @@ async def list_pipelines(
     except Exception as e:
         logger.error(f"Failed to list pipelines: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get(
     "/{pipeline_id}",
@@ -518,46 +549,47 @@ async def remove_from_shortlist(
 # ENRICHMENT ENDPOINTS
 # ============================================================================
 
-@router.post(
-    "/{pipeline_id}/enrich",
-    summary="Start Enrichment",
-    description="Start deep analysis for shortlisted candidates"
-)
-async def start_enrichment(
+@router.get("/{pipeline_id}/enriched")
+async def get_enriched_view(
     pipeline_id: str,
-    request: EnrichmentRequest,
-    background_tasks: BackgroundTasks,
     pipeline_service: PipelineService = Depends(get_pipeline_service),
-    current_user: Dict = Depends(get_current_username)
+    current_user: str = Depends(get_current_username)
 ):
-    """
-    Start deep enrichment for shortlisted candidates.
-    
-    This triggers:
-    1. Contact info fetch via Hatch (email first, then phone)
-    2. Deep analysis via IntelligentEnrichmentOrchestrator
-    
-    Runs in background - poll the dashboard for progress.
-    """
+    """Get enriched dashboard for single candidate."""
     try:
-        result = await pipeline_service.start_enrichment(
+        dashboard = await pipeline_service.get_enriched_dashboard(
             pipeline_id=pipeline_id,
-            username=current_user,
-            candidate_ids=request.candidate_ids,
-            include_contact_fetch=request.include_contact_fetch
+            username=current_user
         )
-        
-        return {
-            "success": True,
-            **result
-        }
-        
+        return {"success": True, **dashboard}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
-        logger.error(f"Enrichment start failed: {e}")
+        logger.error(f"Failed to get enriched view: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{pipeline_id}/enrich")
+async def start_enrichment(
+    pipeline_id: str,
+    include_contact_fetch: bool = Body(True, embed=True),
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    current_user: str = Depends(get_current_username)
+):
+    """Start enrichment for single candidate."""
+    try:
+        result = await pipeline_service.start_enrichment(
+            pipeline_id=pipeline_id,
+            username=current_user,
+            include_contact_fetch=include_contact_fetch
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Enrichment failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1345,6 +1377,52 @@ async def get_stage_metadata():
         "stages": stages
     }
 
+    
+@router.post("/{pipeline_id}/manual-contact")
+async def provide_manual_contact(
+    pipeline_id: str,
+    request: dict = Body(...),  # {email: str, phone?: str}
+    current_user: str = Depends(get_current_username),
+    pipeline_service: PipelineService = Depends(get_pipeline_service)
+):
+    """Allow user to manually provide contact info if fetch failed."""
+    try:
+        pipeline = await pipeline_service.get_pipeline(pipeline_id)
+        if not pipeline or pipeline.username != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        candidate = pipeline.candidate
+        
+        # Update contact info
+        if request.get("email"):
+            candidate.contact.email = request["email"]
+            candidate.contact.email_verified = False
+            candidate.contact.email_source = ContactFetchSource.MANUAL_INPUT
+            candidate.contact.email_fetched_at = get_current_timestamp()
+        
+        if request.get("phone"):
+            candidate.contact.phone = request["phone"]
+            candidate.contact.phone_source = ContactFetchSource.MANUAL_INPUT
+            candidate.contact.phone_fetched_at = get_current_timestamp()
+        
+        # Update stage if was failed
+        if candidate.stage == CandidateStage.ENRICHMENT_FAILED:
+            candidate.update_stage(CandidateStage.ENRICHED, triggered_by="user")
+        
+        await pipeline_service._save_pipeline(pipeline)
+        
+        return {
+            "success": True,
+            "message": "Contact information updated",
+            "has_email": bool(candidate.contact.email),
+            "has_phone": bool(candidate.contact.phone)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Manual contact update failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
 # HEALTH CHECK

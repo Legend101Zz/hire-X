@@ -96,7 +96,6 @@ export function usePipelineDashboard(pipelineId: string) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const authFetch = useAuthenticatedFetch();
 
   const fetchDashboard = useCallback(async () => {
@@ -104,7 +103,8 @@ export function usePipelineDashboard(pipelineId: string) {
     setLoading(true);
     setError(null);
     try {
-      const data = await authFetch(`/pipeline/${pipelineId}/dashboard`);
+      // Now calls /enriched endpoint for full analysis
+      const data = await authFetch(`/pipeline/${pipelineId}/enriched`);
       setPipeline(data);
     } catch (err: any) {
       setError(err.message);
@@ -113,7 +113,7 @@ export function usePipelineDashboard(pipelineId: string) {
     }
   }, [pipelineId, authFetch]);
 
-  return { pipeline, loading, error, fetchDashboard, setPipeline };
+  return { pipeline, loading, error, fetchDashboard };
 }
 
 // ==========================================
@@ -123,104 +123,48 @@ export function usePipelineActions(pipelineId: string) {
   const [loading, setLoading] = useState(false);
   const authFetch = useAuthenticatedFetch();
 
-  const shortlistCandidates = async (candidateIds: string[]) => {
+  const startEnrichment = async () => {
     setLoading(true);
     try {
-      const data = await authFetch(`/pipeline/${pipelineId}/shortlist`, {
+      return await authFetch(`/pipeline/${pipelineId}/enrich`, {
         method: "POST",
-        body: JSON.stringify({ candidate_ids: candidateIds }),
+        body: JSON.stringify({ include_contact_fetch: true }),
       });
-      return data;
     } finally {
       setLoading(false);
     }
   };
 
-  const startEnrichment = async (candidateIds?: string[]) => {
+  const startOutreach = async () => {
     setLoading(true);
     try {
-      const data = await authFetch(`/pipeline/${pipelineId}/enrich`, {
+      return await authFetch(`/pipeline/${pipelineId}/outreach`, {
         method: "POST",
-        body: JSON.stringify({
-          candidate_ids: candidateIds,
-          include_contact_fetch: true,
-        }),
       });
-      return data;
     } finally {
       setLoading(false);
     }
   };
 
-  const startOutreach = async (candidateIds?: string[]) => {
-    setLoading(true);
-    try {
-      const data = await authFetch(`/pipeline/${pipelineId}/outreach`, {
-        method: "POST",
-        body: JSON.stringify({ candidate_ids: candidateIds }),
-      });
-      return data;
-    } finally {
-      setLoading(false);
-    }
+  const updateStage = async (newStage: string, notes?: string) => {
+    return await authFetch(`/pipeline/${pipelineId}/stage`, {
+      method: "PUT",
+      body: JSON.stringify({ new_stage: newStage, notes }),
+    });
   };
 
-  const updateCandidateStage = async (
-    candidateId: string,
-    newStage: string,
-    notes?: string
-  ) => {
-    return await authFetch(
-      `/pipeline/${pipelineId}/candidates/${candidateId}/stage`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ new_stage: newStage, notes }),
-      }
-    );
-  };
-
-  const toggleFavorite = async (candidateId: string) => {
-    return await authFetch(
-      `/pipeline/${pipelineId}/candidates/${candidateId}/favorite`,
-      {
-        method: "POST",
-      }
-    );
-  };
-
-  const rejectCandidate = async (
-    candidateId: string,
-    reason: string,
-    feedback?: string
-  ) => {
-    return await authFetch(
-      `/pipeline/${pipelineId}/candidates/${candidateId}/reject`,
-      {
-        method: "POST",
-        body: JSON.stringify({ reason, feedback }),
-      }
-    );
-  };
-
-  const bulkAction = async (
-    candidateIds: string[],
-    action: string,
-    reason?: string
-  ) => {
-    return await authFetch(`/pipeline/${pipelineId}/bulk-action`, {
+  const rejectCandidate = async (reason: string, feedback?: string) => {
+    return await authFetch(`/pipeline/${pipelineId}/reject`, {
       method: "POST",
-      body: JSON.stringify({ candidate_ids: candidateIds, action, reason }),
+      body: JSON.stringify({ reason, feedback }),
     });
   };
 
   return {
     loading,
-    shortlistCandidates,
     startEnrichment,
     startOutreach,
-    updateCandidateStage,
-    toggleFavorite,
+    updateStage,
     rejectCandidate,
-    bulkAction,
   };
 }

@@ -46,6 +46,9 @@ class TimeSlotType(str, Enum):
     BOOKED = "booked"
     BLOCKED = "blocked"
     PAST = "past"
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+    EVENING = "evening"
 
 
 # ===================================================================
@@ -66,22 +69,32 @@ def get_current_timestamp() -> str:
 # SUB-MODELS
 # ===================================================================
 
+
+
 class TimeSlot(BaseModel):
-    """A single time slot for scheduling."""
+    """Represents an available interview time slot."""
     slot_id: str = Field(default_factory=lambda: f"slot-{uuid.uuid4().hex[:8]}")
+    date: str = Field(..., description="Date in YYYY-MM-DD format")
+    start_time: str = Field(..., description="Start time in HH:MM format")
+    end_time: str = Field(..., description="End time in HH:MM format")
+    datetime: str = Field(..., description="Full datetime in ISO format")
+    timezone: str = Field(default="Asia/Kolkata")
+    is_available: bool = Field(default=True)
+    slot_type: str = Field(default="available", description="morning/afternoon/evening or available/booked")  # Changed to str
     
-    # Time
-    start_datetime: str  # ISO format
-    end_datetime: str    # ISO format
-    duration_minutes: int = 30
-    timezone: str = "Asia/Kolkata"
-    
-    # Status
-    slot_type: TimeSlotType = TimeSlotType.AVAILABLE
-    
-    # If booked
-    booked_by_candidate_id: Optional[str] = None
-    booked_at: Optional[str] = None
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "slot_id": "slot-abc123",
+                "date": "2024-12-15",
+                "start_time": "14:00",
+                "end_time": "14:30",
+                "datetime": "2024-12-15T14:00:00Z",
+                "timezone": "Asia/Kolkata",
+                "is_available": True,
+                "slot_type": "afternoon"
+            }
+        }
 
 
 class AvailabilityWindow(BaseModel):

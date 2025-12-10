@@ -211,19 +211,29 @@ export default function ResultsPage() {
     const handleCreatePipeline = async () => {
         if (!token || shortlistedIds.size === 0) return;
         setIsCreatingPipeline(true);
+        setShowPipelineModal(false); // Close modal immediately
+
         try {
             const response = await conversationApi.createPipelineFromSession(
                 sessionId,
                 token,
                 { shortlisted_candidate_ids: Array.from(shortlistedIds) }
             );
-            router.push(`/pipeline/${response.pipeline_id}`);
+
+            if (response.success && response.pipeline_ids.length > 0) {
+                // Always go to batch view (session-level)
+                router.push(`/pipeline/${sessionId}`);
+            } else {
+                console.error("No pipelines created");
+            }
         } catch (err) {
-            console.error(err);
+            console.error("Pipeline creation failed:", err);
+            alert("Failed to create pipeline. Please try again.");
         } finally {
             setIsCreatingPipeline(false);
         }
     };
+
 
     if (isLoading) {
         return (

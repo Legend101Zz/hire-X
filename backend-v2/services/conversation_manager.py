@@ -1045,6 +1045,53 @@ Or if you have a job description, you can paste it and I'll extract the key requ
             "is_manual_import": session.get("is_manual_import", False),
         }
     
+    async def create_pipeline_batch(
+    self,
+    session_id: str,
+    pipeline_ids: List[str],
+    candidate_pipeline_mapping: Dict[str, str]  # {candidate_id: pipeline_id}
+):
+        """Link conversation session to created pipelines."""
+        batch_id = f"batch-{uuid.uuid4().hex[:12]}"
+        
+        await self.conversation_sessions.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "pipeline_batch_id": batch_id,
+                    "pipelines_created": True,
+                    "pipeline_ids": pipeline_ids,
+                    "pipeline_created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        
+        # Update each candidate with their pipeline reference
+        for candidate_id, pipeline_id in candidate_pipeline_mapping.items():
+            await self.conversation_sessions.update_one(
+                {
+                    "session_id": session_id,
+                    "$or": [
+                        {"sample_candidates.candidate_id": candidate_id},
+                        {"search_results.candidate_id": candidate_id}
+                    ]
+                },
+                {
+                    "$set": {
+                        "sample_candidates.$[elem].pipeline_id": pipeline_id,
+                        "sample_candidates.$[elem].pipeline_created_at": datetime.utcnow().isoformat(),
+                        "sample_candidates.$[elem].enrichment_status": "pending",
+                        "search_results.$[elem].pipeline_id": pipeline_id,
+                        "search_results.$[elem].pipeline_created_at": datetime.utcnow().isoformat(),
+                        "search_results.$[elem].enrichment_status": "pending"
+                    }
+                },
+                array_filters=[{"elem.candidate_id": candidate_id}]
+            )
+        
+        logger.info(f"✅ Created pipeline batch {batch_id} with {len(pipeline_ids)} pipelines")
+        return batch_id
     
     async def mark_candidates_selected(
         self,

@@ -890,7 +890,7 @@ class RecruitmentPipeline(BaseModel):
     
     # Source tracking
     source: PipelineSource = Field(default=PipelineSource.DONNA_SEARCH)
-    conversation_session_id: Optional[str] = None  # If from Donna
+    conversation_session_id: str  # Link back to Donna conversation
     search_session_id: Optional[str] = None  # Linked search results
     
     # Job context
@@ -913,6 +913,22 @@ class RecruitmentPipeline(BaseModel):
     created_at: str = Field(default_factory=get_current_timestamp)
     updated_at: str = Field(default_factory=get_current_timestamp)
     archived_at: Optional[str] = None
+    
+    def get_stage_label(self) -> str:
+        """Get friendly stage label."""
+        return STAGE_METADATA.get(self.candidate.stage, {}).get("label", self.candidate.stage.value)
+    
+    @property
+    def candidate(self) -> Optional[PipelineCandidate]:
+        """Get the single candidate (for single-candidate pipelines)."""
+        return self.candidates[0] if self.candidates else None
+    
+    @property
+    def display_name(self) -> str:
+        """Get display name for the pipeline."""
+        if self.name:
+            return self.name
+        return f"{self.job.job_title} Pipeline"
     
     # Methods
     def add_candidate(self, candidate: PipelineCandidate) -> PipelineCandidate:
@@ -949,6 +965,7 @@ class RecruitmentPipeline(BaseModel):
     def recalculate_stats(self):
         """Recalculate pipeline statistics."""
         self.stats.recalculate(self.get_active_candidates())
+        
     
     @property
     def display_name(self) -> str:

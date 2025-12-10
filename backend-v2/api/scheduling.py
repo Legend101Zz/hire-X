@@ -10,11 +10,13 @@ No authentication required - uses scheduling tokens.
 
 from typing import Optional
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.params import Body
+from pydantic import BaseModel, Field
+
 from core.dependencies import get_pipeline_service
 from core.logging_config import get_logger
-from fastapi import APIRouter, Depends, HTTPException, Query
 from models.scheduling_models import RescheduleReason
-from pydantic import BaseModel, Field
 from services.pipeline_service import PipelineService
 
 logger = get_logger(__name__)
@@ -33,7 +35,7 @@ class BookSlotRequest(BaseModel):
     preferred_time: Optional[str] = Field(None, description="morning/afternoon/evening")
     special_requirements: Optional[str] = Field(None, description="Any special needs")
     candidate_notes: Optional[str] = Field(None, description="Additional notes")
-
+    phone_number: Optional[str] = None
 
 class RescheduleRequest(BaseModel):
     """Request to reschedule an interview."""
@@ -46,6 +48,8 @@ class RescheduleRequest(BaseModel):
 # PUBLIC SCHEDULING ENDPOINTS
 # ============================================================================
 
+
+
 @router.get(
     "/{scheduling_token}",
     summary="Get Scheduling Info",
@@ -53,24 +57,27 @@ class RescheduleRequest(BaseModel):
 )
 async def get_scheduling_info(
     scheduling_token: str,
+    test_mode: bool = Query(False, description="Enable test mode with immediate slots"),
     pipeline_service: PipelineService = Depends(get_pipeline_service)
 ):
     """
     Get scheduling page data when candidate clicks the link.
-    
-    This is the first endpoint called when a candidate opens
-    the scheduling link from their email.
-    
-    No authentication required - uses scheduling token.
     """
     try:
-        result = await pipeline_service.handle_scheduling_click(scheduling_token)
+        logger.info(f"📅 Scheduling info request: token={scheduling_token}, test_mode={test_mode}")
+        
+        result = await pipeline_service.handle_scheduling_click(
+            scheduling_token,
+            test_mode=test_mode  # PASS TEST MODE HERE
+        )
         
         if not result.get("valid"):
             raise HTTPException(
                 status_code=400,
                 detail=result.get("error", "Invalid scheduling link")
             )
+        
+        logger.info(f"   ✅ Found {len(result.get('available_slots', []))} available slots")
         
         return {
             "success": True,
@@ -80,8 +87,8 @@ async def get_scheduling_info(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Scheduling info failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load scheduling info")
+        logger.error(f"❌ Scheduling info failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load scheduling info: {str(e)}")
 
 
 @router.post(
@@ -109,7 +116,8 @@ async def book_interview_slot(
             timezone=request.timezone,
             preferred_time=request.preferred_time,
             special_requirements=request.special_requirements,
-            candidate_notes=request.candidate_notes
+            candidate_notes=request.candidate_notes,
+            phone_number=request.phone_number  
         )
         
         if not result.get("success"):
@@ -123,9 +131,8 @@ async def book_interview_slot(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Booking failed: {e}")
+        logger.error(f"Booking failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to book interview")
-
 
 @router.get(
     "/{scheduling_token}/slots",

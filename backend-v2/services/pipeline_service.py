@@ -58,6 +58,11 @@ from models.scheduling_models import (InterviewSchedule, ScheduleStatus,
 from models.vapi_interview_models import (CreateInterviewRequest,
                                           InterviewCandidateContext,
                                           InterviewJobContext)
+from services.email_outreach_service import EmailProvider
+from services.hatch_service import HatchService
+from services.intelligent_enrichment_orchestrator import \
+    IntelligentEnrichmentOrchestrator
+from services.vapi_interview_service import VapiInterviewService
 
 logger = get_logger(__name__)
 
@@ -83,10 +88,10 @@ class PipelineService:
         mongodb: MongoDB,
         redis_cache: RedisCache,
         jd_parser=None,
-        enrichment_orchestrator=None,
-        hatch_service=None,
-        email_service=None,
-        vapi_service=None,
+        enrichment_orchestrator: IntelligentEnrichmentOrchestrator=None,
+        hatch_service: HatchService =None,
+        email_service:EmailProvider=None,
+        vapi_service: VapiInterviewService=None,
         base_url: str = None
     ):
         """
@@ -112,55 +117,30 @@ class PipelineService:
         self.base_url = base_url or settings.APP_BASE_URL or "https://neuraleap.shop"
         
         # MongoDB collections
-        self.pipelines_collection = mongodb.main_db["recruitment_pipelines"]
-        self.schedules_collection = mongodb.main_db["interview_schedules"]
-        self.scheduling_config_collection = mongodb.main_db["scheduling_configurations"]
-        
-        # Ensure indexes
-        asyncio.create_task(self._ensure_indexes())
+        self.pipelines_collection = mongodb.pipelines_collection
+        self.schedules_collection = mongodb.schedules_collection
+        self.scheduling_config_collection = mongodb.scheduling_config_collection
+    
         
         logger.info("✅ PipelineService initialized")
         logger.info(f"   Base URL: {self.base_url}")
-    
-    async def _ensure_indexes(self):
-        """Create MongoDB indexes for efficient queries."""
-        try:
-            # Pipelines collection
-            await self.pipelines_collection.create_index("pipeline_id", unique=True)
-            await self.pipelines_collection.create_index("username")
-            await self.pipelines_collection.create_index("conversation_session_id")
-            await self.pipelines_collection.create_index("search_session_id")
-            await self.pipelines_collection.create_index([("username", 1), ("created_at", -1)])
-            await self.pipelines_collection.create_index("candidates.candidate_id")
-            await self.pipelines_collection.create_index("candidates.outreach.scheduling_token")
-            
-            # Schedules collection
-            await self.schedules_collection.create_index("schedule_id", unique=True)
-            await self.schedules_collection.create_index("scheduling_token", unique=True)
-            await self.schedules_collection.create_index("pipeline_id")
-            await self.schedules_collection.create_index("candidate_id")
-            await self.schedules_collection.create_index([("status", 1), ("scheduled_datetime", 1)])
-            
-            logger.info("✅ Pipeline indexes created")
-        except Exception as e:
-            logger.warning(f"Could not create pipeline indexes: {e}")
     
     # =========================================================================
     # PIPELINE CREATION
     # =========================================================================
     
-    async def create_pipeline_from_search(
+
+    async def create_pipelines_from_search(
         self,
         username: str,
         conversation_session_id: str,
         search_session_id: str,
         job_data: Dict[str, Any],
-        candidates: List[Dict[str, Any]],
+        candidate_ids: List[str],
         pipeline_name: Optional[str] = None,
-        auto_shortlist: bool = False
-    ) -> RecruitmentPipeline:
+    ) -> List[str]:
         """
-        Create a recruitment pipeline from Donna search results.
+        Create a recruitment pipeline from Donna search results OR manual import.
         
         This is called when a user finalizes a search and wants to
         start the recruitment process for the found candidates.
@@ -170,60 +150,79 @@ class PipelineService:
             conversation_session_id: Donna conversation session ID
             search_session_id: Search results session ID
             job_data: Ideal profile / job requirements from search
-            candidates: List of candidate dictionaries from search results
+            candidate_ids: Candidate IDs for which pipeline is made
             pipeline_name: Optional custom name for the pipeline
-            auto_shortlist: If True, automatically shortlist all candidates
             
         Returns:
-            Created RecruitmentPipeline
+            List of created pipeline IDs
         """
         logger.info(f"Creating pipeline from search for user {username}")
-        logger.info(f"   Conversation: {conversation_session_id}")
-        logger.info(f"   Search: {search_session_id}")
-        logger.info(f"   Candidates: {len(candidates)}")
+        
+        # Get conversation session to fetch candidate data
+        conv_session = await self.db.conversation_sessions_collection.find_one({
+            "session_id": conversation_session_id
+        })
+        
+        if not conv_session:
+            raise ValueError("Conversation session not found")
         
         # Create job context from ideal profile
         job = self._create_job_context_from_search(job_data)
         
-        # Convert candidates to pipeline format
-        pipeline_candidates = []
-        for c in candidates:
-            pc = self._convert_search_candidate(c, auto_shortlist)
-            pipeline_candidates.append(pc)
-        
-        # Generate pipeline name if not provided
-        if not pipeline_name:
-            pipeline_name = f"{job.job_title} - {datetime.utcnow().strftime('%b %d')}"
-        
-        # Create pipeline
-        pipeline = RecruitmentPipeline(
-            pipeline_id=generate_pipeline_id(),
-            username=username,
-            name=pipeline_name,
-            source=PipelineSource.DONNA_SEARCH,
-            conversation_session_id=conversation_session_id,
-            search_session_id=search_session_id,
-            job=job,
-            candidates=pipeline_candidates,
-            settings=PipelineSettings()
+        # Get all candidates from the right field (handle both donna_search and manual_import)
+        all_candidates = (
+            conv_session.get("search_results") or 
+            conv_session.get("sample_candidates") or 
+            conv_session.get("candidates") or 
+            []
         )
         
-        # Calculate initial stats
-        pipeline.recalculate_stats()
+        pipeline_ids = []
+        candidate_pipeline_mapping = {}
         
-        # Save to MongoDB
-        await self._save_pipeline(pipeline)
+        # Create one pipeline per candidate
+        for candidate_id in candidate_ids:
+            # Find candidate in conversation (handle nested and flat structures)
+            conv_candidate = None
+            for c in all_candidates:
+                # Check if candidate_id matches (handle nested structure)
+                c_id = c.get("candidate_id") or c.get("candidate", {}).get("candidate_id")
+                if str(c_id) == str(candidate_id):
+                    conv_candidate = c
+                    break
+            
+            if not conv_candidate:
+                logger.warning(f"Candidate {candidate_id} not found in session")
+                continue
+            
+            # Extract candidate data (handle nested "candidate" wrapper from donna_search)
+            candidate_data = conv_candidate.get("candidate", conv_candidate)
+            
+            # Create pipeline candidate from conversation data
+            pipeline_candidate = self._convert_search_candidate(candidate_data, conv_candidate)
+            pipeline_candidate.stage = CandidateStage.SOURCED  # Start at sourced, not enriching
+            
+            # Create pipeline
+            pipeline = RecruitmentPipeline(
+                pipeline_id=generate_pipeline_id(),
+                username=username,
+                conversation_session_id=conversation_session_id,
+                search_session_id=search_session_id,
+                job=job,
+                candidates=[pipeline_candidate],  # Single candidate per pipeline
+                settings=PipelineSettings()
+            )
+            
+            await self._save_pipeline(pipeline)
+            pipeline_ids.append(pipeline.pipeline_id)
+            candidate_pipeline_mapping[candidate_id] = pipeline.pipeline_id
+            
+            logger.info(f"✅ Created pipeline {pipeline.pipeline_id} for {pipeline_candidate.display_name}")
         
-        # Cache pipeline ID mapping in Redis for quick lookup
-        await self._cache_pipeline_mapping(pipeline)
+        logger.info(f"✅ Created {len(pipeline_ids)} pipelines")
         
-        logger.info(f"✅ Created pipeline {pipeline.pipeline_id}")
-        logger.info(f"   Name: {pipeline_name}")
-        logger.info(f"   Candidates: {len(pipeline_candidates)}")
-        logger.info(f"   Job: {job.job_title}")
-        
-        return pipeline
-    
+        return pipeline_ids
+
     async def create_pipeline_from_import(
         self,
         username: str,
@@ -382,45 +381,86 @@ class PipelineService:
     
     def _convert_search_candidate(
         self,
-        c: Dict[str, Any],
+        candidate_data: Dict[str, Any],
+        wrapper: Dict[str, Any] = None,
         auto_shortlist: bool = False
     ) -> PipelineCandidate:
-        """Convert a search result candidate to PipelineCandidate."""
+        """
+        Convert a search result candidate to PipelineCandidate.
+        
+        Handles both:
+        - Donna search: nested structure with wrapper containing match_analysis
+        - Manual import: flat structure with data directly on candidate
+        
+        Args:
+            candidate_data: The candidate data (could be nested or flat)
+            wrapper: The wrapper object (for donna search, contains match_analysis)
+            auto_shortlist: Whether to auto-shortlist
+        """
         # Extract name
-        name = c.get("name", "")
+        name = candidate_data.get("name", "")
         if not name:
-            first = c.get("first_name", "")
-            last = c.get("last_name", "")
+            first = candidate_data.get("first_name", "")
+            last = candidate_data.get("last_name", "")
             name = f"{first} {last}".strip()
         
         # Extract skills
-        skills = c.get("skills", [])
+        skills = candidate_data.get("skills", [])
         if not skills:
-            expertise = c.get("expertise", "")
+            expertise = candidate_data.get("expertise", "")
             if expertise and expertise != "NA":
                 skills = [s.strip() for s in expertise.split(",")][:10]
+        
+        # Get candidate_id (handle various ID fields)
+        candidate_id = (
+            candidate_data.get("candidate_id") or
+            str(candidate_data.get("_id", "")) or
+            generate_candidate_id()
+        )
         
         # Determine initial stage
         initial_stage = CandidateStage.SHORTLISTED if auto_shortlist else CandidateStage.SOURCED
         
-        return PipelineCandidate(
-            candidate_id=generate_candidate_id(),
-            profile_id=str(c.get("_id", c.get("profile_id", ""))),
-            linkedin_url=c.get("linkedin_url", ""),
-            linkedin_id=c.get("linkedin_id"),
+        # Create pipeline candidate
+        pipeline_candidate = PipelineCandidate(
+            candidate_id=candidate_id,
+            profile_id=str(candidate_data.get("profile_id", candidate_data.get("_id", ""))),
+            linkedin_url=candidate_data.get("linkedin_url", ""),
+            linkedin_id=candidate_data.get("linkedin_id"),
             name=name or "Unknown",
-            first_name=c.get("first_name"),
-            last_name=c.get("last_name"),
-            headline=c.get("headline", c.get("title")),
-            current_title=c.get("title", c.get("current_title")),
-            current_company=c.get("current_company"),
-            location=c.get("location"),
-            experience_years=c.get("experience_years", c.get("total_experience_years")),
+            first_name=candidate_data.get("first_name"),
+            last_name=candidate_data.get("last_name"),
+            headline=candidate_data.get("headline") or candidate_data.get("title"),
+            current_title=candidate_data.get("title") or candidate_data.get("current_title"),
+            current_company=candidate_data.get("current_company"),
+            location=candidate_data.get("location"),
+            experience_years=candidate_data.get("experience_years") or candidate_data.get("total_experience_years"),
             skills=skills,
-            profile_picture_url=c.get("profile_picture_url"),
+            profile_picture_url=candidate_data.get("profile_picture_url"),
             stage=initial_stage
         )
-    
+        
+        # Handle manual import data if present
+        if candidate_data.get("manual_data"):
+            manual_data = candidate_data["manual_data"]
+            pipeline_candidate.manual_input = ManualCandidateInput(
+                linkedin_url=candidate_data.get("linkedin_url", ""),
+                expected_salary=manual_data.get("expected_salary"),
+                current_salary=manual_data.get("current_salary"),
+                notice_period=manual_data.get("notice_period"),
+                preferred_location=manual_data.get("preferred_location"),
+                source_notes=manual_data.get("notes")
+            )
+        
+        # If there's a wrapper with match analysis (donna search), extract it
+        if wrapper and wrapper.get("match_analysis"):
+            analysis = wrapper["match_analysis"]
+            pipeline_candidate.enrichment.match_score = analysis.get("overall_match_score")
+            pipeline_candidate.enrichment.match_label = analysis.get("match_label")
+        
+        return pipeline_candidate
+
+
     async def _scrape_imported_candidates(self, pipeline_id: str):
         """
         Background task to scrape LinkedIn profiles for manually imported candidates.
@@ -590,7 +630,6 @@ class PipelineService:
         self,
         pipeline_id: str,
         username: str,
-        candidate_ids: Optional[List[str]] = None,
         include_contact_fetch: bool = True
     ) -> Dict[str, Any]:
         """
@@ -603,7 +642,6 @@ class PipelineService:
         Args:
             pipeline_id: Pipeline ID
             username: User triggering enrichment
-            candidate_ids: Optional specific candidates (None = all shortlisted)
             include_contact_fetch: Whether to fetch contact info
             
         Returns:
@@ -616,48 +654,102 @@ class PipelineService:
         if pipeline.username != username:
             raise PermissionError("Access denied")
         
-        # Get candidates to enrich
-        to_enrich = []
-        for c in pipeline.candidates:
-            # Filter by IDs if provided
-            if candidate_ids and c.candidate_id not in candidate_ids:
-                continue
-            
-            # Only enrich shortlisted, non-enriched candidates
-            if c.stage == CandidateStage.SHORTLISTED and not c.enrichment.is_enriched:
-                to_enrich.append(c)
+        candidate = pipeline.candidate
         
-        if not to_enrich:
+        if candidate.enrichment.is_enriched:
             return {
                 "success": True,
-                "message": "No candidates to enrich",
-                "count": 0
+                "message": "Already enriched",
+                "pipeline_id": pipeline_id
             }
         
         # Update stages to ENRICHING
-        for c in to_enrich:
-            c.update_stage(CandidateStage.ENRICHING, triggered_by="system")
-        
+        candidate.update_stage(CandidateStage.ENRICHING, triggered_by="system")
         await self._save_pipeline(pipeline)
         
         # Start background enrichment
         asyncio.create_task(
-            self._run_enrichment_batch(
+            self._run_single_enrichment(
                 pipeline_id=pipeline_id,
-                candidate_ids=[c.candidate_id for c in to_enrich],
                 include_contact_fetch=include_contact_fetch
             )
         )
         
-        logger.info(f"🔍 Started enrichment for {len(to_enrich)} candidates in {pipeline_id}")
+        logger.info(f"🔍 Started enrichment for {candidate} candidate in {pipeline_id}")
         
         return {
             "success": True,
-            "message": f"Started enrichment for {len(to_enrich)} candidates",
-            "count": len(to_enrich),
-            "candidate_ids": [c.candidate_id for c in to_enrich]
+            "message": "Enrichment started",
+            "pipeline_id": pipeline_id
         }
-    
+        
+    async def _run_single_enrichment(
+        self,
+        pipeline_id: str,
+        include_contact_fetch: bool = True
+    ):
+        """Enrich the single candidate in this pipeline."""
+        pipeline = await self.get_pipeline(pipeline_id)
+        if not pipeline:
+            return
+        
+        candidate = pipeline.candidate
+        jd_text = pipeline.job.jd_text or pipeline.job.get_jd_summary()
+        
+        try:
+            # Fetch contact info
+            if include_contact_fetch and not candidate.contact.email:
+                contact_result = await self._fetch_candidate_contact(candidate)
+                if contact_result.get("email"):
+                    candidate.contact.email = contact_result["email"]
+                    candidate.contact.email_verified = True
+                    candidate.contact.email_source = ContactFetchSource.HATCH_API
+                    candidate.contact.email_fetched_at = get_current_timestamp()
+            
+            # Deep dive enrichment
+            if self.enrichment:
+                deep_dive_result = await self.enrichment.deep_dive_candidate(
+                    linkedin_url=candidate.linkedin_url,
+                    job_description=jd_text,
+                    force_scrape=True
+                )
+                
+                # Store complete enrichment data
+                candidate.enrichment.is_enriched = True
+                candidate.enrichment.enriched_at = get_current_timestamp()
+                candidate.enrichment.full_enrichment_data = deep_dive_result.model_dump()
+                
+                # Extract key metrics
+                if deep_dive_result.match_analysis:
+                    ma = deep_dive_result.match_analysis
+                    candidate.enrichment.match_score = ma.overall_match_score
+                    candidate.enrichment.match_label = self._score_to_label(ma.overall_match_score)
+                    
+                    # ✅ FIX: Extract just the text from strength/concern objects
+                    strengths = getattr(ma, 'top_strengths', [])[:5]
+                    candidate.enrichment.top_strengths = [
+                        s.get('strength') if isinstance(s, dict) else str(s)
+                        for s in strengths
+                    ]
+                    
+                    concerns = getattr(ma, 'concerns', [])[:5]
+                    candidate.enrichment.concerns = [
+                        c.get('concern') if isinstance(c, dict) else str(c)
+                        for c in concerns
+                    ]
+                
+                # Update candidate stage
+                candidate.update_stage(CandidateStage.ENRICHED, triggered_by="system")
+            
+            await self._save_pipeline(pipeline)
+            logger.info(f"✅ Enriched pipeline {pipeline_id}")
+            
+        except Exception as e:
+            logger.error(f"Enrichment failed for {pipeline_id}: {e}")
+            candidate.enrichment.enrichment_error = str(e)
+            candidate.update_stage(CandidateStage.ENRICHMENT_FAILED, triggered_by="system")
+            await self._save_pipeline(pipeline)
+        
     async def _run_enrichment_batch(
         self,
         pipeline_id: str,
@@ -696,7 +788,8 @@ class PipelineService:
                 # STEP 1: Fetch contact info (email first)
                 # ===============================================
                 if include_contact_fetch and not candidate.contact.email:
-                    contact_result = await self._fetch_candidate_contact(candidate)
+                    session_id = pipeline.conversation_session_id or pipeline.search_session_id
+                    contact_result = await self._fetch_candidate_contact(candidate,session_id=session_id)
                     
                     if contact_result.get("email"):
                         candidate.contact.email = contact_result["email"]
@@ -709,6 +802,7 @@ class PipelineService:
                         candidate.contact.phone = contact_result["phone"]
                         candidate.contact.phone_source = ContactFetchSource.HATCH_API
                         candidate.contact.phone_fetched_at = get_current_timestamp()
+                        logger.info(f"   ✅ Got phone for {candidate.display_name}")
                     
                     if contact_result.get("error"):
                         candidate.contact.email_fetch_error = contact_result["error"]
@@ -735,9 +829,18 @@ class PipelineService:
                             ma = deep_dive_result.match_analysis
                             candidate.enrichment.match_score = ma.overall_match_score
                             candidate.enrichment.match_label = self._score_to_label(ma.overall_match_score)
-                            candidate.enrichment.top_strengths = ma.top_strengths[:5]
-                            candidate.enrichment.concerns = ma.concerns[:5]
-                        
+                            strengths = ma.top_strengths[:5] if hasattr(ma, 'top_strengths') else []
+                            candidate.enrichment.top_strengths = [
+                                s.get('strength') if isinstance(s, dict) else str(s)
+                                for s in strengths
+                            ]
+                            
+                            concerns = ma.concerns[:5] if hasattr(ma, 'concerns') else []
+                            candidate.enrichment.concerns = [
+                                c.get('concern') if isinstance(c, dict) else str(c)
+                                for c in concerns
+                            ]
+                                                
                         if deep_dive_result.skill_validation:
                             sv = deep_dive_result.skill_validation
                             candidate.enrichment.verified_skills = [
@@ -827,11 +930,67 @@ class PipelineService:
         logger.info(f"✅ Enrichment batch complete for {pipeline_id}")
         logger.info(f"   Success: {success_count}, Errors: {error_count}")
     
-    async def _fetch_candidate_contact(self, candidate: PipelineCandidate) -> Dict[str, Any]:
+    
+    async def get_enriched_dashboard(
+        self,
+        pipeline_id: str,
+        username: str
+    ) -> Dict[str, Any]:
         """
-        Fetch contact info for a candidate.
+        Get enriched data formatted for display.
+        Similar to deep-dive results format.
+        """
+        pipeline = await self.get_pipeline(pipeline_id)
+
+        if not pipeline:
+            raise ValueError("Pipeline not found")
+        if pipeline.username != username:
+            raise PermissionError("Access denied")
         
-        Priority: Email first (for outreach), then phone (for interview).
+        candidate = pipeline.candidate
+        if not candidate:
+            raise ValueError("No candidate found in pipeline")
+        enrichment_data = candidate.enrichment.full_enrichment_data or {}
+        
+        return {
+            "pipeline_id": pipeline_id,
+            "candidate": {
+                "name": candidate.display_name,
+                "headline": candidate.headline,
+                "current_title": candidate.current_title,
+                "current_company": candidate.current_company,
+                "location": candidate.location,
+                "linkedin_url": candidate.linkedin_url,
+                "profile_picture_url": candidate.profile_picture_url
+            },
+            "stage": candidate.stage.value,
+            "stage_label": pipeline.get_stage_label(),
+            
+            # Enriched analysis (from IntelligentEnrichmentOrchestrator)
+            "match_analysis": enrichment_data.get("match_analysis", {}),
+            "skill_validation": enrichment_data.get("skill_validation", {}),
+            "salary_timeline": enrichment_data.get("salary_timeline", {}),
+            "notice_period": enrichment_data.get("notice_period", {}),
+            "response_likelihood": enrichment_data.get("response_likelihood", {}),
+            "professional_footprint": enrichment_data.get("professional_footprint", {}),
+            
+            "contact": {
+                "email": candidate.contact.email,
+                "phone": candidate.contact.phone
+            },
+            
+            "job": pipeline.job.model_dump(),
+            "created_at": pipeline.created_at,
+            "updated_at": pipeline.updated_at
+        }
+        
+    async def _fetch_candidate_contact(
+        self, 
+        candidate: PipelineCandidate, 
+        session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetch contact info for a candidate using updated HatchService.
         """
         result = {"email": None, "phone": None, "error": None}
         
@@ -840,20 +999,18 @@ class PipelineService:
             return result
         
         try:
-            # If we have a profile_id, use it
             if candidate.profile_id:
-                hatch_result = await self.hatch.get_contact_info_by_profile_id(
-                    profile_mongo_id=candidate.profile_id,
-                    session_id=None
+                hatch_result = await self.hatch.find_email_by_profile_id(
+                    profile_id=candidate.profile_id,
+                    session_id=session_id
                 )
                 
                 if hatch_result.get("success"):
                     result["email"] = hatch_result.get("email")
-                    result["phone"] = hatch_result.get("phone")
+                    # NOTE: HatchService does not return phone numbers
                 else:
                     result["error"] = hatch_result.get("error", "Contact fetch failed")
             else:
-                # No profile_id - would need to implement LinkedIn URL lookup
                 result["error"] = "No profile_id available"
                 
         except Exception as e:
@@ -1155,10 +1312,11 @@ class PipelineService:
     # =========================================================================
     # SCHEDULING
     # =========================================================================
-    
+
     async def handle_scheduling_click(
         self,
-        scheduling_token: str
+        scheduling_token: str,
+        test_mode: bool = False  # ADD THIS PARAMETER
     ) -> Dict[str, Any]:
         """
         Handle when a candidate clicks the scheduling link.
@@ -1199,8 +1357,11 @@ class PipelineService:
         pipeline.update_candidate(candidate)
         await self._save_pipeline(pipeline)
         
-        # Get available time slots
-        available_slots = await self._get_available_slots(pipeline.pipeline_id)
+        # Get available time slots (WITH TEST MODE SUPPORT)
+        available_slots = await self._get_available_slots(
+            pipeline.pipeline_id,
+            test_mode=test_mode  # PASS TEST MODE HERE
+        )
         
         return {
             "valid": True,
@@ -1214,169 +1375,225 @@ class PipelineService:
             "available_slots": [s.model_dump() for s in available_slots],
             "timezone": pipeline.settings.timezone
         }
-    
+
+
     async def book_interview(
-        self,
-        scheduling_token: str,
-        scheduled_datetime: str,
-        timezone: str = "Asia/Kolkata",
-        preferred_time: Optional[str] = None,
-        special_requirements: Optional[str] = None,
-        candidate_notes: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Book an interview slot for a candidate.
-        
-        Args:
-            scheduling_token: Token from outreach email
-            scheduled_datetime: Selected time (ISO format)
-            timezone: Candidate's timezone
-            preferred_time: "morning" | "afternoon" | "evening"
-            special_requirements: Any special needs
-            candidate_notes: Additional notes from candidate
+            self,
+            scheduling_token: str,
+            scheduled_datetime: str,
+            timezone: str = "Asia/Kolkata",
+            preferred_time: Optional[str] = None,
+            special_requirements: Optional[str] = None,
+            candidate_notes: Optional[str] = None,
+            phone_number: Optional[str] = None
+        ) -> Dict[str, Any]:
+            """
+            Book an interview slot for a candidate.
+            """
+            # --- 🧪 TEST MODE: HARDCODED TIME ---
+            # Forces booking to 2:20 AM IST on Dec 11, 2025
+            scheduled_datetime = "2025-12-11T02:20:00+05:30"
+            timezone = "Asia/Kolkata"
+            logger.warning(f"🧪 TEST MODE: Forcing schedule time to {scheduled_datetime}")
+            # ------------------------------------
+
+            # Find pipeline and candidate
+            pipeline, candidate = await self._find_by_scheduling_token(scheduling_token)
             
-        Returns:
-            Booking confirmation
-        """
-        # Find pipeline and candidate
-        pipeline, candidate = await self._find_by_scheduling_token(scheduling_token)
-        
-        if not pipeline or not candidate:
+            if not pipeline or not candidate:
+                return {
+                    "success": False,
+                    "error": "Invalid scheduling token"
+                }
+            
+            # Handle phone number
+            if phone_number:
+                # User provided phone number - update candidate
+                candidate.contact.phone = phone_number
+                candidate.contact.phone_source = ContactFetchSource.MANUAL_INPUT
+                candidate.contact.phone_fetched_at = get_current_timestamp()
+                logger.info(f"📞 Updated phone number for {candidate.display_name}: {phone_number}")
+            elif not candidate.contact.phone:
+                # No phone available - try to fetch
+                if self.hatch and candidate.profile_id:
+                    contact_result = await self._fetch_candidate_contact(candidate)
+                    if contact_result.get("phone"):
+                        candidate.contact.phone = contact_result["phone"]
+                        candidate.contact.phone_source = ContactFetchSource.HATCH_API
+                        candidate.contact.phone_fetched_at = get_current_timestamp()
+            
+            # Validate phone is available
+            if not candidate.contact.phone:
+                return {
+                    "success": False,
+                    "error": "Phone number required for interview. Please provide your phone number.",
+                    "requires_phone": True  # Signal to frontend
+                }
+            
+            # Create interview schedule
+            schedule = InterviewSchedule(
+                pipeline_id=pipeline.pipeline_id,
+                candidate_id=candidate.candidate_id,
+                scheduling_token=scheduling_token,
+                candidate_name=candidate.display_name,
+                candidate_email=candidate.contact.email,
+                candidate_phone=candidate.contact.phone,
+                linkedin_url=candidate.linkedin_url,
+                job_title=pipeline.job.job_title,
+                company_name=pipeline.job.company_name,
+                scheduled_datetime=scheduled_datetime,
+                timezone=timezone,
+                duration_minutes=pipeline.job.interview_duration_minutes,
+                status=ScheduleStatus.CONFIRMED,
+                candidate_preferred_time=preferred_time,
+                candidate_special_requirements=special_requirements,
+                candidate_notes=candidate_notes,
+                confirmed_at=get_current_timestamp()
+            )
+            
+            # Save schedule
+            await self.schedules_collection.insert_one(schedule.model_dump())
+            
+            # Update candidate
+            candidate.interview.scheduled_datetime = scheduled_datetime
+            candidate.interview.timezone = timezone
+            candidate.interview.duration_minutes = pipeline.job.interview_duration_minutes
+            
+            if candidate.outreach:
+                candidate.outreach.response_type = "scheduled"
+            
+            candidate.update_stage(CandidateStage.SCHEDULED, triggered_by="candidate")
+            
+            pipeline.update_candidate(candidate)
+            pipeline.stats.total_scheduled += 1
+            pipeline.recalculate_stats()
+            await self._save_pipeline(pipeline)
+            
+            # Send confirmation email
+            if self.email_service:
+                try:
+                    await self.email_service.send_booking_confirmation(
+                        candidate_email=candidate.contact.email,
+                        candidate_name=candidate.display_name,
+                        scheduled_datetime=scheduled_datetime,
+                        timezone=timezone,
+                        job_title=pipeline.job.job_title,
+                        duration_minutes=pipeline.job.interview_duration_minutes
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send confirmation email: {e}")
+            
+            logger.info(f"✅ Interview booked for {candidate.display_name} at {scheduled_datetime}")
+            
+            # Format datetime for display
+            # Note: +05:30 format is handled automatically by fromisoformat in Python 3.7+
+            dt = datetime.fromisoformat(scheduled_datetime.replace('Z', '+00:00'))
+            formatted_time = dt.strftime("%A, %B %d at %I:%M %p")
+            
             return {
-                "success": False,
-                "error": "Invalid scheduling token"
+                "success": True,
+                "schedule_id": schedule.schedule_id,
+                "scheduled_datetime": scheduled_datetime,
+                "formatted_time": formatted_time,
+                "timezone": timezone,
+                "duration_minutes": pipeline.job.interview_duration_minutes,
+                "message": f"Your interview is confirmed for {formatted_time}"
             }
         
-        # Validate phone number for interview
-        if not candidate.contact.phone:
-            # Try to fetch phone now
-            if self.hatch and candidate.profile_id:
-                contact_result = await self._fetch_candidate_contact(candidate)
-                if contact_result.get("phone"):
-                    candidate.contact.phone = contact_result["phone"]
-                    candidate.contact.phone_source = ContactFetchSource.HATCH_API
-                    candidate.contact.phone_fetched_at = get_current_timestamp()
-        
-        if not candidate.contact.phone:
-            return {
-                "success": False,
-                "error": "Phone number required for interview. Please contact support."
-            }
-        
-        # Create interview schedule
-        schedule = InterviewSchedule(
-            pipeline_id=pipeline.pipeline_id,
-            candidate_id=candidate.candidate_id,
-            scheduling_token=scheduling_token,
-            candidate_name=candidate.display_name,
-            candidate_email=candidate.contact.email,
-            candidate_phone=candidate.contact.phone,
-            linkedin_url=candidate.linkedin_url,
-            job_title=pipeline.job.job_title,
-            company_name=pipeline.job.company_name,
-            scheduled_datetime=scheduled_datetime,
-            timezone=timezone,
-            duration_minutes=pipeline.job.interview_duration_minutes,
-            status=ScheduleStatus.CONFIRMED,
-            candidate_preferred_time=preferred_time,
-            candidate_special_requirements=special_requirements,
-            candidate_notes=candidate_notes,
-            confirmed_at=get_current_timestamp()
-        )
-        
-        # Save schedule
-        await self.schedules_collection.insert_one(schedule.model_dump())
-        
-        # Update candidate
-        candidate.interview.scheduled_datetime = scheduled_datetime
-        candidate.interview.timezone = timezone
-        candidate.interview.duration_minutes = pipeline.job.interview_duration_minutes
-        
-        if candidate.outreach:
-            candidate.outreach.response_type = "scheduled"
-        
-        candidate.update_stage(CandidateStage.SCHEDULED, triggered_by="candidate")
-        
-        pipeline.update_candidate(candidate)
-        pipeline.stats.total_scheduled += 1
-        pipeline.recalculate_stats()
-        await self._save_pipeline(pipeline)
-        
-        # Send confirmation email
-        if self.email_service:
-            try:
-                await self.email_service.send_booking_confirmation(
-                    candidate_email=candidate.contact.email,
-                    candidate_name=candidate.display_name,
-                    scheduled_datetime=scheduled_datetime,
-                    timezone=timezone,
-                    job_title=pipeline.job.job_title,
-                    duration_minutes=pipeline.job.interview_duration_minutes
-                )
-            except Exception as e:
-                logger.error(f"Failed to send confirmation email: {e}")
-        
-        logger.info(f"✅ Interview booked for {candidate.display_name} at {scheduled_datetime}")
-        
-        # Format datetime for display
-        dt = datetime.fromisoformat(scheduled_datetime)
-        formatted_time = dt.strftime("%A, %B %d at %I:%M %p")
-        
-        return {
-            "success": True,
-            "schedule_id": schedule.schedule_id,
-            "scheduled_datetime": scheduled_datetime,
-            "formatted_time": formatted_time,
-            "timezone": timezone,
-            "duration_minutes": pipeline.job.interview_duration_minutes,
-            "message": f"Your interview is confirmed for {formatted_time}"
-        }
-    
     async def _get_available_slots(
         self,
         pipeline_id: str,
-        days_ahead: int = 14
+        days_ahead: int = 14,
+        test_mode: bool = False
     ) -> List:
         """Get available time slots for booking."""
-        from models.scheduling_models import TimeSlot, TimeSlotType
+        from models.scheduling_models import TimeSlot
 
-        # Try to get scheduling config
-        config_doc = await self.scheduling_config_collection.find_one({
-            "pipeline_id": pipeline_id
-        })
-        
-        if config_doc:
-            config = SchedulingConfiguration(**config_doc)
-        else:
-            # Use defaults
-            config = SchedulingConfiguration(
-                username="system",
-                timezone="Asia/Kolkata"
-            )
-            # Add default availability: 10am-6pm weekdays
-            from models.scheduling_models import AvailabilityWindow
-            config.availability_windows = [
-                AvailabilityWindow(
-                    start_time="10:00",
-                    end_time="18:00",
-                    days_of_week=[0, 1, 2, 3, 4]  # Mon-Fri
+        if test_mode:
+            # TESTING: Generate slots for next 5 minutes
+            logger.info("🧪 TEST MODE: Generating immediate test slots")
+            now = datetime.utcnow()
+            test_slots = []
+            
+            for i in range(1, 6):  # 5 slots, 1-5 minutes from now
+                slot_time = now + timedelta(minutes=i)
+                slot_id = f"test-slot-{i}"
+                
+                # Format times properly
+                date_str = slot_time.strftime("%Y-%m-%d")
+                start_time_str = slot_time.strftime("%H:%M")
+                end_time_str = (slot_time + timedelta(minutes=30)).strftime("%H:%M")
+                datetime_str = slot_time.isoformat() + "Z"  # Add Z for UTC
+                
+                # Determine slot type based on hour - USE STRINGS DIRECTLY
+                hour = slot_time.hour
+                if hour < 12:
+                    slot_type = "morning"
+                elif hour < 17:
+                    slot_type = "afternoon"
+                else:
+                    slot_type = "evening"
+                
+                test_slots.append(TimeSlot(
+                    slot_id=slot_id,
+                    date=date_str,
+                    start_time=start_time_str,
+                    end_time=end_time_str,
+                    datetime=datetime_str,
+                    timezone="Asia/Kolkata",
+                    is_available=True,
+                    slot_type=slot_type  # Now using string
+                ))
+            
+            logger.info(f"   Generated {len(test_slots)} test slots:")
+            for slot in test_slots:
+                logger.info(f"     - {slot.start_time} ({slot.datetime})")
+            
+            return test_slots
+
+        # Normal production mode
+        try:
+            config_doc = await self.scheduling_config_collection.find_one({
+                "pipeline_id": pipeline_id
+            })
+            
+            if config_doc:
+                from models.scheduling_models import SchedulingConfiguration
+                config = SchedulingConfiguration(**config_doc)
+            else:
+                # Use defaults
+                from models.scheduling_models import (AvailabilityWindow,
+                                                      SchedulingConfiguration)
+                config = SchedulingConfiguration(
+                    username="system",
+                    timezone="Asia/Kolkata"
                 )
-            ]
-        
-        # Get existing bookings
-        existing = await self.schedules_collection.find({
-            "pipeline_id": pipeline_id,
-            "status": {"$nin": [ScheduleStatus.CANCELLED.value, ScheduleStatus.RESCHEDULED.value]}
-        }).to_list(length=100)
-        
-        existing_schedules = [InterviewSchedule(**s) for s in existing]
-        
-        # Generate available slots
-        from_date = datetime.utcnow() + timedelta(hours=config.min_notice_hours)
-        to_date = datetime.utcnow() + timedelta(days=days_ahead)
-        
-        return config.generate_available_slots(from_date, to_date, existing_schedules)
-    
+                config.availability_windows = [
+                    AvailabilityWindow(
+                        start_time="10:00",
+                        end_time="18:00",
+                        days_of_week=[0, 1, 2, 3, 4]
+                    )
+                ]
+            
+            from models.scheduling_models import (InterviewSchedule,
+                                                  ScheduleStatus)
+            
+            existing = await self.schedules_collection.find({
+                "pipeline_id": pipeline_id,
+                "status": {"$nin": [ScheduleStatus.CANCELLED.value, ScheduleStatus.RESCHEDULED.value]}
+            }).to_list(length=100)
+            
+            existing_schedules = [InterviewSchedule(**s) for s in existing]
+            
+            from_date = datetime.utcnow() + timedelta(hours=config.min_notice_hours)
+            to_date = datetime.utcnow() + timedelta(days=days_ahead)
+            
+            return config.generate_available_slots(from_date, to_date, existing_schedules)
+            
+        except Exception as e:
+            logger.error(f"Failed to generate slots: {e}", exc_info=True)
+            return []
     # =========================================================================
     # INTERVIEW TRIGGERING
     # =========================================================================
@@ -1585,12 +1802,31 @@ class PipelineService:
     # =========================================================================
     
     async def get_pipeline(self, pipeline_id: str) -> Optional[RecruitmentPipeline]:
-        """Get pipeline by ID."""
-        doc = await self.pipelines_collection.find_one({"pipeline_id": pipeline_id})
-        if doc:
-            doc.pop("_id", None)
-            return RecruitmentPipeline(**doc)
-        return None
+            """
+            Get pipeline by ID with validation and logging.
+            """
+            # 1. Validation: Fail fast if ID is missing or invalid
+            if not pipeline_id or pipeline_id == "undefined" or pipeline_id == "null":
+                logger.error(f"❌ Invalid pipeline_id requested: '{pipeline_id}'")
+                raise ValueError("Invalid Pipeline ID provided")
+
+            try:
+                # 2. Query
+                doc = await self.pipelines_collection.find_one({"pipeline_id": pipeline_id})
+                
+                if doc:
+                    # 3. Success
+                    doc.pop("_id", None)
+                    return RecruitmentPipeline(**doc)
+                
+                # 4. Not Found Logging
+                logger.warning(f"⚠️ Pipeline not found for ID: {pipeline_id}")
+                return None
+
+            except Exception as e:
+                # 5. Database Error Logging
+                logger.error(f"🔥 Database error retrieving pipeline {pipeline_id}: {str(e)}")
+                raise e
     
     async def get_pipeline_by_session(
         self,
@@ -1972,14 +2208,42 @@ class PipelineService:
     # =========================================================================
     
     async def _save_pipeline(self, pipeline: RecruitmentPipeline):
-        """Save pipeline to MongoDB."""
+        """Save pipeline to MongoDB with verification."""
         pipeline.updated_at = get_current_timestamp()
-        await self.pipelines_collection.update_one(
-            {"pipeline_id": pipeline.pipeline_id},
-            {"$set": pipeline.model_dump()},
-            upsert=True
-        )
-    
+        
+        try:
+            # Convert to dict
+            pipeline_dict = pipeline.model_dump()
+            
+            # Save to MongoDB
+            result = await self.pipelines_collection.update_one(
+                {"pipeline_id": pipeline.pipeline_id},
+                {"$set": pipeline_dict},
+                upsert=True
+            )
+            
+            # Log result
+            if result.upserted_id:
+                logger.info(f"✅ Created new pipeline {pipeline.pipeline_id}")
+            elif result.modified_count > 0:
+                logger.info(f"✅ Updated pipeline {pipeline.pipeline_id}")
+            else:
+                logger.warning(f"⚠️ No changes to pipeline {pipeline.pipeline_id}")
+            
+            # Verify it was saved
+            saved = await self.pipelines_collection.find_one(
+                {"pipeline_id": pipeline.pipeline_id}
+            )
+            
+            if not saved:
+                raise Exception(f"Pipeline {pipeline.pipeline_id} not found after save!")
+            
+            logger.info(f"✅ Verified pipeline {pipeline.pipeline_id} in database")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to save pipeline {pipeline.pipeline_id}: {e}", exc_info=True)
+            raise
+
     async def _cache_pipeline_mapping(self, pipeline: RecruitmentPipeline):
         """Cache pipeline ID mappings in Redis for quick lookup."""
         if self.redis:

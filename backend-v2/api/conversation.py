@@ -4,6 +4,7 @@ Conversation API Routes
 FastAPI routes for the conversational interface with Donna.
 """
 
+import asyncio
 import base64
 import uuid
 from datetime import datetime
@@ -11,6 +12,7 @@ from typing import Dict, List
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, HTTPException,
                      UploadFile)
+from fastapi.params import Body
 
 from core.dependencies import (get_conversation_manager, get_current_username,
                                get_jd_generator, get_jd_parser, get_mongodb,
@@ -28,6 +30,8 @@ from models.conversation_models import (ConversationFinalizeRequest,
                                         GenerateJDResponse,
                                         ManualImportRequest, RefineJDRequest,
                                         RefineJDResponse, RefineSearchRequest)
+from models.pipeline_models import CandidateStage, ContactFetchSource
+from models.scheduling_models import get_current_timestamp
 from services.conversation_manager import ConversationManager
 from services.jd_generator import JDGeneratorService
 from services.jd_parser import JDParser
@@ -1132,79 +1136,60 @@ async def create_manual_import(
 # Results page api's
 # ================================================================
 
-
 @router.post("/{session_id}/create-pipeline")
 async def create_pipeline_from_session(
     session_id: str,
     request: CreatePipelineRequest,
-    current_user: dict = Depends(get_current_username),
+    current_user: str = Depends(get_current_username),
     conversation_manager: ConversationManager = Depends(get_conversation_manager),
     pipeline_service: PipelineService = Depends(get_pipeline_service)
 ):
-    """
-    Create a pipeline from conversation session with shortlisted candidates.
-    
-    Called from results page when user clicks "Create Pipeline".
-    """
+    """Create individual pipelines for selected candidates from session."""
     try:
-        # Get session
         session = await conversation_manager.get_session(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        
-        if session.get("username") != current_user:
+        if not session or session.get("username") != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
         
-        # Get candidates from session
-        all_candidates = (
-                    session.get("search_results") or 
-                    session.get("sample_candidates") or 
-                    session.get("candidates") or 
-                    []
-                )
+        # Extract valid candidate IDs
+        all_candidates = session.get("search_results") or session.get("sample_candidates") or []
+        valid_ids = {
+            str(c.get("candidate_id") or c.get("candidate", {}).get("candidate_id"))
+            for c in all_candidates if c.get("candidate_id")
+        }
         
-        # Filter to shortlisted candidates
-        target_ids = set(request.shortlisted_candidate_ids)
-        shortlisted = []
-        for c in all_candidates:
-            # Handle both nested (Donna) and flat (manual) structures
-            candidate_data = c.get("candidate", c)
-            
-            candidate_id = str(
-                candidate_data.get("candidate_id") or 
-                candidate_data.get("_id") or 
-                c.get("candidate_id") or  # Check wrapper too
-                ""
-            )
-            
-            if candidate_id in target_ids:
-                shortlisted.append(c)
-                
-        if not shortlisted:
+        selected_ids = [cid for cid in request.shortlisted_candidate_ids if cid in valid_ids]
+        if not selected_ids:
             raise HTTPException(status_code=400, detail="No valid candidates selected")
         
-        # Get job data from session
+        # Create pipelines
         job_data = session.get("ideal_profile", {})
-        
-        # Create pipeline
-        pipeline = await pipeline_service.create_pipeline_from_search(
+        pipeline_ids = await pipeline_service.create_pipelines_from_search(
             username=current_user,
             conversation_session_id=session_id,
             search_session_id=session_id,
             job_data=job_data,
-            candidates=shortlisted,
-            pipeline_name=request.pipeline_name,
-            auto_shortlist=True
+            candidate_ids=selected_ids
         )
         
-        # Update session with pipeline link
-        await conversation_manager.link_session_to_pipeline(session_id, pipeline.pipeline_id)
+        # Create mapping
+        candidate_pipeline_mapping = {
+            selected_ids[i]: pipeline_ids[i] 
+            for i in range(len(selected_ids))
+        }
+        
+        # Link pipelines to session
+        batch_id = await conversation_manager.create_pipeline_batch(
+            session_id=session_id,
+            pipeline_ids=pipeline_ids,
+            candidate_pipeline_mapping=candidate_pipeline_mapping
+        )
         
         return {
             "success": True,
-            "pipeline_id": pipeline.pipeline_id,
-            "shortlisted_count": len(shortlisted),
-            "message": f"Pipeline created with {len(shortlisted)} candidates"
+            "batch_id": batch_id,
+            "pipeline_ids": pipeline_ids,
+            "count": len(pipeline_ids),
+            "message": f"Created {len(pipeline_ids)} pipelines"
         }
         
     except HTTPException:
@@ -1212,6 +1197,7 @@ async def create_pipeline_from_session(
     except Exception as e:
         logger.error(f"Create pipeline failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/{session_id}/results")
 async def get_session_results(
@@ -1337,3 +1323,283 @@ async def get_selected_candidates(
     except Exception as e:
         logger.error(f"Get selected failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@router.get("/list/pipeline-sessions")
+async def list_pipeline_sessions(
+    current_user: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """List all conversation sessions that have pipelines created."""
+    logger.info('here')
+    try:
+        sessions = await conversation_manager.conversation_sessions.find({
+            "username": current_user,
+            "pipelines_created": True
+        }).sort("pipeline_created_at", -1).to_list(length=50)
+        logger.info('here')
+        # Format for UI
+        session_summaries = []
+        for s in sessions:
+            s.pop("_id", None)
+            
+            pipeline_ids = s.get("pipeline_ids", [])
+            candidates = s.get("search_results") or s.get("sample_candidates") or []
+            
+            # Count by status
+            status_counts = {
+                "pending": 0,
+                "enriching": 0,
+                "enriched": 0,
+                "outreach_sent": 0,
+                "failed": 0
+            }
+            
+            for c in candidates:
+                if c.get("pipeline_id"):
+                    status = c.get("enrichment_status", "pending")
+                    if status in status_counts:
+                        status_counts[status] += 1
+            
+            session_summaries.append({
+                "session_id": s["session_id"],
+                "batch_id": s.get("pipeline_batch_id"),
+                "source": s.get("source", "donna_search"),
+                "job_title": s.get("ideal_profile", {}).get("role_title", "Untitled Position"),
+                "total_candidates": len(pipeline_ids),
+                "status_counts": status_counts,
+                "created_at": s.get("pipeline_created_at"),
+                "last_updated": s.get("updated_at")
+            })
+        
+        return {
+            "success": True,
+            "sessions": session_summaries,
+            "total": len(session_summaries)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list pipeline sessions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{session_id}/pipeline-status")
+async def get_pipeline_batch_status(
+    session_id: str,
+    current_user: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    pipeline_service: PipelineService = Depends(get_pipeline_service)
+):
+    """Get detailed status of all pipelines in a session."""
+    try:
+        session = await conversation_manager.get_session(session_id)
+        if not session or session.get("username") != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        pipeline_ids = session.get("pipeline_ids", [])
+        candidates = session.get("search_results") or session.get("sample_candidates") or []
+        
+        # Fetch pipeline statuses
+        candidate_statuses = []
+        for candidate in candidates:
+            pipeline_id = candidate.get("pipeline_id")
+            if not pipeline_id:
+                continue
+            
+            # Get pipeline
+            pipeline = await pipeline_service.get_pipeline(pipeline_id)
+            if not pipeline:
+                continue
+            
+            pipe_candidate = pipeline.candidate
+            
+            candidate_statuses.append({
+                "candidate_id": candidate.get("candidate_id"),
+                "pipeline_id": pipeline_id,
+                "name": pipe_candidate.display_name,
+                "headline": pipe_candidate.headline,
+                "location": pipe_candidate.location,
+                "linkedin_url": pipe_candidate.linkedin_url,
+                "profile_picture_url": pipe_candidate.profile_picture_url,
+                
+                # Status
+                "stage": pipe_candidate.stage.value,
+                "stage_label": pipeline.get_stage_label(),
+                "stage_updated_at": pipe_candidate.stage_updated_at,
+                
+                # Enrichment
+                "is_enriched": pipe_candidate.enrichment.is_enriched,
+                "match_score": pipe_candidate.enrichment.match_score,
+                "match_label": pipe_candidate.enrichment.match_label,
+                "has_email": bool(pipe_candidate.contact.email),
+                "enrichment_error": pipe_candidate.enrichment.enrichment_error,
+                
+                # Outreach
+                "outreach_sent": bool(pipe_candidate.outreach),
+                "outreach_opened": pipe_candidate.outreach.total_opens > 0 if pipe_candidate.outreach else False,
+                "outreach_clicked": pipe_candidate.outreach.total_clicks > 0 if pipe_candidate.outreach else False,
+                
+                # Manual data (if manual import)
+                "manual_data": candidate.get("manual_data")
+            })
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "batch_id": session.get("pipeline_batch_id"),
+            "job_title": session.get("ideal_profile", {}).get("role_title"),
+            "jd_text": session.get("jd_text"),
+            "candidates": candidate_statuses,
+            "total": len(candidate_statuses)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get batch status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{session_id}/batch-enrich")
+async def start_batch_enrichment(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    request: dict = Body(...),  # {pipeline_ids: List[str]}
+    current_user: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    pipeline_service: PipelineService = Depends(get_pipeline_service)
+):
+    """Start enrichment for multiple candidates in parallel."""
+    try:
+        session = await conversation_manager.get_session(session_id)
+        if not session or session.get("username") != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        pipeline_ids = request.get("pipeline_ids", [])
+        if not pipeline_ids:
+            raise HTTPException(status_code=400, detail="No pipelines selected")
+        
+        # Validate pipeline ownership
+        for pipeline_id in pipeline_ids:
+            pipeline = await pipeline_service.get_pipeline(pipeline_id)
+            if not pipeline or pipeline.username != current_user:
+                raise HTTPException(status_code=403, detail=f"Access denied to {pipeline_id}")
+        
+        # Start enrichment in background
+        background_tasks.add_task(
+            _batch_enrich_pipelines,
+            session_id=session_id,
+            pipeline_ids=pipeline_ids,
+            pipeline_service=pipeline_service,
+            conversation_manager=conversation_manager
+        )
+        
+        # Update session status
+        await conversation_manager.conversation_sessions.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "enrichment_started_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        
+        return {
+            "success": True,
+            "message": f"Started enrichment for {len(pipeline_ids)} candidates",
+            "pipeline_ids": pipeline_ids
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch enrichment failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _batch_enrich_pipelines(
+    session_id: str,
+    pipeline_ids: List[str],
+    pipeline_service: PipelineService,
+    conversation_manager: ConversationManager
+):
+    """Background task to enrich multiple pipelines."""
+    logger.info(f"🚀 Starting batch enrichment for {len(pipeline_ids)} pipelines")
+    
+    for pipeline_id in pipeline_ids:
+        try:
+            # Update candidate status to enriching
+            await conversation_manager.conversation_sessions.update_one(
+                {
+                    "session_id": session_id,
+                    "$or": [
+                        {"sample_candidates.pipeline_id": pipeline_id},
+                        {"search_results.pipeline_id": pipeline_id}
+                    ]
+                },
+                {
+                    "$set": {
+                        "sample_candidates.$[elem].enrichment_status": "enriching",
+                        "search_results.$[elem].enrichment_status": "enriching"
+                    }
+                },
+                array_filters=[{"elem.pipeline_id": pipeline_id}]
+            )
+            
+            # Start enrichment
+            pipeline = await pipeline_service.get_pipeline(pipeline_id)
+            if pipeline:
+                await pipeline_service._run_single_enrichment(
+                    pipeline_id=pipeline_id,
+                    include_contact_fetch=True
+                )
+                
+                # Update status based on result
+                pipeline = await pipeline_service.get_pipeline(pipeline_id)
+                final_status = "enriched" if pipeline.candidate.enrichment.is_enriched else "failed"
+                
+                await conversation_manager.conversation_sessions.update_one(
+                    {
+                        "session_id": session_id,
+                        "$or": [
+                            {"sample_candidates.pipeline_id": pipeline_id},
+                            {"search_results.pipeline_id": pipeline_id}
+                        ]
+                    },
+                    {
+                        "$set": {
+                            "sample_candidates.$[elem].enrichment_status": final_status,
+                            "search_results.$[elem].enrichment_status": final_status
+                        }
+                    },
+                    array_filters=[{"elem.pipeline_id": pipeline_id}]
+                )
+                
+                logger.info(f"✅ Enriched {pipeline_id}: {final_status}")
+            
+            # Rate limiting
+            await asyncio.sleep(3)
+            
+        except Exception as e:
+            logger.error(f"❌ Enrichment failed for {pipeline_id}: {e}")
+            
+            await conversation_manager.conversation_sessions.update_one(
+                {
+                    "session_id": session_id,
+                    "$or": [
+                        {"sample_candidates.pipeline_id": pipeline_id},
+                        {"search_results.pipeline_id": pipeline_id}
+                    ]
+                },
+                {
+                    "$set": {
+                        "sample_candidates.$[elem].enrichment_status": "failed",
+                        "search_results.$[elem].enrichment_status": "failed"
+                    }
+                },
+                array_filters=[{"elem.pipeline_id": pipeline_id}]
+            )
+    
+    logger.info(f"✅ Batch enrichment completed for session {session_id}")
+

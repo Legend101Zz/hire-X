@@ -1,8 +1,7 @@
-
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Calendar,
@@ -10,9 +9,9 @@ import {
     MapPin,
     Building2,
     ChevronLeft,
-    ChevronRight,
     Check,
-    Loader2
+    Loader2,
+    AlertCircle
 } from 'lucide-react';
 
 import { useSchedulingInfo, useBooking } from '@/hooks/useScheduling';
@@ -30,9 +29,13 @@ type Step = 'date' | 'time' | 'confirm';
 export default function SchedulingPage() {
     const params = useParams();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const token = params.token as string;
 
-    const { info, loading, error, fetchInfo } = useSchedulingInfo(token);
+    // Check for test mode in URL
+    const testMode = searchParams.get('test') === 'true';
+
+    const { info, loading, error, fetchInfo } = useSchedulingInfo(token, testMode);
     const { bookSlot, loading: booking } = useBooking(token);
 
     const [step, setStep] = useState<Step>('date');
@@ -45,7 +48,6 @@ export default function SchedulingPage() {
     }, [fetchInfo]);
 
     useEffect(() => {
-        // Detect user timezone
         const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         setTimezone(userTimezone);
     }, []);
@@ -62,16 +64,22 @@ export default function SchedulingPage() {
         }, {} as Record<string, TimeSlot[]>);
     }, [info?.available_slots]);
 
-    // Get available dates
     const availableDates = useMemo(() => {
         return Object.keys(slotsByDate).sort();
     }, [slotsByDate]);
 
-    // Get slots for selected date
     const slotsForDate = useMemo(() => {
         if (!selectedDate) return [];
         return slotsByDate[selectedDate] || [];
     }, [selectedDate, slotsByDate]);
+
+    // Auto-select first date in test mode
+    useEffect(() => {
+        if (testMode && availableDates.length > 0 && !selectedDate) {
+            setSelectedDate(availableDates[0]);
+            setStep('time');
+        }
+    }, [testMode, availableDates, selectedDate]);
 
     const handleDateSelect = (date: string) => {
         setSelectedDate(date);
@@ -84,7 +92,7 @@ export default function SchedulingPage() {
         setStep('confirm');
     };
 
-    const handleBook = async (notes?: string, requirements?: string) => {
+    const handleBook = async (notes?: string, requirements?: string, phone?: string) => {
         if (!selectedSlot) return;
 
         try {
@@ -93,9 +101,9 @@ export default function SchedulingPage() {
                 timezone,
                 candidate_notes: notes,
                 special_requirements: requirements,
+                phone_number: phone,
             });
 
-            // Redirect to confirmation page
             router.push(`/schedule/${token}/confirm?id=${confirmation.schedule_id}`);
         } catch (err) {
             // Error handled in hook
@@ -132,6 +140,27 @@ export default function SchedulingPage() {
     return (
         <SchedulingLayout>
             <div className="max-w-4xl mx-auto">
+                {/* Test Mode Banner */}
+                {testMode && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mb-6 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4"
+                    >
+                        <div className="flex items-center gap-3">
+                            <AlertCircle className="w-5 h-5 text-yellow-400" />
+                            <div>
+                                <p className="text-[14px] text-yellow-400 font-medium">
+                                    🧪 Test Mode Active
+                                </p>
+                                <p className="text-[13px] text-white/60 mt-0.5">
+                                    Interview slots available in the next 5 minutes for testing
+                                </p>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+
                 {/* Job Header */}
                 <JobHeader
                     jobTitle={info.job_title}
@@ -209,6 +238,8 @@ export default function SchedulingPage() {
     );
 }
 
+
+
 // Progress Steps Component
 function ProgressSteps({ currentStep }: { currentStep: Step }) {
     const steps = [
@@ -265,7 +296,8 @@ function ProgressSteps({ currentStep }: { currentStep: Step }) {
     );
 }
 
-// Date Selection Step
+
+
 function DateSelectionStep({
     availableDates,
     selectedDate,
@@ -281,7 +313,10 @@ function DateSelectionStep({
 }) {
     const [currentMonth, setCurrentMonth] = useState(() => {
         if (availableDates.length > 0) {
-            return new Date(availableDates[0]);
+            // Parse date safely - handle UTC dates
+            const firstDate = availableDates[0];
+            // Add 'T00:00:00' to ensure proper parsing
+            return new Date(firstDate + 'T00:00:00');
         }
         return new Date();
     });
@@ -330,8 +365,15 @@ function DateSelectionStep({
                 </h3>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                     {availableDates.slice(0, 8).map(date => {
-                        const dateObj = new Date(date);
+                        // Safe date parsing
+                        const dateObj = new Date(date + 'T00:00:00');
                         const isSelected = date === selectedDate;
+
+                        // Check if date is valid
+                        if (isNaN(dateObj.getTime())) {
+                            console.error('Invalid date:', date);
+                            return null;
+                        }
 
                         return (
                             <motion.button
@@ -365,7 +407,6 @@ function DateSelectionStep({
     );
 }
 
-// Time Selection Step
 function TimeSelectionStep({
     date,
     slots,
@@ -381,17 +422,30 @@ function TimeSelectionStep({
     onBack: () => void;
     duration: number;
 }) {
-    const dateObj = new Date(date);
+    // Safe date parsing
+    const dateObj = new Date(date + 'T00:00:00');
+
+    // Check if valid
+    if (isNaN(dateObj.getTime())) {
+        return (
+            <div className="text-center py-12">
+                <Clock className="w-12 h-12 text-red-400/20 mx-auto mb-4" />
+                <p className="text-red-400">Invalid date selected</p>
+                <button
+                    onClick={onBack}
+                    className="mt-4 text-[14px] text-blue-400 hover:text-blue-300"
+                >
+                    Go back
+                </button>
+            </div>
+        );
+    }
+
     const formattedDate = dateObj.toLocaleDateString('en-US', {
         weekday: 'long',
         month: 'long',
         day: 'numeric',
     });
-
-    // Group slots by time of day
-    const morningSlots = slots.filter(s => s.slot_type === 'morning');
-    const afternoonSlots = slots.filter(s => s.slot_type === 'afternoon');
-    const eveningSlots = slots.filter(s => s.slot_type === 'evening');
 
     return (
         <div className="space-y-6">
@@ -411,105 +465,31 @@ function TimeSelectionStep({
                 </div>
             </div>
 
-            {/* Time Slots */}
-            <div className="space-y-6">
-                {morningSlots.length > 0 && (
-                    <TimeSlotGroup
-                        label="Morning"
-                        icon="🌅"
-                        slots={morningSlots}
-                        selectedSlot={selectedSlot}
-                        onSelect={onSelectSlot}
-                    />
-                )}
+            {/* Use TimeSlotPicker Component */}
+            <TimeSlotPicker
+                slots={slots}
+                selectedSlot={selectedSlot}
+                onSelectSlot={onSelectSlot}
+                groupByTimeOfDay={true}
+            />
 
-                {afternoonSlots.length > 0 && (
-                    <TimeSlotGroup
-                        label="Afternoon"
-                        icon="☀️"
-                        slots={afternoonSlots}
-                        selectedSlot={selectedSlot}
-                        onSelect={onSelectSlot}
-                    />
-                )}
-
-                {eveningSlots.length > 0 && (
-                    <TimeSlotGroup
-                        label="Evening"
-                        icon="🌙"
-                        slots={eveningSlots}
-                        selectedSlot={selectedSlot}
-                        onSelect={onSelectSlot}
-                    />
-                )}
-
-                {slots.length === 0 && (
-                    <div className="text-center py-12">
-                        <Clock className="w-12 h-12 text-white/20 mx-auto mb-4" />
-                        <p className="text-white/60">No available slots for this date</p>
-                        <button
-                            onClick={onBack}
-                            className="mt-4 text-[14px] text-blue-400 hover:text-blue-300"
-                        >
-                            Choose another date
-                        </button>
-                    </div>
-                )}
-            </div>
+            {slots.length === 0 && (
+                <div className="text-center py-12">
+                    <Clock className="w-12 h-12 text-white/20 mx-auto mb-4" />
+                    <p className="text-white/60">No available slots for this date</p>
+                    <button
+                        onClick={onBack}
+                        className="mt-4 text-[14px] text-blue-400 hover:text-blue-300"
+                    >
+                        Choose another date
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
 
-function TimeSlotGroup({
-    label,
-    icon,
-    slots,
-    selectedSlot,
-    onSelect,
-}: {
-    label: string;
-    icon: string;
-    slots: TimeSlot[];
-    selectedSlot: TimeSlot | null;
-    onSelect: (slot: TimeSlot) => void;
-}) {
-    return (
-        <div>
-            <div className="flex items-center gap-2 mb-3">
-                <span className="text-lg">{icon}</span>
-                <span className="text-[13px] text-white/40 uppercase tracking-wide">{label}</span>
-            </div>
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                {slots.map(slot => {
-                    const isSelected = selectedSlot?.slot_id === slot.slot_id;
-
-                    return (
-                        <motion.button
-                            key={slot.slot_id}
-                            whileHover={{ scale: 1.03 }}
-                            whileTap={{ scale: 0.97 }}
-                            onClick={() => onSelect(slot)}
-                            disabled={!slot.is_available}
-                            className={`
-                py-3 px-4 rounded-xl text-[14px] font-medium transition-all border
-                ${isSelected
-                                    ? 'bg-white text-black border-white'
-                                    : slot.is_available
-                                        ? 'bg-white/[0.03] border-white/[0.08] text-white hover:bg-white/[0.08] hover:border-white/[0.15]'
-                                        : 'bg-white/[0.02] border-white/[0.04] text-white/20 cursor-not-allowed'
-                                }
-              `}
-                        >
-                            {slot.start_time}
-                        </motion.button>
-                    );
-                })}
-            </div>
-        </div>
-    );
-}
-
-// Confirmation Step
+// Updated ConfirmationStep using BookingForm component
 function ConfirmationStep({
     slot,
     jobTitle,
@@ -527,9 +507,6 @@ function ConfirmationStep({
     onBack: () => void;
     loading: boolean;
 }) {
-    const [notes, setNotes] = useState('');
-    const [requirements, setRequirements] = useState('');
-
     const dateObj = new Date(slot.datetime);
     const formattedDate = dateObj.toLocaleDateString('en-US', {
         weekday: 'long',
@@ -606,75 +583,13 @@ function ConfirmationStep({
                 </div>
             </div>
 
-            {/* Additional Info */}
-            <div className="space-y-4">
-                <div>
-                    <label className="block text-[13px] text-white/60 mb-2">
-                        Special Requirements (optional)
-                    </label>
-                    <input
-                        type="text"
-                        value={requirements}
-                        onChange={(e) => setRequirements(e.target.value)}
-                        placeholder="e.g., Need screen reader support"
-                        className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white placeholder-white/30 focus:outline-none focus:border-white/20"
-                    />
-                </div>
-
-                <div>
-                    <label className="block text-[13px] text-white/60 mb-2">
-                        Additional Notes (optional)
-                    </label>
-                    <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        rows={3}
-                        placeholder="Anything you'd like us to know..."
-                        className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white placeholder-white/30 focus:outline-none focus:border-white/20 resize-none"
-                    />
-                </div>
-            </div>
-
-            {/* Interview Info */}
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
-                <div className="flex items-start gap-3">
-                    <div className="p-1.5 bg-blue-500/20 rounded-lg">
-                        <Clock className="w-4 h-4 text-blue-400" />
-                    </div>
-                    <div>
-                        <p className="text-[14px] text-blue-400 font-medium">Interview Details</p>
-                        <p className="text-[13px] text-white/60 mt-1">
-                            This is a {duration}-minute voice interview. You'll receive a call at your
-                            registered phone number at the scheduled time.
-                        </p>
-                    </div>
-                </div>
-            </div>
-
-            {/* Confirm Button */}
-            <motion.button
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
-                onClick={() => onConfirm(notes, requirements)}
-                disabled={loading}
-                className="w-full py-4 bg-white text-black text-[15px] font-semibold rounded-xl hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
-            >
-                {loading ? (
-                    <>
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        Booking...
-                    </>
-                ) : (
-                    <>
-                        <Check className="w-5 h-5" />
-                        Confirm Interview
-                    </>
-                )}
-            </motion.button>
-
-            <p className="text-center text-[12px] text-white/40">
-                By confirming, you agree to be available at the scheduled time
-            </p>
+            {/* Use BookingForm Component */}
+            <BookingForm
+                onSubmit={(notes, requirements, phone) => onConfirm(notes, requirements, phone)}
+                loading={loading}
+                duration={duration}
+                requiresPhone={true}
+            />
         </div>
     );
 }
