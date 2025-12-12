@@ -252,7 +252,9 @@ async def _calculate_metrics(username: str, mongodb: MongoDB) -> DashboardMetric
     ]
     
     try:
-        result = await mongodb.conversation_sessions_collection.aggregate(pipeline).to_list(1)
+        # FIX: Properly await the cursor.to_list() method
+        cursor = mongodb.conversation_sessions_collection.aggregate(pipeline)
+        result = await cursor.to_list(length=1)
         stats = result[0] if result else {}
         
         # Calculate avg score
@@ -269,7 +271,7 @@ async def _calculate_metrics(username: str, mongodb: MongoDB) -> DashboardMetric
         
         avg_score = sum(scores) / len(scores) if scores else 0
     except Exception as e:
-        logger.error(f"Metrics calculation error: {e}")
+        logger.error(f"Metrics calculation error: {e}", exc_info=True)
         stats = {}
         avg_score = 0
     
@@ -286,7 +288,6 @@ async def _calculate_metrics(username: str, mongodb: MongoDB) -> DashboardMetric
         searches_this_month=searches_this_month,
         avg_match_score=round(avg_score, 1)
     )
-
 
 def _session_to_summary(doc: dict) -> SearchSummary:
     """Convert conversation_session document to SearchSummary."""

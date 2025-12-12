@@ -36,9 +36,6 @@ class HatchService:
         self.profiles_collection = mongodb.profiles_collection
         self.candidates_collection = mongodb.main_db["candidates"]
         
-        # Create indexes
-        self._create_indexes()
-        
         # HTTP session with retry logic
         self.session = self._create_session()
         
@@ -47,10 +44,10 @@ class HatchService:
         else:
             logger.info(f"✅ HatchService initialized")
     
-    def _create_indexes(self):
+    async def _create_indexes(self):
         """Create MongoDB indexes for efficient queries."""
         try:
-            self.candidates_collection.create_index("profile_id", unique=True)
+            await self.candidates_collection.create_index("profile_id", unique=True)
             logger.info("✅ HatchService indexes created")
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
@@ -117,8 +114,8 @@ class HatchService:
             Dict with email and metadata
         """
         try:
-            # Get profile
-            profile = self.profiles_collection.find_one({"_id": ObjectId(profile_id)})
+            # ✅ FIX: Await the async find_one operation
+            profile = await self.profiles_collection.find_one({"_id": ObjectId(profile_id)})
             
             if not profile:
                 return {
@@ -143,8 +140,8 @@ class HatchService:
             
             logger.info(f"📋 Finding email for: {first_name} {last_name} (ID: {profile_id})")
             
-            # Check cache
-            cached_data = self._get_from_cache(profile_id)
+            # ✅ FIX: Await the async cache lookup
+            cached_data = await self._get_from_cache(profile_id)
             
             if cached_data and cached_data.get("email"):
                 logger.info(f"✅ Cache HIT for profile {profile_id}")
@@ -185,8 +182,8 @@ class HatchService:
                 "updated_at": datetime.utcnow().isoformat()
             }
             
-            # Save to cache
-            self._save_to_cache(contact_data)
+            # ✅ FIX: Await the async save operation
+            await self._save_to_cache(contact_data)
             
             # Store in Redis session
             if session_id:
@@ -320,18 +317,20 @@ class HatchService:
         
         return {"success": False, "error": "Max retries exceeded"}
     
-    def _get_from_cache(self, profile_id: str) -> Optional[Dict[str, Any]]:
+    async def _get_from_cache(self, profile_id: str) -> Optional[Dict[str, Any]]:
         """Get email from candidates cache."""
         try:
-            return self.candidates_collection.find_one({"profile_id": profile_id})
+            # ✅ FIX: Await the async find_one operation
+            return await self.candidates_collection.find_one({"profile_id": profile_id})
         except Exception as e:
             logger.error(f"Cache read error: {e}")
             return None
     
-    def _save_to_cache(self, contact_data: Dict[str, Any]) -> bool:
+    async def _save_to_cache(self, contact_data: Dict[str, Any]) -> bool:
         """Save email to candidates collection."""
         try:
-            self.candidates_collection.update_one(
+            # ✅ FIX: Await the async update_one operation
+            await self.candidates_collection.update_one(
                 {"profile_id": contact_data["profile_id"]},
                 {"$set": contact_data},
                 upsert=True

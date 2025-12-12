@@ -140,24 +140,34 @@ export default function SchedulingPage() {
     return (
         <SchedulingLayout>
             <div className="max-w-4xl mx-auto">
-                {/* Test Mode Banner */}
                 {testMode && (
                     <motion.div
                         initial={{ opacity: 0, y: -10 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="mb-6 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4"
+                        className="mb-6 bg-purple-500/10 border border-purple-500/20 rounded-xl p-4"
                     >
-                        <div className="flex items-center gap-3">
-                            <AlertCircle className="w-5 h-5 text-yellow-400" />
-                            <div>
-                                <p className="text-[14px] text-yellow-400 font-medium">
-                                    🧪 Test Mode Active
-                                </p>
-                                <p className="text-[13px] text-white/60 mt-0.5">
-                                    Interview slots available in the next 5 minutes for testing
-                                </p>
-                            </div>
-                        </div>
+                        <h3 className="text-[14px] text-purple-400 font-medium mb-3">
+                            🧪 Manual Time Entry
+                        </h3>
+                        <ManualTimeEntry onTimeSelect={(datetime) => {
+                            // Create a mock slot with the manual time
+                            const mockSlot: TimeSlot = {
+                                slot_id: 'manual-slot',
+                                date: datetime.split('T')[0],
+                                start_time: new Date(datetime).toLocaleTimeString('en-US', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: false
+                                }),
+                                end_time: '',
+                                datetime: datetime,
+                                timezone: timezone,
+                                is_available: true,
+                                slot_type: 'morning'
+                            };
+                            setSelectedSlot(mockSlot);
+                            setStep('confirm');
+                        }} />
                     </motion.div>
                 )}
 
@@ -590,6 +600,77 @@ function ConfirmationStep({
                 duration={duration}
                 requiresPhone={true}
             />
+        </div>
+    );
+}
+
+function ManualTimeEntry({
+    onTimeSelect
+}: {
+    onTimeSelect: (datetime: string) => void
+}) {
+    const [date, setDate] = useState('');
+    const [time, setTime] = useState('');
+    const [error, setError] = useState('');
+
+    const handleSubmit = () => {
+        if (!date || !time) {
+            setError('Please enter both date and time');
+            return;
+        }
+
+        // Combine date and time
+        const datetime = `${date}T${time}:00+05:30`; // IST timezone
+        const selectedTime = new Date(datetime);
+        const now = new Date();
+
+        if (selectedTime <= now) {
+            setError('Selected time must be in the future');
+            return;
+        }
+
+        setError('');
+        onTimeSelect(datetime);
+    };
+
+    return (
+        <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+                <div>
+                    <label className="block text-[12px] text-white/60 mb-1.5">
+                        Date
+                    </label>
+                    <input
+                        type="date"
+                        value={date}
+                        onChange={(e) => setDate(e.target.value)}
+                        min={new Date().toISOString().split('T')[0]}
+                        className="w-full px-3 py-2 bg-white/[0.06] border border-white/[0.08] rounded-lg text-[14px] text-white focus:outline-none focus:border-white/20"
+                    />
+                </div>
+                <div>
+                    <label className="block text-[12px] text-white/60 mb-1.5">
+                        Time
+                    </label>
+                    <input
+                        type="time"
+                        value={time}
+                        onChange={(e) => setTime(e.target.value)}
+                        className="w-full px-3 py-2 bg-white/[0.06] border border-white/[0.08] rounded-lg text-[14px] text-white focus:outline-none focus:border-white/20"
+                    />
+                </div>
+            </div>
+
+            {error && (
+                <p className="text-[12px] text-red-400">{error}</p>
+            )}
+
+            <button
+                onClick={handleSubmit}
+                className="w-full py-2 bg-purple-500 hover:bg-purple-600 text-white text-[13px] font-medium rounded-lg transition-colors"
+            >
+                Use This Time
+            </button>
         </div>
     );
 }

@@ -1376,130 +1376,147 @@ class PipelineService:
             "timezone": pipeline.settings.timezone
         }
 
-
     async def book_interview(
-            self,
-            scheduling_token: str,
-            scheduled_datetime: str,
-            timezone: str = "Asia/Kolkata",
-            preferred_time: Optional[str] = None,
-            special_requirements: Optional[str] = None,
-            candidate_notes: Optional[str] = None,
-            phone_number: Optional[str] = None
-        ) -> Dict[str, Any]:
-            """
-            Book an interview slot for a candidate.
-            """
-            # --- 🧪 TEST MODE: HARDCODED TIME ---
-            # Forces booking to 2:20 AM IST on Dec 11, 2025
-            scheduled_datetime = "2025-12-11T02:20:00+05:30"
-            timezone = "Asia/Kolkata"
-            logger.warning(f"🧪 TEST MODE: Forcing schedule time to {scheduled_datetime}")
-            # ------------------------------------
+        self,
+        scheduling_token: str,
+        scheduled_datetime: str,
+        timezone: str = "Asia/Kolkata",
+        preferred_time: Optional[str] = None,
+        special_requirements: Optional[str] = None,
+        candidate_notes: Optional[str] = None,
+        phone_number: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Book an interview slot for a candidate.
+        """
+        from datetime import timezone as dt_timezone
 
-            # Find pipeline and candidate
-            pipeline, candidate = await self._find_by_scheduling_token(scheduling_token)
-            
-            if not pipeline or not candidate:
-                return {
-                    "success": False,
-                    "error": "Invalid scheduling token"
-                }
-            
-            # Handle phone number
-            if phone_number:
-                # User provided phone number - update candidate
-                candidate.contact.phone = phone_number
-                candidate.contact.phone_source = ContactFetchSource.MANUAL_INPUT
-                candidate.contact.phone_fetched_at = get_current_timestamp()
-                logger.info(f"📞 Updated phone number for {candidate.display_name}: {phone_number}")
-            elif not candidate.contact.phone:
-                # No phone available - try to fetch
-                if self.hatch and candidate.profile_id:
-                    contact_result = await self._fetch_candidate_contact(candidate)
-                    if contact_result.get("phone"):
-                        candidate.contact.phone = contact_result["phone"]
-                        candidate.contact.phone_source = ContactFetchSource.HATCH_API
-                        candidate.contact.phone_fetched_at = get_current_timestamp()
-            
-            # Validate phone is available
-            if not candidate.contact.phone:
-                return {
-                    "success": False,
-                    "error": "Phone number required for interview. Please provide your phone number.",
-                    "requires_phone": True  # Signal to frontend
-                }
-            
-            # Create interview schedule
-            schedule = InterviewSchedule(
-                pipeline_id=pipeline.pipeline_id,
-                candidate_id=candidate.candidate_id,
-                scheduling_token=scheduling_token,
-                candidate_name=candidate.display_name,
-                candidate_email=candidate.contact.email,
-                candidate_phone=candidate.contact.phone,
-                linkedin_url=candidate.linkedin_url,
-                job_title=pipeline.job.job_title,
-                company_name=pipeline.job.company_name,
-                scheduled_datetime=scheduled_datetime,
-                timezone=timezone,
-                duration_minutes=pipeline.job.interview_duration_minutes,
-                status=ScheduleStatus.CONFIRMED,
-                candidate_preferred_time=preferred_time,
-                candidate_special_requirements=special_requirements,
-                candidate_notes=candidate_notes,
-                confirmed_at=get_current_timestamp()
-            )
-            
-            # Save schedule
-            await self.schedules_collection.insert_one(schedule.model_dump())
-            
-            # Update candidate
-            candidate.interview.scheduled_datetime = scheduled_datetime
-            candidate.interview.timezone = timezone
-            candidate.interview.duration_minutes = pipeline.job.interview_duration_minutes
-            
-            if candidate.outreach:
-                candidate.outreach.response_type = "scheduled"
-            
-            candidate.update_stage(CandidateStage.SCHEDULED, triggered_by="candidate")
-            
-            pipeline.update_candidate(candidate)
-            pipeline.stats.total_scheduled += 1
-            pipeline.recalculate_stats()
-            await self._save_pipeline(pipeline)
-            
-            # Send confirmation email
-            if self.email_service:
-                try:
-                    await self.email_service.send_booking_confirmation(
-                        candidate_email=candidate.contact.email,
-                        candidate_name=candidate.display_name,
-                        scheduled_datetime=scheduled_datetime,
-                        timezone=timezone,
-                        job_title=pipeline.job.job_title,
-                        duration_minutes=pipeline.job.interview_duration_minutes
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send confirmation email: {e}")
-            
-            logger.info(f"✅ Interview booked for {candidate.display_name} at {scheduled_datetime}")
-            
-            # Format datetime for display
-            # Note: +05:30 format is handled automatically by fromisoformat in Python 3.7+
-            dt = datetime.fromisoformat(scheduled_datetime.replace('Z', '+00:00'))
-            formatted_time = dt.strftime("%A, %B %d at %I:%M %p")
-            
+        # Find pipeline and candidate
+        pipeline, candidate = await self._find_by_scheduling_token(scheduling_token)
+        
+        if not pipeline or not candidate:
             return {
-                "success": True,
-                "schedule_id": schedule.schedule_id,
-                "scheduled_datetime": scheduled_datetime,
-                "formatted_time": formatted_time,
-                "timezone": timezone,
-                "duration_minutes": pipeline.job.interview_duration_minutes,
-                "message": f"Your interview is confirmed for {formatted_time}"
+                "success": False,
+                "error": "Invalid scheduling token"
             }
         
+        # Handle phone number
+        if phone_number:
+            # User provided phone number - update candidate
+            candidate.contact.phone = phone_number
+            candidate.contact.phone_source = ContactFetchSource.MANUAL_INPUT
+            candidate.contact.phone_fetched_at = get_current_timestamp()
+            logger.info(f"📞 Updated phone number for {candidate.display_name}: {phone_number}")
+        elif not candidate.contact.phone:
+            # No phone available - try to fetch
+            if self.hatch and candidate.profile_id:
+                contact_result = await self._fetch_candidate_contact(candidate)
+                if contact_result.get("phone"):
+                    candidate.contact.phone = contact_result["phone"]
+                    candidate.contact.phone_source = ContactFetchSource.HATCH_API
+                    candidate.contact.phone_fetched_at = get_current_timestamp()
+        
+        # Validate phone is available
+        if not candidate.contact.phone:
+            return {
+                "success": False,
+                "error": "Phone number required for interview. Please provide your phone number.",
+                "requires_phone": True  # Signal to frontend
+            }
+        
+        # ✅ FIX: Validate scheduled time is in future with proper timezone handling
+        try:
+            # Parse the scheduled datetime (handles +05:30, Z, etc.)
+            scheduled_dt = datetime.fromisoformat(scheduled_datetime.replace('Z', '+00:00'))
+            
+            # Get current time as timezone-aware UTC
+            now_utc = datetime.now(dt_timezone.utc)
+            
+            # Compare timezone-aware datetimes
+            if scheduled_dt <= now_utc:
+                return {
+                    "success": False,
+                    "error": "Scheduled time must be in the future"
+                }
+        except ValueError as e:
+            return {
+                "success": False,
+                "error": f"Invalid datetime format: {e}"
+            }
+        
+        # Create interview schedule
+        schedule = InterviewSchedule(
+            pipeline_id=pipeline.pipeline_id,
+            candidate_id=candidate.candidate_id,
+            scheduling_token=scheduling_token,
+            candidate_name=candidate.display_name,
+            candidate_email=candidate.contact.email,
+            candidate_phone=candidate.contact.phone,
+            linkedin_url=candidate.linkedin_url,
+            job_title=pipeline.job.job_title,
+            company_name=pipeline.job.company_name,
+            scheduled_datetime=scheduled_datetime,
+            timezone=timezone,
+            duration_minutes=pipeline.job.interview_duration_minutes,
+            status=ScheduleStatus.CONFIRMED,
+            candidate_preferred_time=preferred_time,
+            candidate_special_requirements=special_requirements,
+            candidate_notes=candidate_notes,
+            confirmed_at=get_current_timestamp()
+        )
+        
+        # Save schedule
+        await self.schedules_collection.insert_one(schedule.model_dump())
+        
+        # Update candidate
+        candidate.interview.scheduled_datetime = scheduled_datetime
+        candidate.interview.timezone = timezone
+        candidate.interview.duration_minutes = pipeline.job.interview_duration_minutes
+        
+        if candidate.outreach:
+            candidate.outreach.response_type = "scheduled"
+        
+        candidate.update_stage(CandidateStage.SCHEDULED, triggered_by="candidate")
+        
+        pipeline.update_candidate(candidate)
+        pipeline.stats.total_scheduled += 1
+        pipeline.recalculate_stats()
+        await self._save_pipeline(pipeline)
+        
+        # Send confirmation email
+        if self.email_service:
+            try:
+                await self.email_service.send_booking_confirmation(
+                    candidate_email=candidate.contact.email,
+                    candidate_name=candidate.display_name,
+                    scheduled_datetime=scheduled_datetime,
+                    timezone=timezone,
+                    job_title=pipeline.job.job_title,
+                    duration_minutes=pipeline.job.interview_duration_minutes
+                )
+            except Exception as e:
+                logger.error(f"Failed to send confirmation email: {e}")
+        
+        logger.info(f"✅ Interview booked for {candidate.display_name} at {scheduled_datetime}")
+        
+        # Format datetime for display
+        try:
+            formatted_time = scheduled_dt.strftime("%A, %B %d at %I:%M %p")
+        except:
+            # Fallback if formatting fails
+            formatted_time = scheduled_datetime
+        
+        return {
+            "success": True,
+            "schedule_id": schedule.schedule_id,
+            "scheduled_datetime": scheduled_datetime,
+            "formatted_time": formatted_time,
+            "timezone": timezone,
+            "duration_minutes": pipeline.job.interview_duration_minutes,
+            "message": f"Your interview is confirmed for {formatted_time}"
+        }
+
+
     async def _get_available_slots(
         self,
         pipeline_id: str,
@@ -1597,34 +1614,62 @@ class PipelineService:
     # =========================================================================
     # INTERVIEW TRIGGERING
     # =========================================================================
-    
+
     async def trigger_scheduled_interviews(self):
         """
         Trigger interviews that are due.
         
-        Called by scheduled job every 5 minutes.
+        Called by scheduled job every 2 minutes.
         """
-        now = datetime.utcnow()
-        window_end = now + timedelta(minutes=5)
+        from datetime import timezone as dt_timezone
+
+        # ✅ FIX: Use timezone-aware datetime
+        now = datetime.now(dt_timezone.utc)
+        window_start = now - timedelta(minutes=5)  # Include recently passed
+        window_end = now + timedelta(minutes=10)   # Look ahead 10 min
+        
+        logger.info(f"🔍 Checking for interviews between {window_start.isoformat()} and {window_end.isoformat()}")
         
         # Find due interviews
         cursor = self.schedules_collection.find({
             "status": ScheduleStatus.CONFIRMED.value,
-            "scheduled_datetime": {
-                "$gte": now.isoformat(),
-                "$lte": window_end.isoformat()
-            },
             "interview_session_id": None
         })
         
         schedules = await cursor.to_list(length=50)
         
+        triggered_count = 0
+        
         for schedule_doc in schedules:
             try:
-                await self._trigger_single_interview(schedule_doc)
+                # Parse scheduled time
+                scheduled_str = schedule_doc.get("scheduled_datetime")
+                if not scheduled_str:
+                    continue
+                
+                # ✅ FIX: Parse with timezone
+                scheduled_dt = datetime.fromisoformat(scheduled_str.replace('Z', '+00:00'))
+                
+                # Check if in window
+                if window_start <= scheduled_dt <= window_end:
+                    logger.info(f"   🎯 Triggering interview: {schedule_doc.get('candidate_name')} at {scheduled_str}")
+                    await self._trigger_single_interview(schedule_doc)
+                    triggered_count += 1
+                else:
+                    logger.debug(f"   ⏭️  Skipping {schedule_doc.get('candidate_name')}: not in window")
+                    
             except Exception as e:
-                logger.error(f"Failed to trigger interview {schedule_doc['schedule_id']}: {e}")
-    
+                logger.error(f"Failed to trigger interview {schedule_doc.get('schedule_id')}: {e}", exc_info=True)
+        
+        if triggered_count > 0:
+            logger.info(f"✅ Triggered {triggered_count} interviews")
+        else:
+            logger.info("   No interviews to trigger")
+        
+        # ✅ FIX: Return result dict
+        return {"triggered": triggered_count}
+
+
     async def _trigger_single_interview(self, schedule_doc: Dict[str, Any]):
         """Trigger a single interview via VapiInterviewService."""
         schedule = InterviewSchedule(**schedule_doc)

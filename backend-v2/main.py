@@ -19,6 +19,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from core.config import settings
+from core.dependencies import (cleanup_services, get_scheduler,
+                               initialize_services)
+from core.logging_config import get_logger
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -53,7 +58,12 @@ async def lifespan(app: FastAPI):
     try:        
         # Initialize global services (stored in app.state)
         app.state.services = await initialize_services()
-        logger.info("🎉 All services started successfully")
+        # Start the scheduler
+        scheduler = get_scheduler()
+        scheduler.start()
+        logger.info("✅ NeuraLeap Hire Backend started successfully")
+        logger.info(f"   Environment: {settings.ENVIRONMENT}")
+        logger.info(f"   Base URL: {settings.APP_BASE_URL}")
         
     except Exception as e:
         logger.error(f"❌ Failed to initialize services: {e}")
@@ -68,7 +78,7 @@ async def lifespan(app: FastAPI):
     
     # Application is now running
     yield
-    
+    await cleanup_services()
     # Shutdown: Clean up resources
     logger.debug("Shutting down gracefully...")
     
@@ -113,12 +123,13 @@ async def health_check():
     Simple health check endpoint.
     Returns 200 OK if the server is running.
     """
+    scheduler = get_scheduler()
+    scheduler_status = scheduler.get_status() if scheduler else None
     return {
         "status": "healthy",
-        "service": "neuraleap-api",
-        "version": "3.0.0"
+        "environment": settings.ENVIRONMENT,
+        "scheduler": scheduler_status
     }
-
 
 @app.get("/", tags=["Root"])
 async def root():

@@ -24,7 +24,7 @@ class Settings:
     This class makes it easy to access all your configuration in one place.
     All values are read from the .env file or use defaults.
     """
-    
+    ENVIRONMENT=os.getenv("ENVIRONMENT", "development")
     # ========================================================================
     # JWT & Security
     # ========================================================================

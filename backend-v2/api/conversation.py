@@ -1479,17 +1479,35 @@ async def start_batch_enrichment(
         if not pipeline_ids:
             raise HTTPException(status_code=400, detail="No pipelines selected")
         
-        # Validate pipeline ownership
+        # Validate pipeline ownership and check enrichment status
+        pipelines_to_enrich = []
+        already_enriched = []
+        
         for pipeline_id in pipeline_ids:
             pipeline = await pipeline_service.get_pipeline(pipeline_id)
             if not pipeline or pipeline.username != current_user:
                 raise HTTPException(status_code=403, detail=f"Access denied to {pipeline_id}")
+            
+            # Check if already enriched
+            if pipeline.candidate and pipeline.candidate.enrichment.is_enriched:
+                already_enriched.append(pipeline_id)
+                logger.info(f"⏭️  Skipping {pipeline_id} - already enriched")
+            else:
+                pipelines_to_enrich.append(pipeline_id)
         
-        # Start enrichment in background
+        if not pipelines_to_enrich:
+            return {
+                "success": True,
+                "message": "All selected candidates are already enriched",
+                "already_enriched": len(already_enriched),
+                "pipeline_ids": pipeline_ids
+            }
+        
+        # Start enrichment in background only for non-enriched pipelines
         background_tasks.add_task(
             _batch_enrich_pipelines,
             session_id=session_id,
-            pipeline_ids=pipeline_ids,
+            pipeline_ids=pipelines_to_enrich,
             pipeline_service=pipeline_service,
             conversation_manager=conversation_manager
         )
@@ -1507,8 +1525,11 @@ async def start_batch_enrichment(
         
         return {
             "success": True,
-            "message": f"Started enrichment for {len(pipeline_ids)} candidates",
-            "pipeline_ids": pipeline_ids
+            "message": f"Started enrichment for {len(pipelines_to_enrich)} candidates",
+            "enriching": len(pipelines_to_enrich),
+            "already_enriched": len(already_enriched),
+            "pipeline_ids": pipelines_to_enrich,
+            "skipped_pipeline_ids": already_enriched
         }
         
     except HTTPException:
@@ -1527,8 +1548,42 @@ async def _batch_enrich_pipelines(
     """Background task to enrich multiple pipelines."""
     logger.info(f"🚀 Starting batch enrichment for {len(pipeline_ids)} pipelines")
     
+    enriched_count = 0
+    failed_count = 0
+    skipped_count = 0
+    
     for pipeline_id in pipeline_ids:
         try:
+            # Double-check if already enriched (in case status changed)
+            pipeline = await pipeline_service.get_pipeline(pipeline_id)
+            if not pipeline:
+                logger.warning(f"⚠️  Pipeline {pipeline_id} not found")
+                continue
+            
+            # Skip if already enriched
+            if pipeline.candidate and pipeline.candidate.enrichment.is_enriched:
+                logger.info(f"⏭️  Skipping {pipeline_id} - already enriched")
+                skipped_count += 1
+                
+                # Ensure status is set correctly in session
+                await conversation_manager.conversation_sessions.update_one(
+                    {
+                        "session_id": session_id,
+                        "$or": [
+                            {"sample_candidates.pipeline_id": pipeline_id},
+                            {"search_results.pipeline_id": pipeline_id}
+                        ]
+                    },
+                    {
+                        "$set": {
+                            "sample_candidates.$[elem].enrichment_status": "enriched",
+                            "search_results.$[elem].enrichment_status": "enriched"
+                        }
+                    },
+                    array_filters=[{"elem.pipeline_id": pipeline_id}]
+                )
+                continue
+            
             # Update candidate status to enriching
             await conversation_manager.conversation_sessions.update_one(
                 {
@@ -1548,41 +1603,46 @@ async def _batch_enrich_pipelines(
             )
             
             # Start enrichment
-            pipeline = await pipeline_service.get_pipeline(pipeline_id)
-            if pipeline:
-                await pipeline_service._run_single_enrichment(
-                    pipeline_id=pipeline_id,
-                    include_contact_fetch=True
-                )
-                
-                # Update status based on result
-                pipeline = await pipeline_service.get_pipeline(pipeline_id)
-                final_status = "enriched" if pipeline.candidate.enrichment.is_enriched else "failed"
-                
-                await conversation_manager.conversation_sessions.update_one(
-                    {
-                        "session_id": session_id,
-                        "$or": [
-                            {"sample_candidates.pipeline_id": pipeline_id},
-                            {"search_results.pipeline_id": pipeline_id}
-                        ]
-                    },
-                    {
-                        "$set": {
-                            "sample_candidates.$[elem].enrichment_status": final_status,
-                            "search_results.$[elem].enrichment_status": final_status
-                        }
-                    },
-                    array_filters=[{"elem.pipeline_id": pipeline_id}]
-                )
-                
-                logger.info(f"✅ Enriched {pipeline_id}: {final_status}")
+            await pipeline_service._run_single_enrichment(
+                pipeline_id=pipeline_id,
+                include_contact_fetch=True
+            )
             
-            # Rate limiting
-            await asyncio.sleep(3)
+            # Update status based on result
+            pipeline = await pipeline_service.get_pipeline(pipeline_id)
+            if pipeline.candidate.enrichment.is_enriched:
+                final_status = "enriched"
+                enriched_count += 1
+                logger.info(f"✅ Enriched {pipeline_id}")
+            else:
+                final_status = "failed"
+                failed_count += 1
+                logger.warning(f"⚠️  Enrichment failed for {pipeline_id}")
+            
+            await conversation_manager.conversation_sessions.update_one(
+                {
+                    "session_id": session_id,
+                    "$or": [
+                        {"sample_candidates.pipeline_id": pipeline_id},
+                        {"search_results.pipeline_id": pipeline_id}
+                    ]
+                },
+                {
+                    "$set": {
+                        "sample_candidates.$[elem].enrichment_status": final_status,
+                        "search_results.$[elem].enrichment_status": final_status
+                    }
+                },
+                array_filters=[{"elem.pipeline_id": pipeline_id}]
+            )
+            
+            # Rate limiting (only between actual API calls)
+            if enriched_count + failed_count < len(pipeline_ids) - skipped_count:
+                await asyncio.sleep(3)
             
         except Exception as e:
-            logger.error(f"❌ Enrichment failed for {pipeline_id}: {e}")
+            logger.error(f"❌ Enrichment failed for {pipeline_id}: {e}", exc_info=True)
+            failed_count += 1
             
             await conversation_manager.conversation_sessions.update_one(
                 {
@@ -1595,11 +1655,31 @@ async def _batch_enrich_pipelines(
                 {
                     "$set": {
                         "sample_candidates.$[elem].enrichment_status": "failed",
-                        "search_results.$[elem].enrichment_status": "failed"
+                        "search_results.$[elem].enrichment_status": "failed",
+                        "sample_candidates.$[elem].enrichment_error": str(e)[:200],
+                        "search_results.$[elem].enrichment_error": str(e)[:200]
                     }
                 },
                 array_filters=[{"elem.pipeline_id": pipeline_id}]
             )
     
+    # Final summary
     logger.info(f"✅ Batch enrichment completed for session {session_id}")
-
+    logger.info(f"   📊 Stats: {enriched_count} enriched, {skipped_count} skipped, {failed_count} failed")
+    
+    # Update session with completion status
+    await conversation_manager.conversation_sessions.update_one(
+        {"session_id": session_id},
+        {
+            "$set": {
+                "enrichment_completed_at": datetime.utcnow().isoformat(),
+                "enrichment_stats": {
+                    "enriched": enriched_count,
+                    "skipped": skipped_count,
+                    "failed": failed_count,
+                    "total": len(pipeline_ids)
+                },
+                "updated_at": datetime.utcnow().isoformat()
+            }
+        }
+    )

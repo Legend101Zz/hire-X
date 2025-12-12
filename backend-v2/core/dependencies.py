@@ -41,6 +41,7 @@ from services.salary_estimator import SalaryEstimator
 # from services.sample_profile_generator import SampleProfileGenerator
 # from services.sample_profile_generator_v2 import SampleProfileGeneratorV2
 from services.sample_profile_generator_v3 import SampleProfileGeneratorV3
+from services.scheduler import BackgroundScheduler
 from services.scorecard_workflow import ScorecardWorkflow
 from services.search_engine import SearchEngine
 from services.skill_validator import SkillValidator
@@ -237,10 +238,16 @@ async def initialize_services() -> Dict[str, Any]:
         enrichment_orchestrator=deep_dive_service,
         hatch_service=hatch_service, 
         email_service=email_service,
-        vapi_service=VapiInterviewService,  # Will be added when you integrate VapiInterviewService
+        vapi_service=vapi_interview_service,  # Will be added when you integrate VapiInterviewService
         base_url=settings.APP_BASE_URL
     )
     logger.info("✅ PipelineService initialized")
+    
+        # ========================================
+    # ✅ BACKGROUND SCHEDULER
+    # ========================================
+    scheduler = BackgroundScheduler(pipeline_service=pipeline_service)
+    logger.info("✅ BackgroundScheduler initialized")
     # ========================================
     # STORE IN GLOBAL DICT
     # ========================================
@@ -282,6 +289,8 @@ async def initialize_services() -> Dict[str, Any]:
         "email_service": email_service,
         "pipeline_service": pipeline_service,
         "hatch_service": hatch_service,
+        # Scheduler
+        "scheduler": scheduler,
     }
     
     # Save to global variable
@@ -290,6 +299,30 @@ async def initialize_services() -> Dict[str, Any]:
     
     logger.info("🎉 All services initialized successfully")
     return services
+
+async def cleanup_services():
+    """
+    Cleanup all services on shutdown.
+    
+    Called from main.py during application shutdown.
+    """
+    logger.info("🛑 Cleaning up services...")
+    
+    # Stop scheduler first
+    if "scheduler" in _global_services:
+        _global_services["scheduler"].shutdown()
+        logger.info("✅ Scheduler stopped")
+    
+    # Close database connections
+    if "mongodb" in _global_services:
+        _global_services["mongodb"].close()
+        logger.info("✅ MongoDB closed")
+    
+    if "redis_cache" in _global_services:
+        _global_services["redis_cache"].close()
+        logger.info("✅ Redis closed")
+    
+    logger.info("✅ Cleanup complete")
 
 # ============================================================================
 # Dependency Functions (Used in API Endpoints)
@@ -431,6 +464,10 @@ def get_pipeline_service() -> PipelineService:
 def get_email_service() -> EmailOutreachService:
     """Get the email service."""
     return _global_services["email_service"]
+
+def get_scheduler() -> BackgroundScheduler:
+    """Get the background scheduler."""
+    return _global_services["scheduler"]
 
 
 def get_current_username(
