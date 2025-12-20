@@ -209,3 +209,35 @@ export interface PipelineListItem {
   created_at: string;
   updated_at: string;
 }
+
+export interface PipelineSession {
+  session_id: string;
+  batch_id: string;
+  source: "donna_search" | "manual_import";
+  job_title: string;
+  total_candidates: number;
+  status_counts: {
+    pending: number;
+    enriching: number;
+    enriched: number;
+    outreach_sent: number;
+    responded: number;
+    interview_scheduled: number;
+    interview_completed: number;
+    failed: number;
+  };
+  // Action flags - when HR needs to do something
+  needs_action: {
+    needs_email_input: number; // Count of candidates needing manual email
+    needs_outreach_start: number; // Enriched but not contacted
+    needs_review: number; // Responses to review
+  };
+  created_at: string;
+  last_updated: string;
+}
+
+export interface PipelineListResponse {
+  success: boolean;
+  sessions: PipelineSession[];
+  total: number;
+}

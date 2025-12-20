@@ -1328,38 +1328,80 @@ async def get_selected_candidates(
 @router.get("/list/pipeline-sessions")
 async def list_pipeline_sessions(
     current_user: str = Depends(get_current_username),
-    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    pipeline_service: PipelineService = Depends(get_pipeline_service)
 ):
-    """List all conversation sessions that have pipelines created."""
-    logger.info('here')
+    """List all conversation sessions that have pipelines created with detailed status."""
     try:
         sessions = await conversation_manager.conversation_sessions.find({
             "username": current_user,
             "pipelines_created": True
         }).sort("pipeline_created_at", -1).to_list(length=50)
-        logger.info('here')
-        # Format for UI
+        logger.info(f'sessions: {sessions}')
         session_summaries = []
         for s in sessions:
             s.pop("_id", None)
             
             pipeline_ids = s.get("pipeline_ids", [])
-            candidates = s.get("search_results") or s.get("sample_candidates") or []
+            candidate_pipeline_mapping = s.get("candidate_pipeline_mapping", {})
             
-            # Count by status
+            # Initialize counts
             status_counts = {
                 "pending": 0,
                 "enriching": 0,
                 "enriched": 0,
                 "outreach_sent": 0,
+                "responded": 0,
+                "interview_scheduled": 0,
+                "interview_completed": 0,
                 "failed": 0
             }
             
-            for c in candidates:
-                if c.get("pipeline_id"):
-                    status = c.get("enrichment_status", "pending")
-                    if status in status_counts:
-                        status_counts[status] += 1
+            # Action flags
+            needs_action = {
+                "needs_email_input": 0,
+                "needs_outreach_start": 0,
+                "needs_review": 0
+            }
+            
+            # Fetch actual pipeline statuses
+            for pipeline_id in pipeline_ids:
+                try:
+                    pipeline = await pipeline_service.get_pipeline(pipeline_id)
+                    if not pipeline or not pipeline.candidate:
+                        continue
+                    
+                    candidate = pipeline.candidate
+                    stage = candidate.stage.value
+                    
+                    # Count by stage
+                    if stage == "sourced" or stage == "shortlisted":
+                        status_counts["pending"] += 1
+                    elif stage == "enriching":
+                        status_counts["enriching"] += 1
+                    elif stage == "enriched":
+                        status_counts["enriched"] += 1
+                        # Check if needs outreach
+                        if candidate.contact.email and not candidate.outreach:
+                            needs_action["needs_outreach_start"] += 1
+                    elif stage == "outreach_sent":
+                        status_counts["outreach_sent"] += 1
+                    elif stage == "responded":
+                        status_counts["responded"] += 1
+                        needs_action["needs_review"] += 1
+                    elif stage == "scheduled":
+                        status_counts["interview_scheduled"] += 1
+                    elif stage == "interviewed":
+                        status_counts["interview_completed"] += 1
+                    elif stage == "enrichment_failed":
+                        status_counts["failed"] += 1
+                        # Check if email is missing
+                        if not candidate.contact.email:
+                            needs_action["needs_email_input"] += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to get pipeline {pipeline_id}: {e}")
+                    continue
             
             session_summaries.append({
                 "session_id": s["session_id"],
@@ -1368,6 +1410,7 @@ async def list_pipeline_sessions(
                 "job_title": s.get("ideal_profile", {}).get("role_title", "Untitled Position"),
                 "total_candidates": len(pipeline_ids),
                 "status_counts": status_counts,
+                "needs_action": needs_action,
                 "created_at": s.get("pipeline_created_at"),
                 "last_updated": s.get("updated_at")
             })
@@ -1381,8 +1424,7 @@ async def list_pipeline_sessions(
     except Exception as e:
         logger.error(f"Failed to list pipeline sessions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
+    
 @router.get("/{session_id}/pipeline-status")
 async def get_pipeline_batch_status(
     session_id: str,

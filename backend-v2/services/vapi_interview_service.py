@@ -61,9 +61,9 @@ logger = get_logger(__name__)
 VAPI_API_BASE = "https://api.vapi.ai"
 
 # Model Configuration - Different models for different purposes
-MODEL_PLANNING = "moonshotai/kimi-k2-thinking"  # For interview planning (quality)
-MODEL_REALTIME = "anthropic/claude-haiku-4.5"   # For real-time responses (speed ~300ms)
-MODEL_ANALYSIS = "moonshotai/kimi-k2-thinking"  # For post-interview analysis
+MODEL_PLANNING = "anthropic/claude-sonnet-4.5"  # For interview planning (quality)
+MODEL_REALTIME = "google/gemini-3-flash-preview"   # For real-time responses (speed ~300ms)
+MODEL_ANALYSIS = "anthropic/claude-sonnet-4.5"  # For post-interview analysis
 
 
 # Default Voice Configuration - Sonic 3 with natural settings
@@ -147,11 +147,8 @@ class SSMLBuilder:
         NOT overly emotional - sounds like a real recruiter.
         """
         return (
-            f"Hello, is this {name}? "
-            f"{SSMLBuilder.add_pause(0.8)}"
-            f"Hi {name}, this is Neura calling from NeuraLeap. "
+            f"Hello, is this {name} this is Neura calling from NeuraLeap.? "
             f"{SSMLBuilder.add_pause(0.4)}"
-            f"Thanks for taking my call. Can you hear me okay?"
         )
     
     @staticmethod

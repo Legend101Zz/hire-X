@@ -14,23 +14,25 @@ import {
     Sparkles,
     LayoutGrid,
     ArrowRight,
-    TrendingUp,
     AlertCircle,
     CheckCircle2,
     X,
     Zap,
-    Users,
     Filter,
     Clock,
     IndianRupee,
     ChevronRight,
-    MoreHorizontal
+    Mail,
+    UserCheck,
+    FileText,
+    Bot,
+    HelpCircle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/contexts/AuthContext";
 import * as conversationApi from "@/utils/api/conversationApiV2";
 import AnimatedBackground from "@/components/auth/AnimatedBackground";
@@ -52,7 +54,7 @@ interface Candidate {
     current_company?: string;
     current_title?: string;
     location?: string;
-    experience_years?: number;
+    experience_years?: number | string;
     skills: string[];
     match_score?: number;
     match_analysis?: MatchAnalysis;
@@ -66,7 +68,7 @@ interface Candidate {
     };
 }
 
-// Helper to handle API inconsistencies (Object vs String)
+// Helper: Normalize list data from API
 const normalizePoints = (points: any[]): string[] => {
     if (!Array.isArray(points)) return [];
     return points.map(p => {
@@ -106,7 +108,7 @@ export default function ResultsPage() {
                 const data = await conversationApi.getSessionResults(sessionId, token);
                 setSessionData(data);
 
-                // --- FIXED MAPPING LOGIC ---
+                // --- DATA MAPPING LOGIC ---
                 const rawCandidates = data.candidates || [];
                 const mappedCandidates: Candidate[] = rawCandidates.map((c: any, index: number) => {
                     const candidateData = c.candidate || c; // Handle nested structure
@@ -138,7 +140,8 @@ export default function ResultsPage() {
                             strengths: normalizePoints(rawAnalysis.strengths),
                             concerns: normalizePoints(rawAnalysis.concerns)
                         },
-                        profile_picture_url: candidateData.profile_picture_url,
+                        // Ensure we capture the image URL if available
+                        profile_picture_url: candidateData.profile_picture_url || candidateData.img_url || candidateData.avatar_url,
                         source: c.source || "donna_search",
                         manual_data: candidateData.manual_data
                     };
@@ -179,13 +182,15 @@ export default function ResultsPage() {
 
         setShortlistedIds(newSet);
 
+        // Background sync
         try {
             await conversationApi.selectCandidates(sessionId, [id], isAdding, token!);
         } catch (err) {
             console.error("Failed to sync selection", err);
+            // Revert state on error
             if (isAdding) newSet.delete(id);
             else newSet.add(id);
-            setShortlistedIds(newSet);
+            setShortlistedIds(new Set(newSet));
         }
     };
 
@@ -211,7 +216,7 @@ export default function ResultsPage() {
     const handleCreatePipeline = async () => {
         if (!token || shortlistedIds.size === 0) return;
         setIsCreatingPipeline(true);
-        setShowPipelineModal(false); // Close modal immediately
+        // setShowPipelineModal(false); // keep open while loading for better UX
 
         try {
             const response = await conversationApi.createPipelineFromSession(
@@ -221,200 +226,198 @@ export default function ResultsPage() {
             );
 
             if (response.success && response.pipeline_ids.length > 0) {
-                // Always go to batch view (session-level)
                 router.push(`/pipeline/${sessionId}`);
             } else {
                 console.error("No pipelines created");
+                alert("Could not create pipeline. Please try again.");
+                setIsCreatingPipeline(false);
             }
         } catch (err) {
             console.error("Pipeline creation failed:", err);
             alert("Failed to create pipeline. Please try again.");
-        } finally {
             setIsCreatingPipeline(false);
         }
     };
 
-
     if (isLoading) {
-        return (
-            <div className="min-h-screen bg-background flex items-center justify-center relative overflow-hidden">
-                <AnimatedBackground />
-                <div className="z-10 flex flex-col items-center gap-4 p-8 bg-background/40 backdrop-blur-xl rounded-2xl border border-border/50">
-                    <Loader2 className="w-10 h-10 animate-spin text-primary" />
-                    <div className="text-center">
-                        <h2 className="text-foreground font-medium text-lg">Curating Talent Pool</h2>
-                        <p className="text-muted-foreground text-sm">Organizing your search results...</p>
-                    </div>
-                </div>
-            </div>
-        );
+        return <LoadingScreen />;
     }
 
     return (
-        <div className="relative h-screen bg-background text-foreground font-sans overflow-hidden">
-            <AnimatedBackground />
+        <TooltipProvider delayDuration={300}>
+            <div className="relative h-screen bg-background text-foreground font-sans overflow-hidden flex flex-col">
+                <AnimatedBackground />
 
-            {/* Main Layout */}
-            <div className="relative z-10 flex h-full">
+                {/* --- HEADER --- */}
+                <header className="h-14 border-b border-border/40 bg-background/60 backdrop-blur-xl z-50 flex items-center justify-between px-4 shrink-0">
+                    <div className="flex items-center gap-4">
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => router.push("/search")}
+                            className="text-muted-foreground hover:text-foreground hover:bg-white/5 rounded-full"
+                        >
+                            <ArrowLeft className="w-5 h-5" />
+                        </Button>
+                        <div className="flex flex-col">
+                            <h1 className="text-sm font-semibold text-foreground tracking-tight">
+                                {sessionData?.ideal_profile?.role_title || "Talent Search Results"}
+                            </h1>
+                            <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+                                Session: <span className="font-mono text-primary/80">{sessionId.slice(-6)}</span>
+                            </span>
+                        </div>
+                    </div>
 
-                {/* --- LEFT: EXCEL-LIKE LIST --- */}
-                <div className="w-[500px] flex flex-col border-r border-border/40 bg-background/60 backdrop-blur-xl shadow-2xl z-20">
-
-                    {/* Header */}
-                    <div className="h-16 flex items-center justify-between px-4 border-b border-border/40 shrink-0 bg-background/20">
-                        <div className="flex items-center gap-3">
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => router.push("/search")}
-                                className="text-muted-foreground hover:text-foreground hover:bg-white/10"
-                            >
-                                <ArrowLeft className="w-4 h-4" />
-                            </Button>
-                            <div>
-                                <h1 className="font-semibold text-sm text-foreground truncate max-w-[200px] leading-tight">
-                                    {sessionData?.ideal_profile?.role_title || "Search Results"}
-                                </h1>
-                                <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
-                                    <span className={`w-1.5 h-1.5 rounded-full ${candidates.length > 0 ? "bg-green-500" : "bg-zinc-700"}`} />
-                                    {candidates.length} Candidates Found
-                                </div>
+                    {/* Donna AI Mascot */}
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 cursor-help transition-all hover:bg-primary/20 group">
+                                <Bot className="w-4 h-4 text-primary group-hover:scale-110 transition-transform" />
+                                <span className="text-xs font-medium text-primary hidden sm:inline">Donna is active</span>
                             </div>
-                        </div>
-                    </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-xs bg-popover border-border p-3 text-xs shadow-xl">
+                            <p className="font-semibold mb-1 text-primary">I'm your AI Recruiter!</p>
+                            I've analyzed {candidates.length} profiles. Select the best ones, and I'll start interviewing them for you.
+                        </TooltipContent>
+                    </Tooltip>
+                </header>
 
-                    {/* Filters */}
-                    <div className="p-3 space-y-3 shrink-0 border-b border-border/40">
-                        <div className="relative group">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
-                            <input
-                                type="text"
-                                placeholder="Search candidates..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full h-9 bg-background/40 border border-border/40 rounded-md pl-9 pr-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-muted-foreground"
-                            />
-                        </div>
+                <div className="flex-1 flex overflow-hidden z-20">
 
-                        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                            <TabsList className="w-full bg-background/40 border border-border/40 p-0.5 h-9 rounded-md grid grid-cols-2">
-                                <TabsTrigger
-                                    value="all"
-                                    className="text-xs data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-muted-foreground h-8 rounded-sm transition-all"
-                                >
-                                    All Candidates
-                                </TabsTrigger>
-                                <TabsTrigger
-                                    value="shortlist"
-                                    className="text-xs data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-muted-foreground h-8 rounded-sm transition-all"
-                                >
-                                    Shortlist <span className="ml-1.5 bg-primary/20 px-1.5 rounded-full text-[9px]">{shortlistedIds.size}</span>
-                                </TabsTrigger>
-                            </TabsList>
-                        </Tabs>
-                    </div>
+                    {/* --- LEFT: SMART CANDIDATE LIST --- */}
+                    <div className="w-[450px] flex flex-col border-r border-border/40 bg-background/40 backdrop-blur-md shadow-2xl relative">
 
-                    {/* Table Header */}
-                    <div className="flex items-center px-4 py-2 border-b border-border/40 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-background/20">
-                        <div className="w-10 text-center">Score</div>
-                        <div className="flex-1 pl-3">Candidate Info</div>
-                        <div className="w-10 text-right pr-2">Action</div>
-                    </div>
-
-                    {/* Rows */}
-                    <ScrollArea className="flex-1">
-                        <div className="divide-y divide-border/20">
-                            {filteredCandidates.map((candidate) => (
-                                <CandidateRow
-                                    key={candidate.candidate_id}
-                                    candidate={candidate}
-                                    isSelected={selectedCandidate?.candidate_id === candidate.candidate_id}
-                                    isShortlisted={shortlistedIds.has(candidate.candidate_id)}
-                                    onClick={() => setSelectedCandidate(candidate)}
-                                    onToggleShortlist={(e: any) => toggleShortlist(e, candidate.candidate_id)}
+                        {/* Search & Filter Bar */}
+                        <div className="p-3 space-y-3 border-b border-border/40 bg-background/20 shrink-0">
+                            <div className="relative group">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                                <input
+                                    type="text"
+                                    placeholder="Filter by name, skill, or title..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="w-full h-10 bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-muted-foreground/50"
                                 />
-                            ))}
+                            </div>
 
-                            {filteredCandidates.length === 0 && (
-                                <div className="py-20 text-center px-6">
-                                    <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-3">
-                                        <Filter className="w-5 h-5 text-muted-foreground" />
-                                    </div>
-                                    <p className="text-muted-foreground text-sm">
-                                        {activeTab === 'shortlist' ? "No candidates shortlisted yet." : "No candidates found."}
-                                    </p>
-                                </div>
-                            )}
+                            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                                <TabsList className="w-full bg-black/20 p-1 rounded-lg grid grid-cols-2 gap-1 h-auto">
+                                    <TabsTrigger
+                                        value="all"
+                                        className="text-xs py-2 data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 rounded-md transition-all"
+                                    >
+                                        All Candidates ({candidates.length})
+                                    </TabsTrigger>
+                                    <TabsTrigger
+                                        value="shortlist"
+                                        className="text-xs py-2 data-[state=active]:bg-amber-500/10 data-[state=active]:text-amber-400 text-zinc-500 rounded-md transition-all"
+                                    >
+                                        Shortlist <span className="ml-2 bg-amber-500 text-black px-1.5 py-0.5 rounded-full text-[9px] font-bold">{shortlistedIds.size}</span>
+                                    </TabsTrigger>
+                                </TabsList>
+                            </Tabs>
                         </div>
-                    </ScrollArea>
 
-                    {/* Floating Outreach Bar */}
-                    <AnimatePresence>
-                        {shortlistedIds.size > 0 && (
-                            <div className="absolute bottom-6 left-4 right-4 z-30">
+                        {/* List Column Headers */}
+                        <div className="flex items-center px-4 py-2 border-b border-border/40 text-[10px] font-bold text-muted-foreground uppercase tracking-wider bg-white/[0.02] shrink-0">
+                            <div className="w-12 text-center">Score</div>
+                            <div className="flex-1 pl-3">Candidate Details</div>
+                            <div className="w-8"></div>
+                        </div>
+
+                        {/* Scrollable List */}
+                        <ScrollArea className="flex-1">
+                            <div className="divide-y divide-white/[0.06]">
+                                {filteredCandidates.map((candidate) => (
+                                    <CandidateRow
+                                        key={candidate.candidate_id}
+                                        candidate={candidate}
+                                        isSelected={selectedCandidate?.candidate_id === candidate.candidate_id}
+                                        isShortlisted={shortlistedIds.has(candidate.candidate_id)}
+                                        onClick={() => setSelectedCandidate(candidate)}
+                                        onToggleShortlist={(e: any) => toggleShortlist(e, candidate.candidate_id)}
+                                    />
+                                ))}
+
+                                {filteredCandidates.length === 0 && (
+                                    <div className="flex flex-col items-center justify-center py-20 px-6 text-center opacity-60">
+                                        <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
+                                            <Filter className="w-6 h-6 text-muted-foreground" />
+                                        </div>
+                                        <p className="text-sm font-medium text-foreground">No matches found</p>
+                                        <p className="text-xs text-muted-foreground mt-1">Try adjusting your filters.</p>
+                                    </div>
+                                )}
+                            </div>
+                        </ScrollArea>
+
+                        {/* "Start Outreach" Floating Button */}
+                        <AnimatePresence>
+                            {shortlistedIds.size > 0 && (
                                 <motion.div
-                                    initial={{ y: 20, opacity: 0 }}
+                                    initial={{ y: 50, opacity: 0 }}
                                     animate={{ y: 0, opacity: 1 }}
-                                    exit={{ y: 20, opacity: 0 }}
+                                    exit={{ y: 50, opacity: 0 }}
+                                    className="absolute bottom-5 left-5 right-5 z-30"
                                 >
                                     <Button
                                         onClick={() => setShowPipelineModal(true)}
-                                        className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground shadow-xl shadow-primary/20 border border-primary/20 font-medium rounded-xl"
+                                        className="w-full h-14 bg-gradient-to-r from-primary to-violet-600 hover:from-primary/90 hover:to-violet-600/90 text-white shadow-xl shadow-primary/20 border-t border-white/20 rounded-xl group relative overflow-hidden"
                                     >
-                                        <div className="flex items-center justify-between w-full px-2">
-                                            <span className="flex items-center gap-2">
-                                                <Badge variant="secondary" className="bg-white/20 text-white border-0">
+                                        <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                                        <div className="flex items-center justify-between w-full px-2 relative z-10">
+                                            <div className="flex items-center gap-3">
+                                                <span className="flex items-center justify-center w-8 h-8 rounded-full bg-white text-primary font-bold text-xs shadow-sm">
                                                     {shortlistedIds.size}
-                                                </Badge>
-                                                <span className="text-xs font-semibold uppercase tracking-wider">Selected</span>
-                                            </span>
-                                            <span className="flex items-center gap-2 text-sm">
-                                                Start Outreach <ArrowRight className="w-4 h-4" />
-                                            </span>
+                                                </span>
+                                                <div className="flex flex-col items-start text-xs">
+                                                    <span className="font-semibold text-white">Candidates Selected</span>
+                                                    <span className="text-white/80 font-light">Ready for outreach</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2 font-semibold text-sm">
+                                                Begin Outreach <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                            </div>
                                         </div>
                                     </Button>
                                 </motion.div>
-                            </div>
-                        )}
-                    </AnimatePresence>
-                </div>
-
-                {/* --- RIGHT: DOSSIER VIEW --- */}
-                <div className="flex-1 flex flex-col bg-background/20 backdrop-blur-md relative overflow-hidden">
-                    {/* Top Breadcrumb */}
-                    <div className="h-14 border-b border-border/40 flex items-center px-8 text-xs text-muted-foreground bg-background/20">
-                        <span>Search Results</span>
-                        <ChevronRight className="w-3 h-3 mx-2" />
-                        <span className="text-foreground">{selectedCandidate?.name || "Select Candidate"}</span>
+                            )}
+                        </AnimatePresence>
                     </div>
 
-                    {selectedCandidate ? (
-                        <CandidateDossier
-                            candidate={selectedCandidate}
-                            isShortlisted={shortlistedIds.has(selectedCandidate.candidate_id)}
-                            onToggleShortlist={(e: any) => toggleShortlist(e, selectedCandidate.candidate_id)}
-                        />
-                    ) : (
-                        <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
-                            <LayoutGrid className="w-12 h-12 mb-4 opacity-20" />
-                            <p className="text-sm">Select a candidate from the list to view details</p>
-                        </div>
-                    )}
+                    {/* --- RIGHT: CANDIDATE DOSSIER --- */}
+                    <div className="flex-1 flex flex-col bg-background/80 backdrop-blur-xl relative overflow-hidden">
+                        {selectedCandidate ? (
+                            <CandidateDossier
+                                candidate={selectedCandidate}
+                                isShortlisted={shortlistedIds.has(selectedCandidate.candidate_id)}
+                                onToggleShortlist={(e: any) => toggleShortlist(e, selectedCandidate.candidate_id)}
+                            />
+                        ) : (
+                            <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-10 text-center">
+                                <LayoutGrid className="w-16 h-16 mb-6 opacity-20" />
+                                <h3 className="text-lg font-medium text-foreground mb-2">No Candidate Selected</h3>
+                                <p className="text-sm max-w-xs mx-auto">Select a candidate from the list on the left to view their full AI analysis.</p>
+                            </div>
+                        )}
+                    </div>
                 </div>
-            </div>
 
-            {/* --- PIPELINE MODAL --- */}
-            <AnimatePresence>
-                {showPipelineModal && (
-                    <PipelineCreationModal
-                        count={shortlistedIds.size}
-                        onClose={() => setShowPipelineModal(false)}
-                        onConfirm={handleCreatePipeline}
-                        isLoading={isCreatingPipeline}
-                    />
-                )}
-            </AnimatePresence>
-        </div>
+                {/* --- PIPELINE MODAL --- */}
+                <AnimatePresence>
+                    {showPipelineModal && (
+                        <PipelineCreationModal
+                            count={shortlistedIds.size}
+                            onClose={() => setShowPipelineModal(false)}
+                            onConfirm={handleCreatePipeline}
+                            isLoading={isCreatingPipeline}
+                        />
+                    )}
+                </AnimatePresence>
+            </div>
+        </TooltipProvider>
     );
 }
 
@@ -422,83 +425,111 @@ export default function ResultsPage() {
 // SUB-COMPONENTS
 // ----------------------------------------------------------------------
 
+function LoadingScreen() {
+    return (
+        <div className="min-h-screen bg-background flex flex-col items-center justify-center relative overflow-hidden">
+            <AnimatedBackground />
+            <div className="z-10 flex flex-col items-center gap-6 p-10 bg-black/40 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl">
+                <div className="relative w-16 h-16">
+                    <div className="absolute inset-0 rounded-full border-4 border-primary/30 animate-pulse" />
+                    <div className="absolute inset-0 rounded-full border-t-4 border-primary animate-spin" />
+                    <Bot className="absolute inset-0 m-auto w-6 h-6 text-white" />
+                </div>
+                <div className="text-center space-y-2">
+                    <h2 className="text-foreground font-semibold text-xl tracking-tight">Curating Talent Pool</h2>
+                    <p className="text-muted-foreground text-sm max-w-xs mx-auto">
+                        Donna is analyzing profiles, calculating match scores, and organizing your dashboard...
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function CandidateRow({ candidate, isSelected, isShortlisted, onClick, onToggleShortlist }: any) {
     const score = candidate.match_score || 0;
 
+    // Traffic Light Score Coloring
     const getScoreColor = (s: number) => {
-        if (s >= 80) return "text-green-500 bg-green-500/10 border-green-500/20";
-        if (s >= 60) return "text-amber-500 bg-amber-500/10 border-amber-500/20";
-        return "text-rose-500 bg-rose-500/10 border-rose-500/20";
-    };
-
-    // Spotlight logic
-    const rowRef = useRef<HTMLDivElement>(null);
-    const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-
-    const handleMouseMove = (e: React.MouseEvent) => {
-        if (rowRef.current) {
-            const rect = rowRef.current.getBoundingClientRect();
-            setMousePosition({
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
-            });
-        }
+        if (s >= 80) return "text-emerald-400 border-emerald-500/30 bg-emerald-500/10";
+        if (s >= 60) return "text-amber-400 border-amber-500/30 bg-amber-500/10";
+        return "text-rose-400 border-rose-500/30 bg-rose-500/10";
     };
 
     return (
         <div
-            ref={rowRef}
             onClick={onClick}
-            onMouseMove={handleMouseMove}
             className={`
-                group relative flex items-center px-4 py-3 cursor-pointer transition-colors border-l-2
+                group relative flex items-start gap-3 px-4 py-3 cursor-pointer transition-all duration-200 border-l-[3px]
                 ${isSelected
-                    ? "bg-white/[0.04] border-l-primary"
-                    : "border-l-transparent hover:bg-white/[0.02]"
+                    ? "bg-white/[0.08] border-l-primary"
+                    : "border-l-transparent hover:bg-white/[0.04]"
                 }
             `}
-            style={{
-                "--mouse-x": `${mousePosition.x}px`,
-                "--mouse-y": `${mousePosition.y}px`,
-            } as React.CSSProperties}
         >
-            {/* Spotlight Overlay */}
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none bg-[radial-gradient(400px_circle_at_var(--mouse-x)_var(--mouse-y),rgba(255,255,255,0.05),transparent)]" />
-
-            {/* Score */}
-            <div className="w-10 text-center shrink-0">
-                <div className={`text-[10px] font-bold px-1 py-0.5 rounded border ${getScoreColor(score)}`}>
-                    {score}
+            {/* Score Badge */}
+            <div className="shrink-0 mt-0.5">
+                <div className={`
+                    w-12 h-8 flex items-center justify-center rounded-md border text-xs font-bold font-mono
+                    ${getScoreColor(score)}
+                `}>
+                    {score}%
                 </div>
             </div>
 
-            {/* Info */}
-            <div className="flex-1 min-w-0 pl-3">
+            {/* Candidate Info */}
+            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                 <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium truncate ${isSelected ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>
+                    <span className={`text-sm font-semibold truncate ${isSelected ? "text-white" : "text-zinc-300 group-hover:text-white"}`}>
                         {candidate.name}
                     </span>
-                    {isShortlisted && <Star className="w-3 h-3 text-amber-400 fill-current" />}
+                    {isShortlisted && (
+                        <Tooltip>
+                            <TooltipTrigger>
+                                <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                            </TooltipTrigger>
+                            <TooltipContent>Shortlisted</TooltipContent>
+                        </Tooltip>
+                    )}
                 </div>
-                <div className="text-xs text-muted-foreground truncate mt-0.5">
-                    {candidate.current_title || candidate.headline}
+
+                <div className="text-xs text-zinc-400 truncate flex items-center gap-1.5">
+                    <span className="truncate max-w-[150px]">{candidate.current_title}</span>
+                    {candidate.current_company && (
+                        <>
+                            <span className="text-zinc-600">•</span>
+                            <span className="text-zinc-500 truncate">{candidate.current_company}</span>
+                        </>
+                    )}
                 </div>
-                {candidate.current_company && (
-                    <div className="text-[10px] text-zinc-500 truncate mt-0.5">
-                        {candidate.current_company}
-                    </div>
-                )}
+
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                    {candidate.skills.slice(0, 3).map((skill: string, i: number) => (
+                        <span key={i} className="px-1.5 py-0.5 rounded-[3px] bg-white/5 border border-white/5 text-[9px] text-zinc-400">
+                            {skill}
+                        </span>
+                    ))}
+                    {candidate.skills.length > 3 && (
+                        <span className="px-1.5 py-0.5 text-[9px] text-zinc-600">+{candidate.skills.length - 3}</span>
+                    )}
+                </div>
             </div>
 
-            {/* Action */}
-            <div className="w-10 flex justify-end shrink-0 z-10">
+            {/* Star Action */}
+            <div className="shrink-0 flex items-center self-center pl-2">
                 <Button
                     variant="ghost"
                     size="icon"
-                    className={`h-7 w-7 ${isShortlisted ? "text-amber-400 bg-amber-400/10" : "text-zinc-600 hover:text-amber-400"}`}
+                    className={`
+                        h-8 w-8 rounded-full transition-all
+                        ${isShortlisted
+                            ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
+                            : "text-zinc-600 hover:bg-zinc-800 hover:text-zinc-300"
+                        }
+                    `}
                     onClick={onToggleShortlist}
                 >
-                    <Star className={`w-3.5 h-3.5 ${isShortlisted ? "fill-current" : ""}`} />
+                    <Star className={`w-4 h-4 ${isShortlisted ? "fill-current" : ""}`} />
                 </Button>
             </div>
         </div>
@@ -509,247 +540,325 @@ function CandidateDossier({ candidate, isShortlisted, onToggleShortlist }: any) 
     const analysis = candidate.match_analysis || {};
     const score = analysis.overall_match_score || 0;
 
+    // Helper to render image or fallback
+    const renderProfileImage = () => {
+        if (candidate.profile_picture_url && candidate.profile_picture_url.trim() !== "") {
+            return (
+                <img
+                    src={candidate.profile_picture_url}
+                    alt={candidate.name}
+                    className="w-16 h-16 rounded-full border-2 border-white/10 object-cover"
+                    onError={(e) => {
+                        // Fallback on error
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                    }}
+                />
+            );
+        }
+        return null;
+    };
+
+    const renderFallbackImage = () => (
+        <div className={`w-16 h-16 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-900 border-2 border-white/10 flex items-center justify-center text-2xl font-bold text-zinc-400 ${candidate.profile_picture_url ? 'hidden' : ''}`}>
+            {candidate.name.charAt(0)}
+        </div>
+    );
+
     return (
         <ScrollArea className="h-full">
-            <div className="max-w-4xl mx-auto p-10 pb-32">
+            <div className="p-8 pb-32 max-w-5xl mx-auto">
 
-                {/* Header Section */}
-                <div className="flex items-start justify-between mb-10">
-                    <div>
-                        <div className="flex items-center gap-3 mb-2">
-                            <h1 className="text-3xl font-bold text-foreground tracking-tight">{candidate.name}</h1>
-                            {candidate.linkedin_url && (
-                                <a
-                                    href={candidate.linkedin_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-muted-foreground hover:text-blue-500 transition-colors"
-                                >
-                                    <ExternalLink className="w-5 h-5" />
-                                </a>
-                            )}
-                        </div>
-                        <h2 className="text-xl text-muted-foreground font-light max-w-2xl leading-relaxed">
-                            {candidate.current_title || candidate.headline}
-                        </h2>
-                        <div className="flex items-center gap-4 mt-4 text-sm text-zinc-500">
-                            {candidate.current_company && (
-                                <div className="flex items-center gap-1.5">
-                                    <Briefcase className="w-4 h-4" /> {candidate.current_company}
-                                </div>
-                            )}
-                            {candidate.location && (
-                                <div className="flex items-center gap-1.5">
-                                    <MapPin className="w-4 h-4" /> {candidate.location}
-                                </div>
-                            )}
-                        </div>
+                {/* Header Profile Card */}
+                <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-white/[0.08] to-transparent border border-white/10 p-8 mb-8">
+                    {/* Background Pattern */}
+                    <div className="absolute top-0 right-0 p-10 opacity-[0.03]">
+                        <Briefcase className="w-64 h-64 rotate-12" />
                     </div>
 
-                    <Button
-                        variant="outline"
-                        onClick={onToggleShortlist}
-                        className={`
-                            h-10 border-border/40 text-sm font-medium
-                            ${isShortlisted
-                                ? "bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20"
-                                : "bg-transparent text-muted-foreground hover:text-foreground hover:bg-white/5"
-                            }
-                        `}
-                    >
-                        {isShortlisted ? "Shortlisted" : "Add to Shortlist"}
-                    </Button>
+                    <div className="relative z-10 flex flex-col md:flex-row md:items-start justify-between gap-6">
+                        <div className="flex-1">
+                            <div className="flex items-center gap-4 mb-3">
+                                {/* Image Handling */}
+                                {renderProfileImage()}
+                                {renderFallbackImage()}
+
+                                <div>
+                                    <h1 className="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
+                                        {candidate.name}
+                                        {candidate.linkedin_url && (
+                                            <a href={candidate.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-blue-400 transition-colors">
+                                                <ExternalLink className="w-5 h-5" />
+                                            </a>
+                                        )}
+                                    </h1>
+                                    <p className="text-lg text-zinc-400 font-light mt-1">{candidate.headline || candidate.current_title}</p>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-4 mt-6 text-sm text-zinc-400">
+                                {candidate.current_company && (
+                                    <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full border border-white/5">
+                                        <Briefcase className="w-3.5 h-3.5 text-zinc-500" />
+                                        <span>{candidate.current_company}</span>
+                                    </div>
+                                )}
+                                {candidate.location && (
+                                    <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full border border-white/5">
+                                        <MapPin className="w-3.5 h-3.5 text-zinc-500" />
+                                        <span>{candidate.location}</span>
+                                    </div>
+                                )}
+                                <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full border border-white/5">
+                                    <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                                    <span>{typeof candidate.experience_years === 'string' ? candidate.experience_years : `${candidate.experience_years || 0} Years Exp.`}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col items-end gap-4">
+                            <Button
+                                size="lg"
+                                onClick={onToggleShortlist}
+                                className={`
+                                    h-12 px-6 rounded-xl font-medium shadow-lg transition-all
+                                    ${isShortlisted
+                                        ? "bg-amber-400 text-black hover:bg-amber-500"
+                                        : "bg-white text-black hover:bg-zinc-200"
+                                    }
+                                `}
+                            >
+                                {isShortlisted ? (
+                                    <><Star className="w-4 h-4 mr-2 fill-black" /> Shortlisted</>
+                                ) : (
+                                    <><Star className="w-4 h-4 mr-2" /> Add to Shortlist</>
+                                )}
+                            </Button>
+
+                            {/* Match Score Indicator */}
+                            <div className="flex items-center gap-3 bg-black/40 rounded-lg px-4 py-2 border border-white/10">
+                                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Match Score</span>
+                                <div className={`text-2xl font-bold ${score >= 70 ? 'text-emerald-400' : score >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                    {score}%
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div className="grid grid-cols-12 gap-8">
+                {/* Content Grid */}
+                <div className="grid grid-cols-12 gap-6">
 
-                    {/* Left Column: AI Analysis */}
-                    <div className="col-span-12 lg:col-span-8 space-y-8">
+                    {/* LEFT COL: Analysis */}
+                    <div className="col-span-12 lg:col-span-8 space-y-6">
 
                         {/* Executive Summary */}
-                        <section>
-                            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4 flex items-center gap-2">
-                                <Sparkles className="w-4 h-4 text-purple-400" /> Executive Summary
-                            </h3>
-                            <div className="bg-white/[0.02] border border-border/40 rounded-lg p-6 leading-relaxed text-zinc-300 text-[15px] shadow-sm">
-                                {analysis.summary}
+                        <div className="bg-card border border-border/40 rounded-xl p-6 shadow-sm relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 blur-[50px] rounded-full group-hover:bg-primary/20 transition-all duration-500" />
+                            <div className="flex items-center gap-2 mb-4">
+                                <Sparkles className="w-5 h-5 text-purple-400" />
+                                <h3 className="font-semibold text-foreground">AI Executive Summary</h3>
                             </div>
-                        </section>
+                            <p className="text-zinc-300 leading-relaxed text-[15px]">
+                                {analysis.summary}
+                            </p>
+                        </div>
 
-                        {/* Analysis Grid - Rendering Strings Now */}
-                        <div className="grid grid-cols-2 gap-6">
-                            <div className="bg-green-500/[0.02] border border-green-500/10 rounded-lg p-5">
-                                <h4 className="text-sm font-medium text-green-400 mb-3 flex items-center gap-2">
-                                    <CheckCircle2 className="w-4 h-4" /> Strengths
+                        {/* Analysis Columns */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* Strengths */}
+                            <div className="bg-emerald-950/20 border border-emerald-500/20 rounded-xl p-6">
+                                <h4 className="flex items-center gap-2 text-emerald-400 font-medium mb-4">
+                                    <CheckCircle2 className="w-5 h-5" /> Key Strengths
                                 </h4>
-                                <ul className="space-y-2">
-                                    {analysis.strengths?.slice(0, 4).map((s: string, i: number) => (
-                                        <li key={i} className="text-sm text-zinc-400 flex items-start gap-2">
-                                            <span className="w-1 h-1 rounded-full bg-green-500 mt-2 shrink-0" />
-                                            {s}
-                                        </li>
-                                    ))}
-                                    {(!analysis.strengths || analysis.strengths.length === 0) && (
-                                        <li className="text-muted-foreground text-sm italic">None detected</li>
-                                    )}
+                                <ul className="space-y-3">
+                                    {analysis.strengths?.length > 0 ? (
+                                        analysis.strengths.slice(0, 5).map((s: string, i: number) => (
+                                            <li key={i} className="flex items-start gap-3 text-sm text-zinc-300">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                                                <span className="leading-snug">{s}</span>
+                                            </li>
+                                        ))
+                                    ) : <span className="text-muted-foreground text-sm italic">No specific strengths listed.</span>}
                                 </ul>
                             </div>
-                            <div className="bg-rose-500/[0.02] border border-rose-500/10 rounded-lg p-5">
-                                <h4 className="text-sm font-medium text-rose-400 mb-3 flex items-center gap-2">
-                                    <AlertCircle className="w-4 h-4" /> Gaps
+
+                            {/* Gaps */}
+                            <div className="bg-rose-950/10 border border-rose-500/20 rounded-xl p-6">
+                                <h4 className="flex items-center gap-2 text-rose-400 font-medium mb-4">
+                                    <AlertCircle className="w-5 h-5" /> Potential Gaps
                                 </h4>
-                                <ul className="space-y-2">
-                                    {analysis.concerns?.slice(0, 4).map((s: string, i: number) => (
-                                        <li key={i} className="text-sm text-zinc-400 flex items-start gap-2">
-                                            <span className="w-1 h-1 rounded-full bg-rose-500 mt-2 shrink-0" />
-                                            {s}
-                                        </li>
-                                    ))}
-                                    {(!analysis.concerns || analysis.concerns.length === 0) && (
-                                        <li className="text-muted-foreground text-sm italic">None detected</li>
-                                    )}
+                                <ul className="space-y-3">
+                                    {analysis.concerns?.length > 0 ? (
+                                        analysis.concerns.slice(0, 5).map((s: string, i: number) => (
+                                            <li key={i} className="flex items-start gap-3 text-sm text-zinc-300">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0" />
+                                                <span className="leading-snug">{s}</span>
+                                            </li>
+                                        ))
+                                    ) : <span className="text-muted-foreground text-sm italic">No major concerns detected.</span>}
                                 </ul>
                             </div>
                         </div>
 
-                        {/* Detected Skills */}
-                        <section>
-                            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4 flex items-center gap-2">
-                                <Zap className="w-4 h-4 text-amber-400" /> Key Skills
-                            </h3>
+                        {/* Skills Cloud */}
+                        <div className="bg-card border border-border/40 rounded-xl p-6">
+                            <h4 className="flex items-center gap-2 text-zinc-400 font-medium text-sm uppercase tracking-wider mb-4">
+                                <Zap className="w-4 h-4" /> Detected Skills
+                            </h4>
                             <div className="flex flex-wrap gap-2">
-                                {candidate.skills?.map((skill: string, i: number) => (
-                                    <span key={i} className="px-2.5 py-1 rounded-md bg-white/5 border border-border/40 text-xs text-zinc-300">
+                                {candidate.skills.map((skill: string, i: number) => (
+                                    <Badge key={i} variant="secondary" className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-zinc-700 px-3 py-1.5 font-normal">
                                         {skill}
-                                    </span>
+                                    </Badge>
                                 ))}
-                                {(!candidate.skills || candidate.skills.length === 0) && (
-                                    <span className="text-muted-foreground text-sm italic">No skills found</span>
-                                )}
                             </div>
-                        </section>
+                        </div>
                     </div>
 
-                    {/* Right Column: Stats & Metadata */}
+                    {/* RIGHT COL: Metadata */}
                     <div className="col-span-12 lg:col-span-4 space-y-6">
 
-                        {/* Score Widget */}
-                        <div className="bg-white/[0.02] border border-border/40 rounded-lg p-6 flex flex-col items-center justify-center">
-                            <div className="relative mb-3">
-                                <svg className="w-24 h-24 transform -rotate-90">
-                                    <circle cx="48" cy="48" r="44" stroke="currentColor" strokeWidth="6" fill="transparent" className="text-zinc-800" />
-                                    <circle
-                                        cx="48" cy="48" r="44" stroke="currentColor" strokeWidth="6" fill="transparent"
-                                        strokeDasharray={276} strokeDashoffset={276 - (276 * score) / 100}
-                                        className={score >= 70 ? "text-green-500" : score >= 50 ? "text-amber-500" : "text-rose-500"}
-                                    />
-                                </svg>
-                                <div className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-foreground">
-                                    {score}
-                                </div>
-                            </div>
-                            <div className="text-sm text-muted-foreground font-medium">Match Confidence</div>
-                        </div>
+                        {/* HR Data Widget */}
+                        <div className="bg-card border border-border/40 rounded-xl p-6 space-y-5">
+                            <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                                <FileText className="w-3 h-3" /> Candidate Details
+                            </h4>
 
-                        {/* HR Data (Manual Import) */}
-                        <div className="bg-white/[0.02] border border-border/40 rounded-lg p-6 space-y-4">
-                            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Candidate Metadata</h4>
-
-                            <div className="space-y-3">
-                                <div className="flex justify-between items-center text-sm">
-                                    <span className="text-muted-foreground flex items-center gap-2"><Briefcase className="w-3.5 h-3.5" /> Exp.</span>
-                                    <span className="text-zinc-300">{candidate.experience_years ? `${candidate.experience_years} Years` : "N/A"}</span>
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center py-2 border-b border-border/30">
+                                    <span className="text-sm text-muted-foreground">Experience</span>
+                                    <span className="text-sm font-medium text-foreground">{candidate.experience_years ? `${candidate.experience_years} Years` : "N/A"}</span>
                                 </div>
-                                {candidate.manual_data ? (
-                                    <>
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground flex items-center gap-2"><IndianRupee className="w-3.5 h-3.5" /> Salary</span>
-                                            <span className="text-zinc-300">{candidate.manual_data.expected_salary || "N/A"}</span>
-                                        </div>
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground flex items-center gap-2"><Clock className="w-3.5 h-3.5" /> Notice</span>
-                                            <span className="text-zinc-300">{candidate.manual_data.notice_period || "N/A"}</span>
-                                        </div>
-                                    </>
-                                ) : (
-                                    <div className="pt-2 text-xs text-muted-foreground italic text-center">No internal HR data</div>
-                                )}
+                                <div className="flex justify-between items-center py-2 border-b border-border/30">
+                                    <span className="text-sm text-muted-foreground">Current Salary</span>
+                                    <span className="text-sm font-medium text-foreground">{candidate.manual_data?.current_salary || "—"}</span>
+                                </div>
+                                <div className="flex justify-between items-center py-2 border-b border-border/30">
+                                    <span className="text-sm text-muted-foreground">Expected Salary</span>
+                                    <span className="text-sm font-medium text-foreground">{candidate.manual_data?.expected_salary || "—"}</span>
+                                </div>
+                                <div className="flex justify-between items-center py-2">
+                                    <span className="text-sm text-muted-foreground">Notice Period</span>
+                                    <span className="text-sm font-medium text-foreground">{candidate.manual_data?.notice_period || "—"}</span>
+                                </div>
                             </div>
                         </div>
 
+                        {/* Internal Notes Widget */}
                         {candidate.manual_data?.notes && (
-                            <div className="bg-amber-500/[0.05] border border-amber-500/10 rounded-lg p-4">
-                                <h4 className="text-xs font-semibold text-amber-500/70 uppercase tracking-wider mb-2">Internal Notes</h4>
-                                <p className="text-sm text-zinc-400 italic">"{candidate.manual_data.notes}"</p>
+                            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-5 relative">
+                                <div className="absolute top-4 right-4">
+                                    <Tooltip>
+                                        <TooltipTrigger><HelpCircle className="w-4 h-4 text-amber-500/40" /></TooltipTrigger>
+                                        <TooltipContent>Internal HR Notes</TooltipContent>
+                                    </Tooltip>
+                                </div>
+                                <h4 className="text-xs font-bold text-amber-500/80 uppercase tracking-widest mb-3">Internal Notes</h4>
+                                <p className="text-sm text-zinc-400 italic leading-relaxed">"{candidate.manual_data.notes}"</p>
                             </div>
                         )}
+
+                        {/* Source Badge */}
+                        <div className="flex items-center justify-center gap-2 py-4 rounded-xl border border-dashed border-zinc-800 text-xs text-zinc-600">
+                            <span>Source: {candidate.source}</span>
+                            <span className="w-1 h-1 rounded-full bg-zinc-600" />
+                            <span>ID: {candidate.candidate_id.slice(0, 8)}</span>
+                        </div>
                     </div>
                 </div>
-
             </div>
         </ScrollArea>
     );
 }
 
-// --- PIPELINE MODAL ---
+// --- PIPELINE MODAL (IMPROVED UX) ---
 function PipelineCreationModal({ count, onClose, onConfirm, isLoading }: any) {
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                className="w-full max-w-xl bg-card border border-border/40 rounded-xl shadow-2xl overflow-hidden"
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="w-full max-w-2xl bg-[#0f0f12] border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
             >
                 <div className="p-8">
+                    {/* Header */}
                     <div className="flex items-start justify-between mb-8">
                         <div>
-                            <h2 className="text-xl font-semibold text-foreground">Create Pipeline</h2>
-                            <p className="text-muted-foreground text-sm mt-1">
-                                You are about to move <span className="text-foreground font-medium">{count} candidates</span> to the outreach stage.
+                            <h2 className="text-2xl font-semibold text-white tracking-tight">Initiate Outreach</h2>
+                            <p className="text-zinc-400 mt-2">
+                                You selected <span className="text-white font-medium">{count} candidates</span>. Here is what happens next:
                             </p>
                         </div>
-                        <Button variant="ghost" size="icon" onClick={onClose} className="text-muted-foreground">
-                            <X className="w-5 h-5" />
+                        <Button variant="ghost" size="icon" onClick={onClose} className="text-zinc-500 hover:text-white rounded-full">
+                            <X className="w-6 h-6" />
                         </Button>
                     </div>
 
-                    <div className="space-y-6 mb-8">
-                        <div className="flex gap-4 opacity-100">
-                            <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold ring-1 ring-primary/40">1</div>
-                            <div>
-                                <h4 className="text-sm font-medium text-foreground">Enrichment</h4>
-                                <p className="text-xs text-muted-foreground mt-1">Donna will scrape verified contact details.</p>
+                    {/* Step Visualization (The "Journey Map") */}
+                    <div className="grid grid-cols-3 gap-4 mb-10 relative">
+                        {/* Connecting Line */}
+                        <div className="absolute top-6 left-1/6 right-1/6 h-0.5 bg-zinc-800 -z-10" />
+
+                        {/* Step 1 */}
+                        <div className="flex flex-col items-center text-center group">
+                            <div className="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                                <UserCheck className="w-6 h-6 text-blue-400" />
                             </div>
+                            <h4 className="text-sm font-semibold text-white mb-1">Enrichment</h4>
+                            <p className="text-xs text-zinc-500 px-2">Donna finds verified emails & phone numbers.</p>
                         </div>
-                        <div className="w-px h-6 bg-border/40 ml-4 -my-2" />
-                        <div className="flex gap-4 opacity-70">
-                            <div className="w-8 h-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-xs font-bold border border-border/40">2</div>
-                            <div>
-                                <h4 className="text-sm font-medium text-foreground">Draft Generation</h4>
-                                <p className="text-xs text-muted-foreground mt-1">AI creates personalized email sequences.</p>
+
+                        {/* Step 2 */}
+                        <div className="flex flex-col items-center text-center group">
+                            <div className="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                                <Bot className="w-6 h-6 text-purple-400" />
                             </div>
+                            <h4 className="text-sm font-semibold text-white mb-1">AI Drafting</h4>
+                            <p className="text-xs text-zinc-500 px-2">Personalized emails generated for each candidate.</p>
                         </div>
-                        <div className="w-px h-6 bg-border/40 ml-4 -my-2" />
-                        <div className="flex gap-4 opacity-70">
-                            <div className="w-8 h-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-xs font-bold border border-border/40">3</div>
-                            <div>
-                                <h4 className="text-sm font-medium text-foreground">Review</h4>
-                                <p className="text-xs text-muted-foreground mt-1">Approve drafts before sending.</p>
+
+                        {/* Step 3 */}
+                        <div className="flex flex-col items-center text-center group">
+                            <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                                <Mail className="w-6 h-6 text-amber-400" />
                             </div>
+                            <h4 className="text-sm font-semibold text-white mb-1">Your Review</h4>
+                            <p className="text-xs text-zinc-500 px-2">Approve drafts before they are sent automatically.</p>
                         </div>
                     </div>
 
-                    <div className="flex gap-3 pt-4 border-t border-border/40">
-                        <Button variant="ghost" onClick={onClose} className="flex-1 text-muted-foreground hover:text-foreground hover:bg-white/5">
+                    {/* Disclaimer */}
+                    <div className="bg-zinc-900/50 rounded-lg p-4 mb-8 flex items-start gap-3 border border-white/5">
+                        <HelpCircle className="w-5 h-5 text-zinc-500 shrink-0 mt-0.5" />
+                        <p className="text-xs text-zinc-400 leading-relaxed">
+                            No emails will be sent immediately. You will be redirected to the <strong>Campaign Dashboard</strong> where you can review, edit, or discard any message before it goes out.
+                        </p>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex gap-4">
+                        <Button
+                            variant="outline"
+                            onClick={onClose}
+                            className="flex-1 h-12 border-white/10 text-zinc-400 hover:text-white hover:bg-white/5"
+                        >
                             Cancel
                         </Button>
                         <Button
                             onClick={onConfirm}
                             disabled={isLoading}
-                            className="flex-[2] bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg shadow-primary/20"
+                            className="flex-[2] h-12 bg-primary hover:bg-primary/90 text-white font-medium text-sm shadow-lg shadow-primary/25 rounded-lg"
                         >
-                            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Confirm & Continue"}
+                            {isLoading ? (
+                                <div className="flex items-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    <span>Creating Workspace...</span>
+                                </div>
+                            ) : (
+                                "Confirm & Start Campaign"
+                            )}
                         </Button>
                     </div>
                 </div>
