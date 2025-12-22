@@ -565,7 +565,7 @@ class VapiWebhookEvent(BaseModel):
     """
     type: str = Field(..., description="Event type")
     call: Optional[Dict[str, Any]] = Field(None, description="Call object")
-    timestamp: Optional[str] = Field(None, description="Event timestamp")
+    timestamp: Optional[Union[str, int]] = Field(None, description="Event timestamp")
     
     # Event-specific data
     function_call: Optional[Dict[str, Any]] = Field(None, description="For function-call events")

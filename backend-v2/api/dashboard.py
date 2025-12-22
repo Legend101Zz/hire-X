@@ -336,7 +336,7 @@ async def _get_pipeline_stats(username: str, mongodb: MongoDB) -> PipelineStageS
             }}
         ]
         
-        cursor = pipelines_collection.aggregate(pipeline)
+        cursor = await pipelines_collection.aggregate(pipeline)
         results = await cursor.to_list(length=100)
         
         # Map stages to stats
@@ -358,7 +358,7 @@ async def _get_pipeline_stats(username: str, mongodb: MongoDB) -> PipelineStageS
             }}
         ]
         
-        outreach_cursor = pipelines_collection.aggregate(outreach_pipeline)
+        outreach_cursor = await pipelines_collection.aggregate(outreach_pipeline)
         outreach_results = await outreach_cursor.to_list(length=1)
         outreach_data = outreach_results[0] if outreach_results else {}
         
@@ -414,7 +414,7 @@ async def _get_inbox_items(
                 {"$limit": limit}
             ]
             
-            cursor = pipelines_collection.aggregate(response_pipeline)
+            cursor = await pipelines_collection.aggregate(response_pipeline)
             responses = await cursor.to_list(length=limit)
             
             for doc in responses:
@@ -590,10 +590,10 @@ async def _get_recent_candidates(
         
         pipeline_stages.extend([
             {"$sort": {"candidates.updated_at": -1}},
-            {"$limit": limit}
+            {"$limit": limit} 
         ])
         
-        cursor = pipelines_collection.aggregate(pipeline_stages)
+        cursor = await pipelines_collection.aggregate(pipeline_stages)
         results = await cursor.to_list(length=limit)
         
         candidates = []
@@ -925,8 +925,7 @@ async def _calculate_metrics(username: str, mongodb: MongoDB) -> DashboardMetric
     ]
     
     try:
-        # FIX: Properly await the cursor.to_list() method
-        cursor = mongodb.conversation_sessions_collection.aggregate(pipeline)
+        cursor = await mongodb.conversation_sessions_collection.aggregate(pipeline)
         result = await cursor.to_list(length=1)
         stats = result[0] if result else {}
         

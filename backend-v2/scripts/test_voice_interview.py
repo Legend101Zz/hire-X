@@ -51,67 +51,92 @@ AUTH_TOKEN = os.getenv("TEST_AUTH_TOKEN", "")
 # Rich sample candidate data with enrichment context
 SAMPLE_CANDIDATE = {
     "candidate_id": "test-candidate-001",
-    "name": "Mrigesh Thakur",
+    "name": "Yakshi Jain",
     "phone_number": "",  # Will be filled from user input
-    "current_title": "Senior Software Engineer",
-    "current_company": "Tech Corp India",
+    "current_title": "Senior HR",
+    "current_company": "NeuraLeap",
     "experience_years": 6,
     "skills": [
-        "Python", "Django", "FastAPI", "PostgreSQL", 
-        "AWS", "Docker", "Kubernetes", "Redis",
-        "React", "TypeScript", "MongoDB", "GraphQL"
+        "Talent Acquisition",
+        "End-to-End Recruitment",
+        "Stakeholder Management",
+        "Interviewing & Candidate Assessment",
+        "ATS Management"
     ],
     "location": "Bangalore, India",
-    "education": "B.Tech in Computer Science, NIT Hamirpur",
-    "linkedin_url": "https://www.linkedin.com/in/mrigesh-thakur-11new/",
+    "linkedin_url": "https://www.linkedin.com/in/yakshi-jain-84497018a",
     # Enrichment data - this is what makes the interview contextual
     "enrichment_summary": (
-        "Mrigesh is a strong backend engineer with 6 years of experience, "
-        "specializing in Python and distributed systems. He led the migration "
-        "of a monolithic system to microservices at Tech Corp, reducing latency by 40%. "
-        "Previously worked at a fintech startup where he built real-time payment processing. "
-        "Active GitHub contributor with 500+ contributions in the last year. "
-        "Known for clean code practices and mentoring junior developers."
+        "Yakshi is a Senior HR professional with strong experience in end-to-end recruitment, "
+        "talent acquisition strategy, and stakeholder management. She has led hiring initiatives "
+        "for tech and non-tech roles, worked closely with leadership on workforce planning, "
+        "and improved candidate experience across multiple hiring pipelines. "
+        "She is experienced in interview coordination, HR operations, and employer branding."
     ),
-    "skill_validations": {
-        "validated_skills": ["Python", "FastAPI", "AWS", "Docker"],
-        "unvalidated_skills": ["Kubernetes"],
-        "skill_gaps": ["Machine Learning"],
-        "overall_confidence": 85
-    },
+"skill_validations": {
+    "validated_skills": [
+        "Talent Acquisition",
+        "End-to-End Recruitment",
+        "Stakeholder Management",
+        "Interviewing & Candidate Assessment",
+        "ATS Management"
+    ],
+    "unvalidated_skills": [
+        "HR Analytics",
+        "Employer Branding"
+    ],
+    "skill_gaps": [
+        "Advanced Workforce Planning"
+    ],
+    "overall_confidence": 88
+},
     "response_likelihood": 75,  # High - likely to engage
     "preferred_language": "en",
     "timezone": "Asia/Kolkata"
 }
 
 SAMPLE_JOB = {
-    "job_id": "test-job-001",
-    "job_title": "Senior Python Developer",
+    "job_id": "test-job-hr-001",
+    "job_title": "Senior HR / Talent Partner",
     "company_name": "NeuraLeap",
     "required_skills": [
-        "Python", "FastAPI", "MongoDB", "Redis", "AWS"
+        "Talent Acquisition",
+        "End-to-End Recruitment",
+        "Interviewing & Candidate Assessment",
+        "Stakeholder Management",
+        "ATS Management",
+        "Offer Negotiation",
+        "HR Operations"
     ],
     "nice_to_have_skills": [
-        "Kubernetes", "Machine Learning", "TypeScript"
+        "Employer Branding",
+        "HR Analytics",
+        "Campus Hiring",
+        "Diversity & Inclusion Hiring",
+        "Startup Hiring Experience"
     ],
     "experience_required": "5+ years",
     "job_description_summary": (
-        "Looking for a Senior Python Developer to lead backend development "
-        "for our AI-powered recruitment platform. Work on high-scale systems "
-        "processing millions of profiles."
+        "NeuraLeap is looking for a Senior HR / Talent Partner to lead hiring "
+        "and people operations for a fast-growing AI-driven product company. "
+        "This role involves owning end-to-end recruitment, working closely "
+        "with leadership, and building scalable hiring processes."
     ),
     "key_responsibilities": [
-        "Lead backend development with Python/FastAPI",
-        "Design scalable APIs",
-        "Mentor junior developers"
+        "Own end-to-end recruitment across tech and non-tech roles",
+        "Partner with leadership on hiring strategy and workforce planning",
+        "Drive structured interviews and fair candidate evaluation",
+        "Manage ATS, interview coordination, and offer negotiations",
+        "Improve candidate experience and employer branding"
     ],
     "evaluation_criteria": [
-        "Python proficiency",
-        "System design",
-        "Communication skills"
+        "Hiring decision quality",
+        "Stakeholder communication",
+        "Candidate experience judgment",
+        "Process ownership",
+        "Cultural alignment assessment"
     ]
 }
-
 
 class InterviewTester:
     """Test harness for voice interviews."""

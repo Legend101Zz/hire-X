@@ -1681,6 +1681,7 @@ async def get_candidate_journey(
     Optimized for HR-friendly display.
     """
     try:
+        logger.info(f'getting details for pipeline: {pipeline_id}')
         pipeline = await pipeline_service.get_pipeline(pipeline_id)
         if not pipeline or pipeline.username != current_user:
             raise HTTPException(status_code=403, detail="Access denied")
@@ -1783,7 +1784,8 @@ async def get_candidate_journey(
                 "email_address": candidate.contact.email,
                 "sent_at": candidate.outreach.initial_email_sent_at,
                 "subject": initial_email.subject if initial_email else "Interview Invitation",
-                "body": initial_email.body_plain if initial_email else None,
+                "body_plain": initial_email.body_plain if initial_email else None,
+                "body_html": initial_email.body_html if initial_email else None, 
                 "opened": candidate.outreach.total_opens > 0,
                 "opened_at": candidate.outreach.first_opened_at,
                 "open_count": candidate.outreach.total_opens,
@@ -1796,14 +1798,26 @@ async def get_candidate_journey(
             }
         else:
             outreach_phase["summary"] = "Email ready" if candidate.contact.email else "Missing email"
-            outreach_phase["data"] = {
+            
+            # Generate preview if email exists
+            preview_data = {
                 "email_address": candidate.contact.email,
                 "email_missing": not bool(candidate.contact.email),
                 "email_source": candidate.contact.email_source.value if candidate.contact.email_source else None
             }
+            print('test',candidate)
+            # Add preview if email exists
+            if candidate.outreach and candidate.outreach.emails:
+                initial_email = next((e for e in candidate.outreach.emails if e.email_type.value == "initial"), None)
+                if initial_email:
+                    preview_data["subject"] = initial_email.subject
+                    preview_data["body_plain"] = initial_email.body_plain
+                    preview_data["body_html"] = initial_email.body_html
             
-        journey["phases"].append(outreach_phase)
+            outreach_phase["data"] = preview_data
         
+        journey["phases"].append(outreach_phase)
+        print('phase otreach',outreach_phase)
         # Phase 4: Scheduling
         scheduling_phase = {
             "id": "scheduling",

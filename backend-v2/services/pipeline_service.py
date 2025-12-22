@@ -1862,6 +1862,7 @@ class PipelineService:
                 if doc:
                     # 3. Success
                     doc.pop("_id", None)
+                    print('test2',doc)
                     return RecruitmentPipeline(**doc)
                 
                 # 4. Not Found Logging

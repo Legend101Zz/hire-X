@@ -148,7 +148,6 @@ class SSMLBuilder:
         """
         return (
             f"Hello, is this {name} this is Neura calling from NeuraLeap.? "
-            f"{SSMLBuilder.add_pause(0.4)}"
         )
     
     @staticmethod
@@ -265,7 +264,7 @@ You have a special voice engine. To sound human, you MUST use these XML tags in 
 1. **EMOTION**: Wrap sentences to change tone.
    - `<emotion value="curious">` -> Use for follow-up questions.
    - `<emotion value="sympathetic">` -> Use if candidate mentions a struggle.
-   - `<emotion value="enthusiastic">` -> Use for "Great!" or "Excellent!".
+   - `<emotion value="content">` -> Use for "Great!" or "Excellent!".
    - `<emotion value="content">` -> Default professional tone.
 
 2. **PAUSES**: Use breaks to simulate thinking or listening.
@@ -280,7 +279,7 @@ User: "I was laid off recently."
 Neura: "<emotion value="sympathetic">I am so sorry to hear that.</emotion> <break time="0.5s" /> <emotion value="curious">How has your search been going since then?</emotion>"
 
 User: "I managed a team of 50."
-Neura: "<emotion value="enthusiastic">That is impressive!</emotion> <break time="0.3s" /> <emotion value="content">What was your biggest challenge with a team that size?</emotion>"
+Neura: "<emotion value="content">That is impressive!</emotion> <break time="0.3s" /> <emotion value="content">What was your biggest challenge with a team that size?</emotion>"
 
 ## RESPONSE RULES
 - Keep responses under 30 words.
@@ -363,11 +362,6 @@ Answer briefly (under 20 words), then continue.
 - NEVER ask more than ONE question at a time
 - NEVER repeat what the candidate said word-for-word
 - NEVER use corporate jargon unnecessarily
-
-## TOOLS
-- `record_response_quality`: After each substantive answer
-- `end_interview`: When closing - THIS ENDS THE CALL
-- `capture_verification_data`: When you learn notice period/salary/availability
 
 ## LANGUAGE
 - English primarily
@@ -596,12 +590,13 @@ class VapiInterviewService:
                 system_prompt=InterviewPrompts.get_system_prompt(
                     request.candidate, request.job, plan, verification_needed
                 ),
-                tools=self._get_interview_tools()
+                # tools=self._get_interview_tools()
+                tools=[]
             ),
             silence_timeout_seconds=SILENCE_TIMEOUT,
             max_duration_seconds=DEFAULT_CALL_DURATION,
             end_call_message=InterviewPrompts.get_end_call_message(request.candidate),
-            server_url=f"{self.webhook_base_url}/voice-interview/webhook",
+            server_url=None,
             recording_enabled=True,
             background_sound="office",
             barge_in_enabled=True  # Allow candidate to interrupt
@@ -843,20 +838,20 @@ class VapiInterviewService:
             "silenceTimeoutSeconds": config.silence_timeout_seconds,
             "maxDurationSeconds": config.max_duration_seconds,
             "endCallMessage": config.end_call_message,
-            "serverUrl": config.server_url,
+            # "serverUrl": config.server_url,
             "recordingEnabled": config.recording_enabled,
             "backgroundSound": config.background_sound,
             "backchannelingEnabled": True,  # Natural "uh-huh", "I see" sounds
             "hipaaEnabled": False,
             # Additional settings for better conversation flow
-            "serverMessages": [
-                "status-update",
-                "end-of-call-report",
-                "tool-calls",
-                "transcript",
-                "hang",
-                "speech-update"
-            ],
+            # "serverMessages": [
+            #     "status-update",
+            #     "end-of-call-report",
+            #     "tool-calls",
+            #     "transcript",
+            #     "hang",
+            #     "speech-update"
+            # ],
             "clientMessages": [
                 "transcript",
                 "hang",

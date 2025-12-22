@@ -18,7 +18,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 # ===================================================================
 # ENUMS - Pipeline Stages & Statuses
@@ -703,6 +703,32 @@ class PipelineCandidate(BaseModel):
             "description": ""
         })
     
+    # ADD THIS VALIDATOR BLOCK TEMPORARILY
+    @field_validator('outreach', mode='before')
+    @classmethod
+    def debug_outreach_validation(cls, v):
+        if v is None:
+            return v
+            
+        # If it's already a model, return it
+        if isinstance(v, OutreachRecord):
+            return v
+            
+        # If it's a dict (from Mongo), try to validate it manually to see the error
+        try:
+            OutreachRecord(**v)
+        except ValidationError as e:
+            print("------------ OUTREACH VALIDATION FAILED ------------")
+            print(f"Data causing error: {v}")
+            print("Specific Validation Errors:")
+            print(e.json())
+            print("----------------------------------------------------")
+            # We explicitly return None so the app doesn't crash, 
+            # but now you will see the error in your server logs.
+            return None
+            
+        return v    
+
     @property
     def display_name(self) -> str:
         """Get display name, falling back to various sources."""
