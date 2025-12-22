@@ -1337,15 +1337,28 @@ async def list_pipeline_sessions(
             "username": current_user,
             "pipelines_created": True
         }).sort("pipeline_created_at", -1).to_list(length=50)
-        logger.info(f'sessions: {sessions}')
+        
         session_summaries = []
         for s in sessions:
             s.pop("_id", None)
             
             pipeline_ids = s.get("pipeline_ids", [])
-            candidate_pipeline_mapping = s.get("candidate_pipeline_mapping", {})
+            batch_id = s.get("pipeline_batch_id")
             
-            # Initialize counts
+            # Get the pipeline document which has aggregated stats
+            pipeline_doc = None
+            if batch_id:
+                # Try to find by batch_id (all pipelines in a batch share stats)
+                pipeline_doc = await pipeline_service.pipelines_collection.find_one({
+                    "conversation_session_id": s["session_id"]
+                })
+            elif pipeline_ids:
+                # Fallback to first pipeline_id
+                pipeline_doc = await pipeline_service.pipelines_collection.find_one({
+                    "pipeline_id": pipeline_ids[0]
+                })
+            
+            # Default counts
             status_counts = {
                 "pending": 0,
                 "enriching": 0,
@@ -1357,51 +1370,38 @@ async def list_pipeline_sessions(
                 "failed": 0
             }
             
-            # Action flags
             needs_action = {
                 "needs_email_input": 0,
                 "needs_outreach_start": 0,
                 "needs_review": 0
             }
             
-            # Fetch actual pipeline statuses
-            for pipeline_id in pipeline_ids:
-                try:
-                    pipeline = await pipeline_service.get_pipeline(pipeline_id)
-                    if not pipeline or not pipeline.candidate:
-                        continue
-                    
-                    candidate = pipeline.candidate
-                    stage = candidate.stage.value
-                    
-                    # Count by stage
-                    if stage == "sourced" or stage == "shortlisted":
-                        status_counts["pending"] += 1
-                    elif stage == "enriching":
-                        status_counts["enriching"] += 1
-                    elif stage == "enriched":
-                        status_counts["enriched"] += 1
-                        # Check if needs outreach
-                        if candidate.contact.email and not candidate.outreach:
-                            needs_action["needs_outreach_start"] += 1
-                    elif stage == "outreach_sent":
-                        status_counts["outreach_sent"] += 1
-                    elif stage == "responded":
-                        status_counts["responded"] += 1
-                        needs_action["needs_review"] += 1
-                    elif stage == "scheduled":
-                        status_counts["interview_scheduled"] += 1
-                    elif stage == "interviewed":
-                        status_counts["interview_completed"] += 1
-                    elif stage == "enrichment_failed":
-                        status_counts["failed"] += 1
-                        # Check if email is missing
-                        if not candidate.contact.email:
-                            needs_action["needs_email_input"] += 1
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to get pipeline {pipeline_id}: {e}")
-                    continue
+            if pipeline_doc and "stats" in pipeline_doc:
+                stats = pipeline_doc["stats"]
+                
+                # Map pipeline stats to our UI-friendly counts
+                total_sourced = stats.get("total_sourced", 0)
+                total_enriched = stats.get("total_enriched", 0)
+                total_contacted = stats.get("total_contacted", 0)
+                total_responded = stats.get("total_responded", 0)
+                total_scheduled = stats.get("total_scheduled", 0)
+                total_interviewed = stats.get("total_interviewed", 0)
+                
+                status_counts["pending"] = total_sourced - total_enriched
+                status_counts["enriched"] = total_enriched - total_contacted
+                status_counts["outreach_sent"] = total_contacted - total_responded
+                status_counts["responded"] = total_responded - total_scheduled
+                status_counts["interview_scheduled"] = total_scheduled - total_interviewed
+                status_counts["interview_completed"] = total_interviewed
+                
+                # Calculate action items
+                # If someone responded but hasn't scheduled yet
+                if total_responded > total_scheduled:
+                    needs_action["needs_review"] = total_responded - total_scheduled
+                
+                # If enriched but not yet contacted
+                if total_enriched > total_contacted:
+                    needs_action["needs_outreach_start"] = total_enriched - total_contacted
             
             session_summaries.append({
                 "session_id": s["session_id"],
@@ -1424,7 +1424,8 @@ async def list_pipeline_sessions(
     except Exception as e:
         logger.error(f"Failed to list pipeline sessions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @router.get("/{session_id}/pipeline-status")
 async def get_pipeline_batch_status(
     session_id: str,

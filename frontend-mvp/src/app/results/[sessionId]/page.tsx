@@ -772,8 +772,38 @@ function CandidateDossier({ candidate, isShortlisted, onToggleShortlist }: any) 
     );
 }
 
-// --- PIPELINE MODAL (IMPROVED UX) ---
+// --- PIPELINE MODAL (ENHANCED WITH DONNA & DUPLICATE CHECK) ---
 function PipelineCreationModal({ count, onClose, onConfirm, isLoading }: any) {
+    const [hasPipeline, setHasPipeline] = useState(false);
+    const [isCheckingPipeline, setIsCheckingPipeline] = useState(true);
+    const [showDonnaTooltip, setShowDonnaTooltip] = useState(false);
+
+    // Check if pipeline already exists for this session
+    useEffect(() => {
+        const checkExistingPipeline = async () => {
+            try {
+                const sessionData = await conversationApi.getSessionResults(sessionId, token);
+                // Assuming the API returns pipeline info - adjust based on your actual API
+                setHasPipeline(sessionData.has_active_pipeline || false);
+            } catch (err) {
+                console.error("Could not check pipeline status", err);
+            } finally {
+                setIsCheckingPipeline(false);
+            }
+        };
+        checkExistingPipeline();
+    }, []);
+
+    if (isCheckingPipeline) {
+        return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                <div className="bg-[#0f0f12] border border-white/10 rounded-2xl p-8">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto" />
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div
@@ -783,83 +813,281 @@ function PipelineCreationModal({ count, onClose, onConfirm, isLoading }: any) {
                 className="w-full max-w-2xl bg-[#0f0f12] border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
             >
                 <div className="p-8">
-                    {/* Header */}
-                    <div className="flex items-start justify-between mb-8">
-                        <div>
-                            <h2 className="text-2xl font-semibold text-white tracking-tight">Initiate Outreach</h2>
-                            <p className="text-zinc-400 mt-2">
-                                You selected <span className="text-white font-medium">{count} candidates</span>. Here is what happens next:
-                            </p>
+                    {/* Donna Mascot Header */}
+                    <div className="flex items-start justify-between mb-6">
+                        <div className="flex items-start gap-4">
+                            {/* Donna Avatar with Interaction */}
+                            <motion.div
+                                className="relative"
+                                onMouseEnter={() => setShowDonnaTooltip(true)}
+                                onMouseLeave={() => setShowDonnaTooltip(false)}
+                            >
+                                <motion.div
+                                    className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-violet-600 flex items-center justify-center border-2 border-white/20 shadow-lg cursor-pointer"
+                                    whileHover={{ scale: 1.1, rotate: 5 }}
+                                    whileTap={{ scale: 0.95 }}
+                                >
+                                    <Bot className="w-8 h-8 text-white" />
+                                </motion.div>
+
+                                {/* Donna's Playful Tooltip */}
+                                <AnimatePresence>
+                                    {showDonnaTooltip && (
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 5 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            exit={{ opacity: 0, y: 5 }}
+                                            className="absolute -top-2 left-20 bg-primary text-white px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap shadow-xl border border-white/20"
+                                        >
+                                            🦖 Rawr! Let's find those candidates!
+                                            <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 w-2 h-2 bg-primary rotate-45" />
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </motion.div>
+
+                            <div>
+                                <h2 className="text-2xl font-semibold text-white tracking-tight flex items-center gap-2">
+                                    {hasPipeline ? "Start Another Outreach?" : "Let's Connect with Candidates!"}
+                                    <Sparkles className="w-5 h-5 text-amber-400 animate-pulse" />
+                                </h2>
+                                <p className="text-zinc-400 mt-2">
+                                    {hasPipeline ? (
+                                        <>
+                                            You already have an active campaign. Starting a new one will create a <strong className="text-amber-400">separate outreach</strong> for these {count} candidates.
+                                        </>
+                                    ) : (
+                                        <>
+                                            You picked <span className="text-white font-medium">{count} great {count === 1 ? 'candidate' : 'candidates'}</span>! 🎯
+                                        </>
+                                    )}
+                                </p>
+                            </div>
                         </div>
-                        <Button variant="ghost" size="icon" onClick={onClose} className="text-zinc-500 hover:text-white rounded-full">
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={onClose}
+                            className="text-zinc-500 hover:text-white rounded-full hover:bg-white/5"
+                        >
                             <X className="w-6 h-6" />
                         </Button>
                     </div>
 
-                    {/* Step Visualization (The "Journey Map") */}
-                    <div className="grid grid-cols-3 gap-4 mb-10 relative">
-                        {/* Connecting Line */}
-                        <div className="absolute top-6 left-1/6 right-1/6 h-0.5 bg-zinc-800 -z-10" />
-
-                        {/* Step 1 */}
-                        <div className="flex flex-col items-center text-center group">
-                            <div className="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                                <UserCheck className="w-6 h-6 text-blue-400" />
+                    {/* Warning Banner for Duplicate Outreach */}
+                    {hasPipeline && (
+                        <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: "auto" }}
+                            className="mb-6 bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex items-start gap-3"
+                        >
+                            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                            <div>
+                                <h4 className="text-sm font-semibold text-amber-300 mb-1">Heads Up!</h4>
+                                <p className="text-xs text-amber-200/80 leading-relaxed">
+                                    You already have an outreach running. Creating another campaign means you'll reach out to these candidates separately. Both campaigns will track responses independently.
+                                </p>
                             </div>
-                            <h4 className="text-sm font-semibold text-white mb-1">Enrichment</h4>
-                            <p className="text-xs text-zinc-500 px-2">Donna finds verified emails & phone numbers.</p>
-                        </div>
+                        </motion.div>
+                    )}
 
-                        {/* Step 2 */}
-                        <div className="flex flex-col items-center text-center group">
-                            <div className="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                                <Bot className="w-6 h-6 text-purple-400" />
-                            </div>
-                            <h4 className="text-sm font-semibold text-white mb-1">AI Drafting</h4>
-                            <p className="text-xs text-zinc-500 px-2">Personalized emails generated for each candidate.</p>
-                        </div>
-
-                        {/* Step 3 */}
-                        <div className="flex flex-col items-center text-center group">
-                            <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                                <Mail className="w-6 h-6 text-amber-400" />
-                            </div>
-                            <h4 className="text-sm font-semibold text-white mb-1">Your Review</h4>
-                            <p className="text-xs text-zinc-500 px-2">Approve drafts before they are sent automatically.</p>
-                        </div>
-                    </div>
-
-                    {/* Disclaimer */}
-                    <div className="bg-zinc-900/50 rounded-lg p-4 mb-8 flex items-start gap-3 border border-white/5">
-                        <HelpCircle className="w-5 h-5 text-zinc-500 shrink-0 mt-0.5" />
-                        <p className="text-xs text-zinc-400 leading-relaxed">
-                            No emails will be sent immediately. You will be redirected to the <strong>Campaign Dashboard</strong> where you can review, edit, or discard any message before it goes out.
+                    {/* Simple Explanation Box */}
+                    <div className="bg-gradient-to-br from-blue-500/5 to-purple-500/5 rounded-xl p-6 mb-8 border border-white/10">
+                        <h3 className="text-white font-medium mb-3 flex items-center gap-2">
+                            <Zap className="w-5 h-5 text-amber-400" />
+                            Here's what I'll do for you:
+                        </h3>
+                        <p className="text-sm text-zinc-300 leading-relaxed mb-4">
+                            Think of me as your <strong className="text-primary">personal investigator & assistant</strong>. I'll handle the boring stuff so you can focus on hiring!
                         </p>
                     </div>
+
+                    {/* Step Visualization - SIMPLIFIED FOR HR */}
+                    <div className="space-y-4 mb-8">
+                        {/* Step 1 */}
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <motion.div
+                                    className="group relative bg-white/5 hover:bg-white/10 rounded-xl p-4 border border-white/10 hover:border-primary/30 transition-all cursor-help"
+                                    whileHover={{ x: 4 }}
+                                >
+                                    <div className="flex items-start gap-4">
+                                        <div className="w-10 h-10 rounded-lg bg-blue-500/20 border border-blue-500/30 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                                            <UserCheck className="w-5 h-5 text-blue-400" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <h4 className="text-sm font-semibold text-white">Step 1: Detective Work </h4>
+                                                <Badge className="bg-blue-500/20 text-blue-300 text-[10px] border-blue-500/30">Automatic</Badge>
+                                            </div>
+                                            <p className="text-xs text-zinc-400">
+                                                I'll find their email addresses and phone numbers for you
+                                            </p>
+                                        </div>
+                                        <ChevronRight className="w-5 h-5 text-zinc-600 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                                    </div>
+                                </motion.div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                                <p className="text-xs"><strong>What happens:</strong> I search the internet to find verified contact info. No manual work needed!</p>
+                            </TooltipContent>
+                        </Tooltip>
+
+                        {/* Step 2 */}
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <motion.div
+                                    className="group relative bg-white/5 hover:bg-white/10 rounded-xl p-4 border border-white/10 hover:border-primary/30 transition-all cursor-help"
+                                    whileHover={{ x: 4 }}
+                                >
+                                    <div className="flex items-start gap-4">
+                                        <div className="w-10 h-10 rounded-lg bg-purple-500/20 border border-purple-500/30 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                                            <Mail className="w-5 h-5 text-purple-400" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <h4 className="text-sm font-semibold text-white">Step 2: Reach Out </h4>
+                                                <Badge className="bg-purple-500/20 text-purple-300 text-[10px] border-purple-500/30">You Control</Badge>
+                                            </div>
+                                            <p className="text-xs text-zinc-400">
+                                                I'll write personalized emails, but you approve before sending
+                                            </p>
+                                        </div>
+                                        <ChevronRight className="w-5 h-5 text-zinc-600 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                                    </div>
+                                </motion.div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                                <p className="text-xs"><strong>Your safety net:</strong> Every email goes to a review dashboard first. You can edit, discard, or approve each one!</p>
+                            </TooltipContent>
+                        </Tooltip>
+
+                        {/* Step 3 */}
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <motion.div
+                                    className="group relative bg-white/5 hover:bg-white/10 rounded-xl p-4 border border-white/10 hover:border-primary/30 transition-all cursor-help"
+                                    whileHover={{ x: 4 }}
+                                >
+                                    <div className="flex items-start gap-4">
+                                        <div className="w-10 h-10 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                                            <Bot className="w-5 h-5 text-emerald-400" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <h4 className="text-sm font-semibold text-white">Step 3: Track & Interview </h4>
+                                                <Badge className="bg-emerald-500/20 text-emerald-300 text-[10px] border-emerald-500/30">Smart AI</Badge>
+                                            </div>
+                                            <p className="text-xs text-zinc-400">
+                                                I'll notify you when they reply & can conduct initial interviews
+                                            </p>
+                                        </div>
+                                        <ChevronRight className="w-5 h-5 text-zinc-600 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                                    </div>
+                                </motion.div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                                <p className="text-xs"><strong>The magic part:</strong> I can ask screening questions, check availability, and send you a summary of interested candidates!</p>
+                            </TooltipContent>
+                        </Tooltip>
+
+                        {/* Step 4 */}
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <motion.div
+                                    className="group relative bg-white/5 hover:bg-white/10 rounded-xl p-4 border border-white/10 hover:border-primary/30 transition-all cursor-help"
+                                    whileHover={{ x: 4 }}
+                                >
+                                    <div className="flex items-start gap-4">
+                                        <div className="w-10 h-10 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                                            <FileText className="w-5 h-5 text-amber-400" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <h4 className="text-sm font-semibold text-white">Step 4: Final Report </h4>
+                                                <Badge className="bg-amber-500/20 text-amber-300 text-[10px] border-amber-500/30">Delivered</Badge>
+                                            </div>
+                                            <p className="text-xs text-zinc-400">
+                                                You get a neat summary: who's interested, who's not, next steps
+                                            </p>
+                                        </div>
+                                        <CheckCircle2 className="w-5 h-5 text-emerald-500 opacity-50 group-hover:opacity-100 transition-opacity" />
+                                    </div>
+                                </motion.div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                                <p className="text-xs"><strong>Your final dashboard:</strong> See who replied, interview results, and ready-to-hire recommendations all in one place!</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </div>
+
+                    {/* Trust-Building Note */}
+                    <motion.div
+                        className="bg-zinc-900/50 rounded-lg p-4 mb-6 flex items-start gap-3 border border-white/5"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.3 }}
+                    >
+                        <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+                            <HelpCircle className="w-4 h-4 text-primary" />
+                        </div>
+                        <div>
+                            <h5 className="text-xs font-semibold text-white mb-1">You're always in control! 👍</h5>
+                            <p className="text-xs text-zinc-400 leading-relaxed">
+                                Nothing happens without your approval. I'm just here to save you time on the boring stuff like finding emails and writing messages.
+                            </p>
+                        </div>
+                    </motion.div>
+
+                    {/* Encouraging Progress Message */}
+                    <motion.div
+                        className="text-center mb-6 py-3 px-4 bg-primary/5 rounded-lg border border-primary/20"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.5 }}
+                    >
+                        <p className="text-sm text-primary font-medium flex items-center justify-center gap-2">
+                            <Sparkles className="w-4 h-4" />
+                            You're almost there! Just one click to start
+                            <Sparkles className="w-4 h-4" />
+                        </p>
+                    </motion.div>
 
                     {/* Actions */}
                     <div className="flex gap-4">
                         <Button
                             variant="outline"
                             onClick={onClose}
-                            className="flex-1 h-12 border-white/10 text-zinc-400 hover:text-white hover:bg-white/5"
+                            className="flex-1 h-12 border-white/10 text-zinc-400 hover:text-white hover:bg-white/5 group"
                         >
-                            Cancel
+                            <span className="group-hover:scale-110 transition-transform inline-block">Maybe Later</span>
                         </Button>
-                        <Button
-                            onClick={onConfirm}
-                            disabled={isLoading}
-                            className="flex-[2] h-12 bg-primary hover:bg-primary/90 text-white font-medium text-sm shadow-lg shadow-primary/25 rounded-lg"
-                        >
-                            {isLoading ? (
-                                <div className="flex items-center gap-2">
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                    <span>Creating Workspace...</span>
-                                </div>
-                            ) : (
-                                "Confirm & Start Campaign"
-                            )}
-                        </Button>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    onClick={onConfirm}
+                                    disabled={isLoading}
+                                    className="flex-[2] h-12 bg-gradient-to-r from-primary to-violet-600 hover:from-primary/90 hover:to-violet-600/90 text-white font-medium text-sm shadow-lg shadow-primary/25 rounded-lg relative overflow-hidden group"
+                                >
+                                    <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                                    {isLoading ? (
+                                        <div className="flex items-center gap-2 relative z-10">
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                            <span>Setting things up...</span>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-2 relative z-10">
+                                            <Zap className="w-4 h-4" />
+                                            <span>{hasPipeline ? "Yes, Start New Campaign" : "Let's Go! Start Campaign"}</span>
+                                            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                        </div>
+                                    )}
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent className="bg-primary text-white border-primary/30">
+                                <p className="text-xs font-medium">🎯 Great progress so far!</p>
+                            </TooltipContent>
+                        </Tooltip>
                     </div>
                 </div>
             </motion.div>

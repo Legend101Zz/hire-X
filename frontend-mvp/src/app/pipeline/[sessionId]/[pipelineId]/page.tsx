@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     ArrowLeft,
+    ArrowRight,
     ExternalLink,
     Loader2,
     Briefcase,
@@ -20,6 +21,7 @@ import {
     Zap,
     TrendingUp,
     Play,
+    Pause,
     Send,
     Eye,
     MousePointer,
@@ -38,149 +40,2215 @@ import {
     BrainCircuit,
     Ban,
     ThumbsDown,
+    ThumbsUp,
     GitBranch,
     Rocket,
-    ChevronRight
+    ChevronRight,
+    ChevronDown,
+    ChevronUp,
+    Search,
+    Volume2,
+    VolumeX,
+    SkipBack,
+    SkipForward,
+    Mic,
+    UserCircle2,
+    Bot,
+    Star,
+    Quote,
+    BarChart3,
+    PieChart,
+    Copy,
+    Check,
+    Heart,
+    Share2,
+    Download,
+    Headphones,
+    PhoneCall,
+    PhoneOff,
+    Timer,
+    Bookmark,
+    Flag,
+    MoreVertical,
+    HelpCircle,
+    Info,
+    Lightbulb,
+    Shield,
+    CircleDot,
+    Circle,
+    Edit3,
+    Wand2,
+    Pencil,
+    RotateCcw,
+    X,
+    ChevronLeft,
+    Plus,
+    Minus,
+    AlertOctagon,
+    Maximize2,
+    Minimize2,
+    Trash2,
+    Paperclip,
+    Image,
+    Link,
+    Bold,
+    Italic,
+    Underline,
+    List,
+    MoreHorizontal,
+    AtSign,
+    Smile,
+    type LucideIcon
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
+import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/contexts/AuthContext";
-import AnimatedBackground from "@/components/auth/AnimatedBackground";
+import { cn } from "@/lib/utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-// --- Types & Enums ---
+// ============================================================================
+// TYPES
+// ============================================================================
 
-enum CandidateStage {
-    SOURCED = "sourced",
-    SHORTLISTED = "shortlisted",
-    ENRICHING = "enriching",
-    ENRICHED = "enriched",
-    ENRICHMENT_FAILED = "enrichment_failed",
-    OUTREACH_PENDING = "outreach_pending",
-    OUTREACH_SENT = "outreach_sent",
-    OUTREACH_REMINDER = "outreach_reminder",
-    NO_RESPONSE = "no_response",
-    SCHEDULING = "scheduling",
-    SCHEDULED = "scheduled",
-    INTERVIEW_COMPLETED = "interview_completed",
-    EVALUATED = "evaluated"
+interface FlowStep {
+    id: string;
+    name: string;
+    description: string;
+    status: "pending" | "in_progress" | "completed" | "ready" | "failed";
+    duration_estimate?: string;
+    what_happens?: string[];
+    result?: any;
+    data?: any;
+    blocker?: string;
+    action_needed?: string;
+    completed_at?: string;
+    summary?: string;
 }
 
-// --- Visual Components (ScoreCircle, MetricCard) ---
-// (Kept exactly as before for consistency)
+interface EmailPreview {
+    subject: string;
+    greeting: string;
+    body: string;
+    closing: string;
+    signature: string;
+    scheduling_link: string;
+    full_preview_html: string;
+    full_preview_text: string;
+    word_count: number;
+}
 
-function ScoreCircle({ score }: { score: number }) {
-    const radius = 40;
-    const circumference = 2 * Math.PI * radius;
-    const strokeDashoffset = circumference - (score / 100) * circumference;
+// ============================================================================
+// DONNA MASCOT COMPONENT
+// ============================================================================
 
-    const getColor = (s: number) => {
-        if (s >= 75) return "#10b981";
-        if (s >= 50) return "#f59e0b";
-        return "#ef4444";
+interface DonnaProps {
+    message: string;
+    mood?: "happy" | "thinking" | "excited" | "helpful" | "concerned";
+    size?: "sm" | "md" | "lg";
+    animate?: boolean;
+}
+
+const Donna = ({
+    message,
+    mood = "helpful",
+    size = "md",
+    animate = true
+}: DonnaProps) => {
+    const sizeClasses = {
+        sm: "w-10 h-10",
+        md: "w-14 h-14",
+        lg: "w-20 h-20"
+    };
+
+    const textSizes = {
+        sm: "text-xs",
+        md: "text-sm",
+        lg: "text-base"
+    };
+
+    const moodColors = {
+        happy: "from-emerald-400 to-teal-500",
+        thinking: "from-blue-400 to-indigo-500",
+        excited: "from-amber-400 to-orange-500",
+        helpful: "from-violet-400 to-purple-500",
+        concerned: "from-rose-400 to-pink-500"
+    };
+
+    const moodExpressions = {
+        happy: "^_^",
+        thinking: "o.o",
+        excited: ">w<",
+        helpful: "._.",
+        concerned: "o_o"
     };
 
     return (
-        <div className="relative w-32 h-32">
-            <svg className="w-full h-full -rotate-90">
-                <circle cx="64" cy="64" r={radius} stroke="currentColor" strokeWidth="8" fill="transparent" className="text-zinc-800" />
-                <circle
-                    cx="64" cy="64" r={radius}
-                    stroke={getColor(score)} strokeWidth="8"
-                    fill="transparent"
-                    strokeDasharray={circumference}
-                    strokeDashoffset={strokeDashoffset}
-                    strokeLinecap="round"
-                    className="transition-all duration-1000 ease-out"
-                />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className={`text-3xl font-black ${score < 50 ? 'text-red-500' : 'text-foreground'}`}>{score}</span>
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Fit Score</span>
-            </div>
-        </div>
-    );
-}
-
-function MetricCard({ icon: Icon, label, value, sublabel, variant = "neutral" }: any) {
-    const variants: any = {
-        neutral: "bg-zinc-900/50 border-zinc-800",
-        success: "bg-emerald-950/10 border-emerald-900/20",
-        warning: "bg-amber-950/10 border-amber-900/20",
-        danger: "bg-red-950/10 border-red-900/20",
-    };
-
-    return (
-        <div className={`p-4 rounded-xl border ${variants[variant]} flex flex-col justify-between h-full`}>
-            <div className="flex items-center gap-3 mb-2">
-                <div className="p-2 rounded-lg bg-background/40">
-                    <Icon className="w-4 h-4 text-muted-foreground" />
+        <div className="flex items-start gap-3">
+            <motion.div
+                className={cn(
+                    "relative rounded-2xl flex items-center justify-center shrink-0",
+                    "bg-gradient-to-br shadow-lg",
+                    sizeClasses[size],
+                    moodColors[mood]
+                )}
+                animate={animate ? {
+                    y: [0, -3, 0],
+                } : {}}
+                transition={{
+                    duration: 2.5,
+                    repeat: Infinity,
+                    repeatType: "loop",
+                    ease: "easeInOut"
+                }}
+            >
+                <div className="text-white font-mono select-none">
+                    {moodExpressions[mood]}
                 </div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
+
+                <motion.div
+                    className="absolute -top-1.5 left-1/2 -translate-x-1/2"
+                    animate={{ rotate: [-8, 8, -8] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                >
+                    <div className="w-0.5 h-2 bg-white/80 rounded-full" />
+                    <div className="w-1.5 h-1.5 bg-white rounded-full -mt-0.5 mx-auto" />
+                </motion.div>
+
+                <motion.div
+                    className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 rounded-full border-2 border-white"
+                    animate={{ scale: [1, 1.15, 1] }}
+                    transition={{ duration: 2, repeat: Infinity }}
+                />
+            </motion.div>
+
+            {message && (
+                <motion.div
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="relative bg-white dark:bg-zinc-800 rounded-2xl rounded-tl-sm py-3 px-4 shadow-md border border-zinc-100 dark:border-zinc-700 max-w-sm"
+                >
+                    <div className="absolute left-0 top-3 -translate-x-1/2 w-2 h-2 bg-white dark:bg-zinc-800 border-l border-b border-zinc-100 dark:border-zinc-700 rotate-45" />
+                    <p className={cn("text-zinc-600 dark:text-zinc-300 leading-relaxed", textSizes[size])}>
+                        {message}
+                    </p>
+                </motion.div>
+            )}
+        </div>
+    );
+};
+
+// ============================================================================
+// STEP EXPLANATION POPOVER
+// ============================================================================
+
+const StepExplainer = ({ stepId, children }: { stepId: string; children: React.ReactNode }) => {
+    const explanations: Record<string, any> = {
+        enrichment: {
+            title: "What is Candidate Analysis?",
+            simple: "We look at the candidate's work history and skills to see if they match your job requirements.",
+            points: [
+                "Scan their LinkedIn profile and work history",
+                "Validate their skills against your requirements",
+                "Estimate their current salary range",
+                "Calculate a match score (0-100)"
+            ],
+            tip: "This saves you hours of manual resume screening"
+        },
+        contact: {
+            title: "How do we find contact info?",
+            simple: "We search professional databases to find their email and phone number.",
+            points: [
+                "Search multiple professional data providers",
+                "Verify email addresses are valid",
+                "Prioritize work emails over personal",
+                "Find phone numbers when available"
+            ],
+            tip: "If we cannot find it, you can add it manually"
+        },
+        outreach: {
+            title: "How does email outreach work?",
+            simple: "We write a personalized email mentioning details from their background.",
+            points: [
+                "Craft a subject line that gets opened",
+                "Mention specific things from their work",
+                "Include your interview scheduling link",
+                "You review and edit before sending"
+            ],
+            tip: "Personalized emails get 2-3x more responses"
+        },
+        scheduling: {
+            title: "How does scheduling work?",
+            simple: "Candidates click a link and pick a time that works for them.",
+            points: [
+                "They see available time slots",
+                "They pick a convenient time",
+                "Both of you get calendar invites",
+                "They enter their phone number"
+            ],
+            tip: "Self-service scheduling eliminates back-and-forth"
+        },
+        interview: {
+            title: "How does the AI interview work?",
+            simple: "Our AI assistant Neura calls and has a professional conversation about their experience.",
+            points: [
+                "Calls at the exact scheduled time",
+                "Asks relevant questions for your role",
+                "Records and transcribes everything",
+                "Provides a detailed assessment report"
+            ],
+            tip: "Get detailed insights without spending your time"
+        },
+        decision: {
+            title: "Making your final decision",
+            simple: "Review everything and decide whether to hire, hold, or pass.",
+            points: [
+                "Listen to the interview recording",
+                "Read the transcript and assessment",
+                "See strengths and concerns",
+                "Make your decision with confidence"
+            ],
+            tip: "Use 'Hold' if you want to compare with other candidates"
+        }
+    };
+
+    const info = explanations[stepId];
+    if (!info) return <>{children}</>;
+
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                {children}
+            </PopoverTrigger>
+            <PopoverContent
+                className="w-80 p-0 bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700"
+                side="right"
+                align="start"
+            >
+                <div className="p-4 border-b border-zinc-100 dark:border-zinc-800">
+                    <h4 className="font-semibold text-zinc-900 dark:text-white">
+                        {info.title}
+                    </h4>
+                    <p className="text-sm text-zinc-500 mt-1">
+                        {info.simple}
+                    </p>
+                </div>
+
+                <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50">
+                    <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+                        What happens:
+                    </p>
+                    <ul className="space-y-1.5">
+                        {info.points.map((point: string, i: number) => (
+                            <li key={i} className="flex items-start gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                                {point}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+
+                <div className="p-4 bg-indigo-50 dark:bg-indigo-950/30 border-t border-indigo-100 dark:border-indigo-900">
+                    <div className="flex items-start gap-2">
+                        <Lightbulb className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                        <p className="text-sm text-indigo-700 dark:text-indigo-300">
+                            {info.tip}
+                        </p>
+                    </div>
+                </div>
+            </PopoverContent>
+        </Popover>
+    );
+};
+
+// ============================================================================
+// PHASE ICON COMPONENT
+// ============================================================================
+
+const PhaseIcon = ({
+    icon,
+    status,
+    size = "md"
+}: {
+    icon: string;
+    status: string;
+    size?: "sm" | "md" | "lg"
+}) => {
+    const sizeClasses = {
+        sm: "w-8 h-8",
+        md: "w-12 h-12",
+        lg: "w-16 h-16"
+    };
+
+    const iconSizes = {
+        sm: "w-4 h-4",
+        md: "w-5 h-5",
+        lg: "w-7 h-7"
+    };
+
+    const icons: Record<string, LucideIcon> = {
+        search: Search,
+        brain: BrainCircuit,
+        mail: Mail,
+        calendar: Calendar,
+        phone: PhoneCall,
+        award: Award,
+        user: User,
+        contact: UserCircle2
+    };
+
+    const Icon = icons[icon] || CircleDot;
+
+    const statusStyles = {
+        pending: "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-400",
+        in_progress: "bg-blue-50 dark:bg-blue-950/50 border-blue-300 dark:border-blue-700 text-blue-500 animate-pulse",
+        completed: "bg-gradient-to-br from-emerald-500 to-green-600 border-emerald-400 text-white shadow-lg shadow-emerald-500/20",
+        ready: "bg-gradient-to-br from-amber-500 to-orange-500 border-amber-400 text-white shadow-lg shadow-amber-500/20",
+        failed: "bg-red-50 dark:bg-red-950/50 border-red-300 dark:border-red-700 text-red-500"
+    };
+
+    return (
+        <motion.div
+            className={cn(
+                "rounded-full border-2 flex items-center justify-center transition-all",
+                sizeClasses[size],
+                statusStyles[status as keyof typeof statusStyles]
+            )}
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            whileHover={{ scale: 1.05 }}
+        >
+            {status === "completed" ? (
+                <CheckCircle2 className={iconSizes[size]} />
+            ) : status === "in_progress" ? (
+                <Loader2 className={cn(iconSizes[size], "animate-spin")} />
+            ) : (
+                <Icon className={iconSizes[size]} />
+            )}
+        </motion.div>
+    );
+};
+
+// ============================================================================
+// ENRICHMENT EXPANDED CONTENT
+// ============================================================================
+
+const EnrichmentExpandedContent = ({ data }: { data: any }) => {
+    if (!data) return null;
+
+    const score = data.match_score || 0;
+    const recommendation = data.recommendation || {};
+
+    const getScoreColor = (s: number) => {
+        if (s >= 80) return "text-emerald-500";
+        if (s >= 60) return "text-green-500";
+        if (s >= 40) return "text-amber-500";
+        return "text-red-500";
+    };
+
+    const getScoreLabel = (s: number) => {
+        if (s >= 80) return "Excellent Match";
+        if (s >= 60) return "Good Match";
+        if (s >= 40) return "Fair Match";
+        return "Below Requirements";
+    };
+
+    const getScoreBg = (s: number) => {
+        if (s >= 80) return "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800";
+        if (s >= 60) return "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800";
+        if (s >= 40) return "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800";
+        return "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800";
+    };
+
+    return (
+        <div className="space-y-6">
+            {/* Score Overview */}
+            <div className="grid md:grid-cols-3 gap-4">
+                {/* Main Score */}
+                <div className={cn("rounded-xl p-5 text-center border", getScoreBg(score))}>
+                    <div className={cn("text-5xl font-black", getScoreColor(score))}>
+                        {score}
+                    </div>
+                    <div className="text-xs text-zinc-500 uppercase tracking-wider mt-1">
+                        Match Score
+                    </div>
+                    <div className={cn("text-sm font-medium mt-2", getScoreColor(score))}>
+                        {getScoreLabel(score)}
+                    </div>
+                </div>
+
+                {/* Experience */}
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-5 border border-zinc-200 dark:border-zinc-700">
+                    <div className="flex items-center gap-2 text-zinc-500 mb-2">
+                        <Briefcase className="w-4 h-4" />
+                        <span className="text-xs uppercase tracking-wider">Experience</span>
+                    </div>
+                    <div className="text-2xl font-bold text-zinc-900 dark:text-white">
+                        {data.experience_assessment?.actual_years || 0} years
+                    </div>
+                    {data.experience_assessment?.meets_requirement !== undefined && (
+                        <Badge
+                            variant="outline"
+                            className={cn(
+                                "mt-2 text-xs",
+                                data.experience_assessment.meets_requirement
+                                    ? "border-emerald-300 text-emerald-700 bg-emerald-50"
+                                    : "border-red-300 text-red-700 bg-red-50"
+                            )}
+                        >
+                            {data.experience_assessment.meets_requirement ? "Meets requirement" : "Below requirement"}
+                        </Badge>
+                    )}
+                </div>
+
+                {/* Salary Estimate */}
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-5 border border-zinc-200 dark:border-zinc-700">
+                    <div className="flex items-center gap-2 text-zinc-500 mb-2">
+                        <DollarSign className="w-4 h-4" />
+                        <span className="text-xs uppercase tracking-wider">Est. CTC</span>
+                    </div>
+                    <div className="text-2xl font-bold text-zinc-900 dark:text-white">
+                        {data.salary_estimate?.current_estimated_ctc?.most_likely
+                            ? `${data.salary_estimate.current_estimated_ctc.most_likely}L`
+                            : "Unknown"}
+                    </div>
+                    {data.salary_estimate?.current_estimated_ctc?.range && (
+                        <div className="text-xs text-zinc-500 mt-1">
+                            Range: {data.salary_estimate.current_estimated_ctc.range}
+                        </div>
+                    )}
+                </div>
             </div>
-            <div>
-                <p className="text-xl font-bold text-foreground truncate">{value}</p>
-                {sublabel && <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{sublabel}</p>}
+
+            {/* AI Summary */}
+            {data.executive_summary && (
+                <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center">
+                            <Bot className="w-4 h-4 text-white" />
+                        </div>
+                        <span className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">
+                            Donna's Assessment
+                        </span>
+                    </div>
+                    <p className="text-zinc-700 dark:text-zinc-300 leading-relaxed">
+                        {data.executive_summary}
+                    </p>
+                </div>
+            )}
+
+            {/* Strengths & Concerns */}
+            <div className="grid md:grid-cols-2 gap-4">
+                {/* Strengths */}
+                <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-4">
+                        <ThumbsUp className="w-4 h-4 text-emerald-600" />
+                        <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                            Key Strengths
+                        </span>
+                    </div>
+                    <ul className="space-y-2">
+                        {(data.strengths || []).map((strength: any, i: number) => {
+                            const text = typeof strength === 'string' ? strength : strength.strength;
+                            return (
+                                <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                                    {text}
+                                </li>
+                            );
+                        })}
+                        {(!data.strengths || data.strengths.length === 0) && (
+                            <li className="text-sm text-zinc-500 italic">No specific strengths highlighted</li>
+                        )}
+                    </ul>
+                </div>
+
+                {/* Concerns */}
+                <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-4">
+                        <AlertTriangle className="w-4 h-4 text-amber-600" />
+                        <span className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+                            Concerns to Explore
+                        </span>
+                    </div>
+                    <ul className="space-y-2">
+                        {(data.concerns || []).map((concern: any, i: number) => {
+                            const text = typeof concern === 'string' ? concern : concern.concern;
+                            return (
+                                <li key={i} className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                                    <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                                    {text}
+                                </li>
+                            );
+                        })}
+                        {(!data.concerns || data.concerns.length === 0) && (
+                            <li className="text-sm text-zinc-500 italic">No major concerns identified</li>
+                        )}
+                    </ul>
+                </div>
+            </div>
+
+            {/* Recommendation */}
+            {recommendation.action && (
+                <div className={cn(
+                    "rounded-xl p-5 border",
+                    recommendation.action === "Pass" || recommendation.action === "No Hire"
+                        ? "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800"
+                        : "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800"
+                )}>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                {recommendation.action === "Pass" || recommendation.action === "No Hire" ? (
+                                    <Ban className="w-5 h-5 text-red-500" />
+                                ) : (
+                                    <Rocket className="w-5 h-5 text-emerald-500" />
+                                )}
+                                <span className={cn(
+                                    "text-lg font-bold",
+                                    recommendation.action === "Pass" || recommendation.action === "No Hire"
+                                        ? "text-red-700 dark:text-red-400"
+                                        : "text-emerald-700 dark:text-emerald-400"
+                                )}>
+                                    {recommendation.action === "Proceed" ? "Recommended to Proceed" : "Not Recommended"}
+                                </span>
+                            </div>
+                            {recommendation.reasoning && (
+                                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 max-w-xl">
+                                    {recommendation.reasoning}
+                                </p>
+                            )}
+                        </div>
+                        {recommendation.confidence && (
+                            <Badge variant="outline" className="border-zinc-300 text-zinc-600">
+                                {recommendation.confidence}% confidence
+                            </Badge>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ============================================================================
+// OUTREACH/EMAIL EXPANDED CONTENT
+// ============================================================================
+
+const OutreachExpandedContent = ({
+    data,
+    onComposeEmail,
+    hasEmail
+}: {
+    data: any;
+    onComposeEmail: () => void;
+    hasEmail: boolean;
+}) => {
+    if (!hasEmail) {
+        return (
+            <div className="text-center py-8">
+                <div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mx-auto mb-4">
+                    <Mail className="w-8 h-8 text-amber-500" />
+                </div>
+                <h4 className="text-lg font-semibold text-zinc-900 dark:text-white mb-2">
+                    Email Not Found
+                </h4>
+                <p className="text-sm text-zinc-500 max-w-md mx-auto mb-4">
+                    We could not find this candidate's email automatically.
+                    You can add it manually to send an outreach email.
+                </p>
+            </div>
+        );
+    }
+
+    if (!data || !data.sent_at) {
+        return (
+            <div className="text-center py-8">
+                <div className="w-16 h-16 rounded-full bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center mx-auto mb-4">
+                    <Mail className="w-8 h-8 text-indigo-500" />
+                </div>
+                <h4 className="text-lg font-semibold text-zinc-900 dark:text-white mb-2">
+                    Ready to Reach Out
+                </h4>
+                <p className="text-sm text-zinc-500 max-w-md mx-auto mb-6">
+                    We have their email address. Compose a personalized email to grab their attention.
+                </p>
+                <Button
+                    onClick={onComposeEmail}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white"
+                >
+                    <Edit3 className="w-4 h-4 mr-2" />
+                    Compose Email
+                </Button>
+            </div>
+        );
+    }
+
+    // Email has been sent - show engagement tracker
+    const engagementSteps = [
+        {
+            id: "sent",
+            label: "Sent",
+            icon: Send,
+            active: true,
+            time: data.sent_at
+        },
+        {
+            id: "delivered",
+            label: "Delivered",
+            icon: CheckCircle2,
+            active: true,
+            time: data.sent_at
+        },
+        {
+            id: "opened",
+            label: `Opened${data.open_count > 1 ? ` (${data.open_count}x)` : ''}`,
+            icon: Eye,
+            active: data.opened,
+            time: data.opened_at
+        },
+        {
+            id: "clicked",
+            label: "Link Clicked",
+            icon: MousePointer,
+            active: data.clicked,
+            time: data.clicked_at
+        },
+        {
+            id: "responded",
+            label: "Scheduled",
+            icon: Calendar,
+            active: data.responded,
+            time: null
+        }
+    ];
+
+    return (
+        <div className="space-y-6">
+            {/* Engagement Tracker */}
+            <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-6 border border-zinc-200 dark:border-zinc-700">
+                <h4 className="text-sm font-medium text-zinc-500 mb-4">Email Engagement</h4>
+                <div className="flex items-center justify-between gap-2">
+                    {engagementSteps.map((step, index) => {
+                        const Icon = step.icon;
+                        const isLast = index === engagementSteps.length - 1;
+
+                        return (
+                            <React.Fragment key={step.id}>
+                                <div className="flex flex-col items-center gap-2 flex-1">
+                                    <motion.div
+                                        className={cn(
+                                            "w-12 h-12 rounded-full flex items-center justify-center transition-all",
+                                            step.active
+                                                ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"
+                                                : "bg-zinc-200 dark:bg-zinc-700 text-zinc-400"
+                                        )}
+                                        initial={{ scale: 0.8 }}
+                                        animate={{ scale: step.active ? 1 : 0.9 }}
+                                    >
+                                        <Icon className="w-5 h-5" />
+                                    </motion.div>
+                                    <span className={cn(
+                                        "text-xs font-medium text-center",
+                                        step.active ? "text-zinc-700 dark:text-zinc-300" : "text-zinc-400"
+                                    )}>
+                                        {step.label}
+                                    </span>
+                                    {step.time && (
+                                        <span className="text-[10px] text-zinc-400">
+                                            {new Date(step.time).toLocaleDateString('en-US', {
+                                                month: 'short',
+                                                day: 'numeric',
+                                                hour: 'numeric',
+                                                minute: '2-digit'
+                                            })}
+                                        </span>
+                                    )}
+                                </div>
+                                {!isLast && (
+                                    <div className={cn(
+                                        "flex-1 h-0.5 max-w-16 -mt-8",
+                                        step.active && engagementSteps[index + 1]?.active
+                                            ? "bg-emerald-500"
+                                            : step.active
+                                                ? "bg-gradient-to-r from-emerald-500 to-zinc-300 dark:to-zinc-600"
+                                                : "bg-zinc-200 dark:bg-zinc-700"
+                                    )} />
+                                )}
+                            </React.Fragment>
+                        );
+                    })}
+                </div>
+            </div>
+
+            {/* Email Preview */}
+            {data.subject && (
+                <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                    <div className="p-4 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/50">
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold">
+                                    N
+                                </div>
+                                <div>
+                                    <div className="font-medium text-zinc-900 dark:text-white">NeuraLeap</div>
+                                    <div className="text-xs text-zinc-500">to {data.email_address}</div>
+                                </div>
+                            </div>
+                            <div className="text-xs text-zinc-400">
+                                {data.sent_at && new Date(data.sent_at).toLocaleDateString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    year: 'numeric'
+                                })}
+                            </div>
+                        </div>
+                        <div className="font-semibold text-zinc-800 dark:text-zinc-200">
+                            {data.subject}
+                        </div>
+                    </div>
+                    <div className="p-5">
+                        <div className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap leading-relaxed">
+                            {data.body || "Email content preview not available"}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ============================================================================
+// SCHEDULING EXPANDED CONTENT
+// ============================================================================
+
+const SchedulingExpandedContent = ({ data }: { data: any }) => {
+    if (!data?.scheduled_datetime) {
+        return (
+            <div className="text-center py-8">
+                <div className="w-16 h-16 rounded-full bg-pink-100 dark:bg-pink-900/30 flex items-center justify-center mx-auto mb-4">
+                    <Calendar className="w-8 h-8 text-pink-500" />
+                </div>
+                <h4 className="text-lg font-semibold text-zinc-900 dark:text-white mb-2">
+                    Awaiting Response
+                </h4>
+                <p className="text-sm text-zinc-500 max-w-md mx-auto">
+                    The candidate is choosing their preferred interview time.
+                    We will notify you when they schedule.
+                </p>
+            </div>
+        );
+    }
+
+    const scheduledDate = new Date(data.scheduled_datetime);
+    const isUpcoming = scheduledDate > new Date();
+
+    return (
+        <div className="space-y-4">
+            <div className={cn(
+                "rounded-xl p-6 text-center border",
+                isUpcoming
+                    ? "bg-gradient-to-br from-pink-50 to-purple-50 dark:from-pink-950/30 dark:to-purple-950/30 border-pink-200 dark:border-pink-800"
+                    : "bg-zinc-50 dark:bg-zinc-800/50 border-zinc-200 dark:border-zinc-700"
+            )}>
+                <div className={cn(
+                    "w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4",
+                    isUpcoming ? "bg-pink-500" : "bg-zinc-400"
+                )}>
+                    <Calendar className="w-6 h-6 text-white" />
+                </div>
+                <div className="text-2xl font-bold text-zinc-900 dark:text-white mb-1">
+                    {scheduledDate.toLocaleDateString('en-US', {
+                        weekday: 'long',
+                        month: 'long',
+                        day: 'numeric'
+                    })}
+                </div>
+                <div className="text-lg text-zinc-600 dark:text-zinc-400">
+                    {scheduledDate.toLocaleTimeString('en-US', {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        hour12: true
+                    })}
+                </div>
+                <div className="flex items-center justify-center gap-4 mt-4 text-sm text-zinc-500">
+                    <span className="flex items-center gap-1">
+                        <Clock className="w-4 h-4" />
+                        {data.duration_minutes || 15} min
+                    </span>
+                    <span className="flex items-center gap-1">
+                        <Globe className="w-4 h-4" />
+                        {data.timezone || "IST"}
+                    </span>
+                </div>
+                {data.phone_number && (
+                    <div className="mt-3 flex items-center justify-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                        <Phone className="w-4 h-4" />
+                        {data.phone_number}
+                    </div>
+                )}
             </div>
         </div>
     );
+};
+
+// ============================================================================
+// INTERVIEW EXPANDED CONTENT
+// ============================================================================
+
+const InterviewExpandedContent = ({ data }: { data: any }) => {
+    const [showTranscript, setShowTranscript] = useState(false);
+
+    if (!data?.session_id) {
+        return (
+            <div className="text-center py-8">
+                <div className="w-16 h-16 rounded-full bg-teal-100 dark:bg-teal-900/30 flex items-center justify-center mx-auto mb-4">
+                    <PhoneCall className="w-8 h-8 text-teal-500" />
+                </div>
+                <h4 className="text-lg font-semibold text-zinc-900 dark:text-white mb-2">
+                    Interview Not Started
+                </h4>
+                <p className="text-sm text-zinc-500 max-w-md mx-auto">
+                    The AI interview will begin at the scheduled time.
+                    Neura will call the candidate automatically.
+                </p>
+            </div>
+        );
+    }
+
+    const assessment = data.assessment || {};
+    const clips = data.clips || [];
+    const transcript = data.transcript || [];
+    const durationMins = data.duration_seconds ? Math.floor(data.duration_seconds / 60) : 0;
+
+    return (
+        <div className="space-y-6">
+            {/* Stats Grid */}
+            <div className="grid grid-cols-4 gap-4">
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-4 text-center border border-zinc-200 dark:border-zinc-700">
+                    <Timer className="w-5 h-5 text-zinc-400 mx-auto mb-2" />
+                    <div className="text-xl font-bold text-zinc-900 dark:text-white">
+                        {durationMins}:{String(Math.floor((data.duration_seconds || 0) % 60)).padStart(2, '0')}
+                    </div>
+                    <div className="text-xs text-zinc-500">Duration</div>
+                </div>
+
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-4 text-center border border-zinc-200 dark:border-zinc-700">
+                    <MessageSquare className="w-5 h-5 text-zinc-400 mx-auto mb-2" />
+                    <div className="text-xl font-bold text-zinc-900 dark:text-white">{clips.length}</div>
+                    <div className="text-xs text-zinc-500">Questions</div>
+                </div>
+
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-4 text-center border border-zinc-200 dark:border-zinc-700">
+                    <Star className="w-5 h-5 text-zinc-400 mx-auto mb-2" />
+                    <div className="text-xl font-bold text-zinc-900 dark:text-white">
+                        {clips.filter((c: any) => c.is_highlight).length}
+                    </div>
+                    <div className="text-xs text-zinc-500">Highlights</div>
+                </div>
+
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-4 text-center border border-zinc-200 dark:border-zinc-700">
+                    <Award className="w-5 h-5 text-zinc-400 mx-auto mb-2" />
+                    <div className={cn(
+                        "text-xl font-bold",
+                        (assessment.overall_score || 0) >= 70 ? "text-emerald-500" :
+                            (assessment.overall_score || 0) >= 50 ? "text-amber-500" : "text-red-500"
+                    )}>
+                        {assessment.overall_score || '--'}
+                    </div>
+                    <div className="text-xs text-zinc-500">Score</div>
+                </div>
+            </div>
+
+            {/* Recording Player */}
+            {data.recording_url && (
+                <div className="bg-zinc-900 rounded-xl p-4">
+                    <div className="flex items-center gap-4">
+                        <Button
+                            size="icon"
+                            className="w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500"
+                        >
+                            <Play className="w-5 h-5 ml-0.5" />
+                        </Button>
+                        <div className="flex-1">
+                            <div className="h-2 bg-zinc-700 rounded-full">
+                                <div className="h-full w-0 bg-indigo-500 rounded-full" />
+                            </div>
+                            <div className="flex justify-between text-xs text-zinc-500 mt-1">
+                                <span>0:00</span>
+                                <span>{durationMins}:{String(Math.floor((data.duration_seconds || 0) % 60)).padStart(2, '0')}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Tabs for Highlights / Transcript */}
+            <div className="flex gap-2 border-b border-zinc-200 dark:border-zinc-700">
+                <button
+                    onClick={() => setShowTranscript(false)}
+                    className={cn(
+                        "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+                        !showTranscript
+                            ? "border-indigo-500 text-indigo-600"
+                            : "border-transparent text-zinc-500 hover:text-zinc-700"
+                    )}
+                >
+                    Highlights ({clips.filter((c: any) => c.is_highlight).length})
+                </button>
+                <button
+                    onClick={() => setShowTranscript(true)}
+                    className={cn(
+                        "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+                        showTranscript
+                            ? "border-indigo-500 text-indigo-600"
+                            : "border-transparent text-zinc-500 hover:text-zinc-700"
+                    )}
+                >
+                    Full Transcript
+                </button>
+            </div>
+
+            {/* Content */}
+            <AnimatePresence mode="wait">
+                {showTranscript ? (
+                    <motion.div
+                        key="transcript"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="bg-zinc-50 dark:bg-zinc-800/50 rounded-xl p-4 max-h-96 overflow-auto border border-zinc-200 dark:border-zinc-700"
+                    >
+                        <div className="space-y-4">
+                            {transcript.length > 0 ? transcript.map((entry: any, index: number) => (
+                                <div key={index} className="flex gap-3">
+                                    <div className={cn(
+                                        "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
+                                        entry.role === "assistant"
+                                            ? "bg-indigo-100 dark:bg-indigo-900/50"
+                                            : "bg-emerald-100 dark:bg-emerald-900/50"
+                                    )}>
+                                        {entry.role === "assistant" ? (
+                                            <Bot className="w-4 h-4 text-indigo-600" />
+                                        ) : (
+                                            <UserCircle2 className="w-4 h-4 text-emerald-600" />
+                                        )}
+                                    </div>
+                                    <div>
+                                        <div className={cn(
+                                            "text-xs font-medium mb-1",
+                                            entry.role === "assistant" ? "text-indigo-600" : "text-emerald-600"
+                                        )}>
+                                            {entry.role === "assistant" ? "Neura (AI)" : "Candidate"}
+                                        </div>
+                                        <p className="text-sm text-zinc-700 dark:text-zinc-300">{entry.content}</p>
+                                    </div>
+                                </div>
+                            )) : (
+                                <div className="text-center py-8 text-zinc-500">
+                                    <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                                    Transcript not available yet
+                                </div>
+                            )}
+                        </div>
+                    </motion.div>
+                ) : (
+                    <motion.div
+                        key="clips"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="space-y-3"
+                    >
+                        {clips.filter((c: any) => c.is_highlight).map((clip: any, index: number) => (
+                            <div
+                                key={clip.clip_id}
+                                className="bg-white dark:bg-zinc-800 rounded-xl border border-amber-200 dark:border-amber-800 p-4"
+                            >
+                                <div className="flex items-start gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center shrink-0">
+                                        <Star className="w-4 h-4 text-amber-600 fill-amber-600" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <Bot className="w-3.5 h-3.5 text-indigo-500" />
+                                            <p className="text-sm font-medium text-zinc-900 dark:text-white">{clip.question}</p>
+                                        </div>
+                                        <div className="flex items-start gap-2">
+                                            <UserCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                                            <p className="text-sm text-zinc-600 dark:text-zinc-400">{clip.response}</p>
+                                        </div>
+                                    </div>
+                                    {clip.score !== undefined && (
+                                        <div className={cn(
+                                            "text-lg font-bold shrink-0",
+                                            clip.score >= 80 ? "text-emerald-500" :
+                                                clip.score >= 60 ? "text-green-500" :
+                                                    clip.score >= 40 ? "text-amber-500" : "text-red-500"
+                                        )}>
+                                            {clip.score}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                        {clips.filter((c: any) => c.is_highlight).length === 0 && (
+                            <div className="text-center py-8 text-zinc-500">
+                                No highlights yet
+                            </div>
+                        )}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Assessment Summary */}
+            {assessment.executive_summary && (
+                <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                        <Bot className="w-5 h-5 text-indigo-500" />
+                        <span className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">
+                            Interview Analysis
+                        </span>
+                    </div>
+                    <p className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">
+                        {assessment.executive_summary}
+                    </p>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ============================================================================
+// DECISION EXPANDED CONTENT
+// ============================================================================
+
+const DecisionExpandedContent = ({
+    data,
+    onMakeDecision,
+    isLoading
+}: {
+    data: any;
+    onMakeDecision: (decision: string, reason?: string) => void;
+    isLoading: boolean;
+}) => {
+    const [showRejectDialog, setShowRejectDialog] = useState(false);
+    const [rejectReason, setRejectReason] = useState("");
+
+    if (data?.decision) {
+        const decisionStyles: Record<string, { bg: string; icon: LucideIcon; label: string; color: string }> = {
+            hire: { bg: "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800", icon: CheckCircle2, label: "Hired", color: "text-emerald-600" },
+            reject: { bg: "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800", icon: XCircle, label: "Rejected", color: "text-red-600" },
+            hold: { bg: "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800", icon: Clock, label: "On Hold", color: "text-amber-600" }
+        };
+
+        const style = decisionStyles[data.decision] || decisionStyles.hold;
+        const Icon = style.icon;
+
+        return (
+            <div className={cn("rounded-xl p-8 text-center border", style.bg)}>
+                <Icon className={cn("w-16 h-16 mx-auto mb-4", style.color)} />
+                <h4 className={cn("text-2xl font-bold mb-2", style.color)}>{style.label}</h4>
+                {data.decided_by && (
+                    <p className="text-sm text-zinc-500">by {data.decided_by}</p>
+                )}
+                {data.reason && (
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-4 max-w-md mx-auto">
+                        {data.reason}
+                    </p>
+                )}
+            </div>
+        );
+    }
+
+    if (!data?.recommendation) {
+        return (
+            <div className="text-center py-8">
+                <div className="w-16 h-16 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mx-auto mb-4">
+                    <Award className="w-8 h-8 text-zinc-400" />
+                </div>
+                <h4 className="text-lg font-semibold text-zinc-900 dark:text-white mb-2">
+                    Awaiting Interview
+                </h4>
+                <p className="text-sm text-zinc-500 max-w-md mx-auto">
+                    Complete the interview to make a hiring decision.
+                </p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-6">
+            {/* AI Recommendation */}
+            <div className={cn(
+                "rounded-xl p-5 border",
+                data.recommendation === "strong_hire" || data.recommendation === "hire"
+                    ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800"
+                    : data.recommendation === "no_hire"
+                        ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
+                        : "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800"
+            )}>
+                <div className="flex items-center gap-2 mb-2">
+                    <Bot className="w-5 h-5 text-indigo-500" />
+                    <span className="text-sm font-medium text-zinc-500">Donna's Recommendation</span>
+                </div>
+                <div className={cn(
+                    "text-xl font-bold",
+                    data.recommendation === "strong_hire" || data.recommendation === "hire"
+                        ? "text-emerald-600"
+                        : data.recommendation === "no_hire"
+                            ? "text-red-600"
+                            : "text-amber-600"
+                )}>
+                    {data.recommendation === "strong_hire" ? "Strong Hire" :
+                        data.recommendation === "hire" ? "Hire" :
+                            data.recommendation === "no_hire" ? "Do Not Hire" :
+                                "Maybe - Needs Review"}
+                </div>
+                {data.score && (
+                    <div className="text-sm text-zinc-500 mt-1">
+                        Interview Score: {data.score}/100
+                    </div>
+                )}
+            </div>
+
+            {/* Decision Buttons */}
+            <div className="grid grid-cols-3 gap-4">
+                <Button
+                    onClick={() => onMakeDecision("hire")}
+                    disabled={isLoading}
+                    className="h-16 bg-emerald-600 hover:bg-emerald-500 text-white flex flex-col items-center justify-center gap-1"
+                >
+                    {isLoading ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                        <>
+                            <ThumbsUp className="w-5 h-5" />
+                            <span className="text-xs">Hire</span>
+                        </>
+                    )}
+                </Button>
+
+                <Button
+                    onClick={() => onMakeDecision("hold")}
+                    disabled={isLoading}
+                    variant="outline"
+                    className="h-16 border-amber-300 text-amber-600 hover:bg-amber-50 flex flex-col items-center justify-center gap-1"
+                >
+                    <Clock className="w-5 h-5" />
+                    <span className="text-xs">Hold</span>
+                </Button>
+
+                <Button
+                    onClick={() => setShowRejectDialog(true)}
+                    disabled={isLoading}
+                    variant="outline"
+                    className="h-16 border-red-300 text-red-600 hover:bg-red-50 flex flex-col items-center justify-center gap-1"
+                >
+                    <ThumbsDown className="w-5 h-5" />
+                    <span className="text-xs">Pass</span>
+                </Button>
+            </div>
+
+            {/* Reject Dialog */}
+            <Dialog open={showRejectDialog} onOpenChange={setShowRejectDialog}>
+                <DialogContent className="bg-white dark:bg-zinc-900">
+                    <DialogHeader>
+                        <DialogTitle>Pass on this candidate</DialogTitle>
+                        <DialogDescription>
+                            Please provide a brief reason for your decision.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <Textarea
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        placeholder="e.g., Not enough experience in required skills..."
+                        className="min-h-24"
+                    />
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setShowRejectDialog(false)}>
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={() => {
+                                onMakeDecision("reject", rejectReason);
+                                setShowRejectDialog(false);
+                            }}
+                            disabled={!rejectReason}
+                            className="bg-red-600 hover:bg-red-500 text-white"
+                        >
+                            Confirm
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        </div>
+    );
+};
+
+// ============================================================================
+// GMAIL-STYLE EMAIL SIDE PANEL
+// ============================================================================
+
+interface EmailSidePanelProps {
+    isOpen: boolean;
+    onClose: () => void;
+    pipelineId: string;
+    candidateName: string;
+    candidateEmail: string;
+    onSend: (subject: string, body: string) => Promise<void>;
 }
 
-// --- Main Page Component ---
+const EmailSidePanel = ({
+    isOpen,
+    onClose,
+    pipelineId,
+    candidateName,
+    candidateEmail,
+    onSend
+}: EmailSidePanelProps) => {
+    const { token } = useAuth();
+    const [loading, setLoading] = useState(true);
+    const [sending, setSending] = useState(false);
+    const [mode, setMode] = useState<"preview" | "edit">("preview");
+    const [tone, setTone] = useState("professional");
+    const [isMinimized, setIsMinimized] = useState(false);
 
-export default function PipelineDetailPage() {
+    // Email fields
+    const [subject, setSubject] = useState("");
+    const [greeting, setGreeting] = useState("");
+    const [body, setBody] = useState("");
+    const [closing, setClosing] = useState("");
+    const [schedulingLink, setSchedulingLink] = useState("");
+
+    const firstName = candidateName.split(" ")[0];
+
+    useEffect(() => {
+        if (isOpen) {
+            loadPreview();
+        }
+    }, [isOpen]);
+
+    const loadPreview = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/email-preview`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSubject(data.preview.subject);
+                setGreeting(data.preview.greeting);
+                setBody(data.preview.body);
+                setClosing(data.preview.closing);
+                setSchedulingLink(data.preview.scheduling_link);
+            }
+        } catch (err) {
+            console.error("Failed to load email preview:", err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const regenerate = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/email-preview`, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ tone })
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSubject(data.preview.subject);
+                setGreeting(data.preview.greeting);
+                setBody(data.preview.body);
+                setClosing(data.preview.closing);
+            }
+        } catch (err) {
+            console.error("Failed to regenerate:", err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleSend = async () => {
+        setSending(true);
+        try {
+            const fullBody = `${greeting}\n\n${body}\n\n${closing}\n\nBest regards,\nThe NeuraLeap Team`;
+            await onSend(subject, fullBody);
+            onClose();
+        } catch (err) {
+            console.error("Failed to send:", err);
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const wordCount = body.split(/\s+/).filter(Boolean).length;
+
+    if (!isOpen) return null;
+
+    return (
+        <motion.div
+            initial={{ x: "100%" }}
+            animate={{ x: isMinimized ? "calc(100% - 300px)" : 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className={cn(
+                "fixed right-0 top-0 h-full bg-white dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl z-50 flex flex-col",
+                isMinimized ? "w-[300px]" : "w-[600px]"
+            )}
+        >
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/50">
+                <div className="flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-zinc-500" />
+                    <span className="font-medium text-zinc-900 dark:text-white text-sm">
+                        {isMinimized ? "Email" : "Compose Email"}
+                    </span>
+                </div>
+                <div className="flex items-center gap-1">
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={() => setIsMinimized(!isMinimized)}
+                                >
+                                    {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{isMinimized ? "Expand" : "Minimize"}</TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>
+                        <X className="w-4 h-4" />
+                    </Button>
+                </div>
+            </div>
+
+            {isMinimized ? (
+                // Minimized view
+                <div className="p-4">
+                    <p className="text-sm text-zinc-500 mb-2">To: {candidateName}</p>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-white truncate">{subject}</p>
+                </div>
+            ) : (
+                <>
+                    {/* Donna Helper */}
+                    <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
+                        <Donna
+                            message={mode === "edit"
+                                ? "Keep it short and personal. Under 150 words works best!"
+                                : "Looking good! Review and click Send when ready."
+                            }
+                            mood={mode === "edit" ? "thinking" : "happy"}
+                            size="sm"
+                        />
+                    </div>
+
+                    {/* Mode Toggle & Controls */}
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-100 dark:border-zinc-800">
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setMode("preview")}
+                                className={cn(
+                                    "px-3 py-1.5 text-sm font-medium rounded-lg transition-colors",
+                                    mode === "preview"
+                                        ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
+                                        : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                                )}
+                            >
+                                <Eye className="w-4 h-4 inline mr-1.5" />
+                                Preview
+                            </button>
+                            <button
+                                onClick={() => setMode("edit")}
+                                className={cn(
+                                    "px-3 py-1.5 text-sm font-medium rounded-lg transition-colors",
+                                    mode === "edit"
+                                        ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
+                                        : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                                )}
+                            >
+                                <Edit3 className="w-4 h-4 inline mr-1.5" />
+                                Edit
+                            </button>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <Select value={tone} onValueChange={setTone}>
+                                <SelectTrigger className="w-32 h-8 text-xs">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="professional">Professional</SelectItem>
+                                    <SelectItem value="friendly">Friendly</SelectItem>
+                                    <SelectItem value="casual">Casual</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={regenerate}
+                                disabled={loading}
+                                className="h-8"
+                            >
+                                <Wand2 className="w-3.5 h-3.5 mr-1.5" />
+                                Regenerate
+                            </Button>
+                        </div>
+                    </div>
+
+                    {/* Email Content */}
+                    <ScrollArea className="flex-1">
+                        {loading ? (
+                            <div className="flex items-center justify-center py-20">
+                                <div className="text-center">
+                                    <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mx-auto mb-3" />
+                                    <p className="text-sm text-zinc-500">Crafting your email...</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-4">
+                                {/* To & Subject */}
+                                <div className="space-y-3 mb-4">
+                                    <div className="flex items-center gap-3 py-2 border-b border-zinc-100 dark:border-zinc-800">
+                                        <span className="text-sm text-zinc-400 w-16">To</span>
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center">
+                                                <span className="text-xs font-medium text-indigo-600">{firstName.charAt(0)}</span>
+                                            </div>
+                                            <span className="text-sm text-zinc-900 dark:text-white">{candidateName}</span>
+                                            <span className="text-xs text-zinc-400">&lt;{candidateEmail}&gt;</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-3 py-2 border-b border-zinc-100 dark:border-zinc-800">
+                                        <span className="text-sm text-zinc-400 w-16">Subject</span>
+                                        {mode === "edit" ? (
+                                            <Input
+                                                value={subject}
+                                                onChange={(e) => setSubject(e.target.value)}
+                                                className="flex-1 h-8 border-0 p-0 focus-visible:ring-0 text-sm"
+                                                placeholder="Enter subject..."
+                                            />
+                                        ) : (
+                                            <span className="text-sm font-medium text-zinc-900 dark:text-white">{subject}</span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Email Body */}
+                                <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                                    {mode === "edit" ? (
+                                        <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                                            <div className="p-4">
+                                                <Label className="text-xs text-zinc-500 mb-2 block">Greeting</Label>
+                                                <Input
+                                                    value={greeting}
+                                                    onChange={(e) => setGreeting(e.target.value)}
+                                                    className="h-9"
+                                                    placeholder="Hi John,"
+                                                />
+                                            </div>
+
+                                            <div className="p-4">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <Label className="text-xs text-zinc-500">Body</Label>
+                                                    <span className={cn(
+                                                        "text-xs",
+                                                        wordCount > 150 ? "text-amber-500" : "text-zinc-400"
+                                                    )}>
+                                                        {wordCount} words {wordCount > 150 && "(try under 150)"}
+                                                    </span>
+                                                </div>
+                                                <Textarea
+                                                    value={body}
+                                                    onChange={(e) => setBody(e.target.value)}
+                                                    className="min-h-40 resize-none"
+                                                    placeholder="Write your message..."
+                                                />
+                                            </div>
+
+                                            <div className="p-4">
+                                                <Label className="text-xs text-zinc-500 mb-2 block">Closing</Label>
+                                                <Input
+                                                    value={closing}
+                                                    onChange={(e) => setClosing(e.target.value)}
+                                                    className="h-9"
+                                                    placeholder="Looking forward to hearing from you."
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="p-6 space-y-4">
+                                            <p className="text-zinc-700 dark:text-zinc-300">{greeting}</p>
+                                            <p className="text-zinc-700 dark:text-zinc-300 whitespace-pre-line leading-relaxed">{body}</p>
+                                            <p className="text-zinc-700 dark:text-zinc-300">{closing}</p>
+                                            <p className="text-zinc-500">
+                                                Best regards,<br />
+                                                The NeuraLeap Team
+                                            </p>
+
+                                            {/* CTA Button */}
+                                            <div className="pt-4">
+                                                <div className="inline-flex items-center gap-2 bg-gradient-to-r from-indigo-500 to-purple-500 text-white px-6 py-3 rounded-lg font-medium shadow-lg shadow-indigo-500/25">
+                                                    <Calendar className="w-4 h-4" />
+                                                    Schedule Your Interview
+                                                </div>
+                                                <p className="text-xs text-zinc-400 mt-2">
+                                                    This button links to your scheduling page
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Tips */}
+                                <div className="mt-4 bg-amber-50 dark:bg-amber-950/30 rounded-xl p-4 border border-amber-200 dark:border-amber-800">
+                                    <h4 className="text-sm font-medium text-amber-700 dark:text-amber-300 mb-2 flex items-center gap-2">
+                                        <Lightbulb className="w-4 h-4" />
+                                        Tips for better response rates
+                                    </h4>
+                                    <ul className="space-y-1 text-xs text-amber-600 dark:text-amber-400">
+                                        <li className="flex items-center gap-2">
+                                            <Check className="w-3.5 h-3.5" />
+                                            Keep subject line short and personal
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Check className="w-3.5 h-3.5" />
+                                            Mention something specific from their background
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Check className="w-3.5 h-3.5" />
+                                            Keep email under 150 words
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        )}
+                    </ScrollArea>
+
+                    {/* Footer Actions */}
+                    <div className="border-t border-zinc-200 dark:border-zinc-800 p-4 bg-zinc-50 dark:bg-zinc-800/50">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <TooltipProvider>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button variant="ghost" size="icon" className="h-9 w-9">
+                                                <Paperclip className="w-4 h-4" />
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Attach file</TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                                <TooltipProvider>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button variant="ghost" size="icon" className="h-9 w-9">
+                                                <Link className="w-4 h-4" />
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Insert link</TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <Button variant="outline" onClick={onClose}>
+                                    Discard
+                                </Button>
+                                <Button
+                                    onClick={handleSend}
+                                    disabled={sending || !subject || !body}
+                                    className="bg-indigo-600 hover:bg-indigo-500 text-white min-w-28"
+                                >
+                                    {sending ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                                            Sending
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Send className="w-4 h-4 mr-2" />
+                                            Send
+                                        </>
+                                    )}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                </>
+            )}
+        </motion.div>
+    );
+};
+
+// ============================================================================
+// MANUAL EMAIL INPUT DIALOG
+// ============================================================================
+
+const ManualEmailDialog = ({
+    isOpen,
+    onClose,
+    onSubmit,
+    candidateName
+}: {
+    isOpen: boolean;
+    onClose: () => void;
+    onSubmit: (email: string, phone?: string) => Promise<void>;
+    candidateName: string;
+}) => {
+    const [email, setEmail] = useState("");
+    const [phone, setPhone] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+
+    const validateEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+
+    const handleSubmit = async () => {
+        if (!validateEmail(email)) {
+            setError("Please enter a valid email address");
+            return;
+        }
+        setLoading(true);
+        setError("");
+        try {
+            await onSubmit(email, phone || undefined);
+            onClose();
+            setEmail("");
+            setPhone("");
+        } catch (err: any) {
+            setError(err.message || "Failed to save");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <Dialog open={isOpen} onOpenChange={onClose}>
+            <DialogContent className="max-w-md">
+                <DialogHeader>
+                    <div className="mb-4">
+                        <Donna
+                            message={`No problem! If you have ${candidateName.split(" ")[0]}'s email from LinkedIn or another source, just add it here.`}
+                            mood="helpful"
+                            size="sm"
+                        />
+                    </div>
+                    <DialogTitle>Add Contact Information</DialogTitle>
+                    <DialogDescription>
+                        We could not find this candidate's email automatically.
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-4 py-4">
+                    <div>
+                        <Label htmlFor="email">Email Address <span className="text-red-500">*</span></Label>
+                        <Input
+                            id="email"
+                            type="email"
+                            value={email}
+                            onChange={(e) => { setEmail(e.target.value); setError(""); }}
+                            placeholder="candidate@example.com"
+                            className="mt-1.5"
+                        />
+                        {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+                    </div>
+
+                    <div>
+                        <Label htmlFor="phone">Phone <span className="text-zinc-400">(optional)</span></Label>
+                        <Input
+                            id="phone"
+                            type="tel"
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            placeholder="+91 98765 43210"
+                            className="mt-1.5"
+                        />
+                    </div>
+
+                    <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-lg p-4">
+                        <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                            Where to find their email:
+                        </h4>
+                        <ul className="space-y-1.5 text-xs text-zinc-500">
+                            <li className="flex items-start gap-2">
+                                <ChevronRight className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                LinkedIn "Contact Info" section
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <ChevronRight className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                Their personal website or portfolio
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <ChevronRight className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                Company email pattern (name@company.com)
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose}>Cancel</Button>
+                    <Button
+                        onClick={handleSubmit}
+                        disabled={loading || !email}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white"
+                    >
+                        {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />}
+                        Save and Continue
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
+// ============================================================================
+// TIMELINE PHASE COMPONENT
+// ============================================================================
+
+const TimelinePhase = ({
+    step,
+    index,
+    isExpanded,
+    onToggle,
+    isLast,
+    children,
+    onAction,
+    actionLabel,
+    actionLoading
+}: {
+    step: FlowStep;
+    index: number;
+    isExpanded: boolean;
+    onToggle: () => void;
+    isLast: boolean;
+    children?: React.ReactNode;
+    onAction?: () => void;
+    actionLabel?: string;
+    actionLoading?: boolean;
+}) => {
+    const iconMap: Record<string, string> = {
+        enrichment: "brain",
+        contact: "contact",
+        outreach: "mail",
+        scheduling: "calendar",
+        interview: "phone",
+        decision: "award"
+    };
+
+    const canExpand = (step.status === "completed" || step.status === "ready") && children;
+
+    return (
+        <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: index * 0.1 }}
+            className="relative"
+        >
+            {/* Connector Line */}
+            {!isLast && (
+                <div className={cn(
+                    "absolute left-6 top-16 w-0.5 h-full -translate-x-1/2",
+                    step.status === "completed"
+                        ? "bg-gradient-to-b from-emerald-500 to-emerald-300 dark:from-emerald-600 dark:to-emerald-800"
+                        : "bg-zinc-200 dark:bg-zinc-700"
+                )} />
+            )}
+
+            {/* Phase Card */}
+            <div className="relative flex gap-4 sm:gap-6">
+                {/* Icon */}
+                <div className="relative z-10 shrink-0">
+                    <PhaseIcon icon={iconMap[step.id] || "circle"} status={step.status} />
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 pb-8">
+                    <motion.div
+                        className={cn(
+                            "rounded-2xl border transition-all overflow-hidden",
+                            step.status === "completed"
+                                ? "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600"
+                                : step.status === "in_progress"
+                                    ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
+                                    : step.status === "ready"
+                                        ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800"
+                                        : step.status === "failed"
+                                            ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
+                                            : "bg-zinc-50 dark:bg-zinc-800/30 border-zinc-200 dark:border-zinc-700",
+                            canExpand && "cursor-pointer"
+                        )}
+                        whileHover={canExpand ? { scale: 1.005 } : {}}
+                        onClick={canExpand ? onToggle : undefined}
+                    >
+                        {/* Header */}
+                        <div className="p-4 sm:p-5 flex items-center justify-between">
+                            <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                        <h3 className={cn(
+                                            "font-semibold truncate",
+                                            step.status === "pending" ? "text-zinc-400" : "text-zinc-900 dark:text-white"
+                                        )}>
+                                            {step.name}
+                                        </h3>
+
+                                        {/* Help Button */}
+                                        <StepExplainer stepId={step.id}>
+                                            <button
+                                                className="text-zinc-400 hover:text-indigo-500 transition-colors"
+                                                onClick={(e) => e.stopPropagation()}
+                                            >
+                                                <HelpCircle className="w-4 h-4" />
+                                            </button>
+                                        </StepExplainer>
+                                    </div>
+
+                                    {step.summary && (
+                                        <p className="text-sm text-zinc-500 mt-0.5 truncate">
+                                            {step.summary}
+                                        </p>
+                                    )}
+
+                                    {step.duration_estimate && step.status === "pending" && (
+                                        <p className="text-xs text-zinc-400 mt-1 flex items-center gap-1">
+                                            <Clock className="w-3 h-3" />
+                                            {step.duration_estimate}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-3 shrink-0">
+                                {step.completed_at && (
+                                    <span className="text-xs text-zinc-400 font-mono hidden sm:block">
+                                        {new Date(step.completed_at).toLocaleDateString('en-US', {
+                                            month: 'short',
+                                            day: 'numeric'
+                                        })}
+                                    </span>
+                                )}
+
+                                {/* Status Badge */}
+                                <Badge
+                                    variant="outline"
+                                    className={cn(
+                                        "capitalize text-xs",
+                                        step.status === "completed" && "bg-emerald-50 border-emerald-200 text-emerald-700",
+                                        step.status === "in_progress" && "bg-blue-50 border-blue-200 text-blue-700 animate-pulse",
+                                        step.status === "ready" && "bg-amber-50 border-amber-200 text-amber-700",
+                                        step.status === "failed" && "bg-red-50 border-red-200 text-red-700",
+                                        step.status === "pending" && "bg-zinc-50 border-zinc-200 text-zinc-500"
+                                    )}
+                                >
+                                    {step.status === "in_progress" ? "Working..." :
+                                        step.status === "ready" ? "Ready" :
+                                            step.status}
+                                </Badge>
+
+                                {canExpand && (
+                                    <motion.div
+                                        animate={{ rotate: isExpanded ? 180 : 0 }}
+                                        transition={{ duration: 0.2 }}
+                                    >
+                                        <ChevronDown className="w-5 h-5 text-zinc-400" />
+                                    </motion.div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Action Button (when not expanded) */}
+                        {!isExpanded && onAction && (step.status === "ready" || step.status === "pending") && (
+                            <div className="px-4 sm:px-5 pb-4">
+                                <Button
+                                    onClick={(e) => { e.stopPropagation(); onAction(); }}
+                                    disabled={actionLoading}
+                                    className={cn(
+                                        "w-full",
+                                        step.status === "ready"
+                                            ? "bg-indigo-600 hover:bg-indigo-500 text-white"
+                                            : "bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-300"
+                                    )}
+                                >
+                                    {actionLoading ? (
+                                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                                    ) : (
+                                        <ArrowRight className="w-4 h-4 mr-2" />
+                                    )}
+                                    {actionLabel || "Continue"}
+                                </Button>
+                            </div>
+                        )}
+
+                        {/* Blocker Alert */}
+                        {step.blocker && !isExpanded && (
+                            <div className="mx-4 sm:mx-5 mb-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                                <div className="flex items-start gap-2">
+                                    <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                                    <div>
+                                        <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                                            {step.blocker}
+                                        </p>
+                                        {step.action_needed === "manual_email" && onAction && (
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={(e) => { e.stopPropagation(); onAction(); }}
+                                                className="mt-2 border-amber-300 text-amber-700 hover:bg-amber-100"
+                                            >
+                                                Add Email Manually
+                                            </Button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Expanded Content */}
+                        <AnimatePresence>
+                            {isExpanded && children && (
+                                <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: "auto", opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.3 }}
+                                    className="overflow-hidden"
+                                >
+                                    <div className="border-t border-zinc-200 dark:border-zinc-700 p-4 sm:p-6">
+                                        {children}
+                                    </div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </motion.div>
+                </div>
+            </div>
+        </motion.div>
+    );
+};
+
+
+// PROGRESS HEADER
+// ============================================================================
+const ProgressHeader = ({
+    completed,
+    total,
+    currentStep,
+    candidate,
+    job,
+    onBack
+}: {
+    completed: number;
+    total: number;
+    currentStep?: string;
+    candidate: any;
+    job: any;
+    onBack: () => void;
+}) => {
+    const percentage = Math.round((completed / total) * 100);
+    return (
+        <header className="sticky top-0 z-40 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="max-w-4xl mx-auto px-4 sm:px-6">
+                {/* Top Row */}
+                <div className="flex items-center gap-4 py-4">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={onBack}
+                        className="shrink-0"
+                    >
+                        <ArrowLeft className="w-5 h-5" />
+                    </Button>
+
+                    {/* Candidate Info */}
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                        {candidate.profile_picture_url ? (
+                            <img
+                                src={candidate.profile_picture_url}
+                                alt={candidate.name}
+                                className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-700 shrink-0"
+                            />
+                        ) : (
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold shrink-0">
+                                {candidate.name?.charAt(0)}
+                            </div>
+                        )}
+                        <div className="min-w-0">
+                            <h1 className="font-semibold text-zinc-900 dark:text-white truncate">
+                                {candidate.name}
+                            </h1>
+                            <p className="text-xs text-zinc-500 truncate">
+                                {job.title}
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Progress Pill */}
+                    <div className="hidden sm:flex items-center gap-2 bg-zinc-100 dark:bg-zinc-800 rounded-full px-3 py-1.5 shrink-0">
+                        <div className="w-2 h-2 rounded-full bg-indigo-500" />
+                        <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                            {completed}/{total} steps
+                        </span>
+                    </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="pb-3">
+                    <Progress value={percentage} className="h-1.5" />
+                </div>
+            </div>
+        </header>
+    );
+}
+
+// ============================================================================
+// MAIN PAGE COMPONENT
+// ============================================================================
+export default function PipelineFlowPage() {
     const params = useParams();
     const router = useRouter();
     const { token, isAuthenticated } = useAuth();
     const sessionId = params.sessionId as string;
     const pipelineId = params.pipelineId as string;
-
-    const [pipeline, setPipeline] = useState<any>(null);
+    // State
+    const [flow, setFlow] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [expandedStep, setExpandedStep] = useState<string | null>(null);
     const [actionLoading, setActionLoading] = useState(false);
 
-    // Modal States
-    const [showManualContact, setShowManualContact] = useState(false);
-    const [showOutreachModal, setShowOutreachModal] = useState(false);
-    const [manualEmail, setManualEmail] = useState("");
-    const [manualPhone, setManualPhone] = useState("");
+    // Panels
+    const [showEmailPanel, setShowEmailPanel] = useState(false);
+    const [showManualEmail, setShowManualEmail] = useState(false);
 
-    useEffect(() => { if (!isAuthenticated) router.push("/login"); }, [isAuthenticated, router]);
+    // Polling
+    const pollInterval = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
-        if (!pipelineId || pipelineId === "undefined") {
-            setError("Invalid pipeline ID");
-            setLoading(false);
+        if (!isAuthenticated) {
+            router.push("/login");
             return;
         }
-        loadPipeline();
-        const interval = setInterval(() => {
-            if (pipeline?.stage === CandidateStage.ENRICHING) loadPipeline();
-        }, 3000);
-        return () => clearInterval(interval);
-    }, [pipelineId, pipeline?.stage]);
+        loadFlow();
 
-    const loadPipeline = async () => {
-        if (!pipelineId || !token) return;
+        return () => {
+            if (pollInterval.current) {
+                clearInterval(pollInterval.current);
+            }
+        };
+    }, [isAuthenticated, pipelineId]);
+
+    const loadFlow = async (triggerEnrichment = false) => {
         try {
-            let url = `${API_BASE}/pipeline/${pipelineId}/enriched`;
-            let response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-
-            if (!response.ok) {
-                url = `${API_BASE}/pipeline/${pipelineId}`;
-                response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+            // Trigger enrichment if needed
+            if (triggerEnrichment) {
+                await fetch(`${API_BASE}/pipeline/${pipelineId}/start-flow`, {
+                    method: "POST",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ skip_enrichment: false })
+                });
             }
 
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            setPipeline(data);
+            // Get journey data
+            const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/journey`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            const data = await res.json();
+            setFlow(data.journey);
+
+            // Auto-expand latest completed step
+            const completedPhases = (data.journey?.phases || []).filter(
+                (p: any) => p.status === "completed" || p.status === "ready"
+            );
+            if (completedPhases.length > 0 && !expandedStep) {
+                setExpandedStep(completedPhases[completedPhases.length - 1].id);
+            }
+
+            // Polling for in-progress phases
+            const hasInProgress = (data.journey?.phases || []).some(
+                (p: any) => p.status === "in_progress"
+            );
+
+            if (hasInProgress && !pollInterval.current) {
+                pollInterval.current = setInterval(async () => {
+                    const pollRes = await fetch(`${API_BASE}/pipeline/${pipelineId}/journey`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    const pollData = await pollRes.json();
+                    setFlow(pollData.journey);
+
+                    // Stop polling when nothing is in progress
+                    const stillInProgress = (pollData.journey?.phases || []).some(
+                        (p: any) => p.status === "in_progress"
+                    );
+
+                    if (!stillInProgress && pollInterval.current) {
+                        clearInterval(pollInterval.current);
+                        pollInterval.current = null;
+                    }
+                }, 3000);
+            }
+
             setError(null);
         } catch (err: any) {
             setError(err.message);
@@ -189,911 +2257,222 @@ export default function PipelineDetailPage() {
         }
     };
 
-    // Actions
     const startEnrichment = async () => {
         setActionLoading(true);
-        try {
-            await fetch(`${API_BASE}/pipeline/${pipelineId}/enrich`, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ include_contact_fetch: true })
-            });
-            setTimeout(loadPipeline, 1000);
-        } catch (err) { alert("Failed to start enrichment"); } finally { setActionLoading(false); }
+        await loadFlow(true);
+        setActionLoading(false);
     };
 
-    const submitManualContact = async () => {
-        if (!manualEmail) return alert("Email is required");
-        setActionLoading(true);
-        try {
-            await fetch(`${API_BASE}/pipeline/${pipelineId}/manual-contact`, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ email: manualEmail, phone: manualPhone || undefined })
-            });
-            setShowManualContact(false);
-            loadPipeline();
-        } catch (err) { alert("Failed to update contact"); } finally { setActionLoading(false); }
+    const handleManualEmail = async (email: string, phone?: string) => {
+        const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/provide-email`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ email, phone })
+        });
+
+        if (!res.ok) throw new Error("Failed to save email");
+        loadFlow();
     };
 
-    const confirmOutreach = async () => {
-        if (!pipeline?.candidate?.candidate_id) {
-            alert("Candidate ID missing");
-            return;
-        }
+    const handleSendEmail = async (subject: string, body: string) => {
+        const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/send-email`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ subject, body })
+        });
 
+        if (!res.ok) throw new Error("Failed to send email");
+        loadFlow();
+    };
+
+    const handleDecision = async (decision: string, reason?: string) => {
         setActionLoading(true);
         try {
-            // Updated to match the specific route requirement
-            const response = await fetch(`${API_BASE}/pipeline/${pipelineId}/outreach`, {
+            const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/decision`, {
                 method: "POST",
-                headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    candidate_ids: [pipeline.candidate.candidate_id]
-                })
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ decision, reason })
             });
 
-            if (!response.ok) throw new Error("Outreach failed");
-
-            setShowOutreachModal(false);
-            loadPipeline();
+            if (!res.ok) throw new Error("Failed to save decision");
+            loadFlow();
         } catch (err) {
-            console.error(err);
-            alert("Failed to start outreach sequence");
+            console.error("Decision failed:", err);
         } finally {
             setActionLoading(false);
         }
     };
 
-    if (loading) return <LoadingScreen />;
-    if (error || !pipeline) return <ErrorScreen error={error} router={router} sessionId={sessionId} />;
-
-    const candidate = pipeline.candidate;
-    const stage = pipeline.stage as CandidateStage;
-
-    return (
-        <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-indigo-500/30 pb-20">
-            <div className="fixed inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none z-0"></div>
-            <AnimatedBackground />
-
-            <div className="relative z-10">
-                {/* Header */}
-                <header className="sticky top-0 z-50 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800">
-                    <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <Button variant="ghost" size="sm" onClick={() => router.push(`/pipeline/${sessionId}`)} className="text-zinc-400 hover:text-white hover:bg-zinc-800">
-                                <ArrowLeft className="w-4 h-4 mr-2" /> Back
-                            </Button>
-                            <div className="h-6 w-px bg-zinc-800" />
-                            <div>
-                                <h1 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-                                    {candidate.name}
-                                    {candidate.linkedin_url && (
-                                        <a href={candidate.linkedin_url} target="_blank" className="text-zinc-500 hover:text-blue-400"><ExternalLink className="w-3.5 h-3.5" /></a>
-                                    )}
-                                </h1>
-                                <p className="text-xs text-zinc-500 max-w-md truncate">{candidate.headline || candidate.current_title}</p>
-                            </div>
-                        </div>
-                        <StageIndicator stage={stage} stageLabel={pipeline.stage_label} />
-                    </div>
-                </header>
-
-                <div className="max-w-7xl mx-auto px-6 py-8 grid lg:grid-cols-12 gap-8">
-                    <div className="lg:col-span-4">
-                        <div className="sticky top-24">
-                            <CandidateDossier candidate={candidate} job={pipeline.job} contact={pipeline.contact} />
-                        </div>
-                    </div>
-
-
-                    <div className="lg:col-span-8">
-                        <AnimatePresence mode="wait">
-                            {/* UPDATED CONDITION BELOW */}
-                            {(stage === CandidateStage.ENRICHED ||
-                                stage === CandidateStage.SCHEDULING ||
-                                stage === CandidateStage.SCHEDULED ||
-                                stage === CandidateStage.EVALUATED ||
-                                stage.includes('outreach') ||
-                                stage.includes('interview')) ? (
-
-                                <EnrichedView
-                                    pipeline={pipeline}
-                                    hasEmail={!!candidate.contact?.email}
-                                    onStartOutreach={() => setShowOutreachModal(true)}
-                                    onManualContact={() => setShowManualContact(true)}
-                                    loading={actionLoading}
-                                />
-
-                            ) : stage === CandidateStage.ENRICHING ? (
-                                <EnrichingView />
-                            ) : (
-                                <NotEnrichedView onStartEnrichment={startEnrichment} loading={actionLoading} />
-                            )}
-                        </AnimatePresence>
-                    </div>
+    // Loading state
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center p-4">
+                <div className="text-center">
+                    <Donna
+                        message="Getting everything ready for you..."
+                        mood="thinking"
+                        size="lg"
+                    />
+                    <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mx-auto mt-6" />
                 </div>
             </div>
+        );
+    }
 
-            {/* Modals */}
-            <AnimatePresence>
-                {showManualContact && (
-                    <ManualContactModal
-                        email={manualEmail}
-                        phone={manualPhone}
-                        onEmailChange={setManualEmail}
-                        onPhoneChange={setManualPhone}
-                        onSubmit={submitManualContact}
-                        onClose={() => setShowManualContact(false)}
-                        loading={actionLoading}
+    // Error state
+    if (error || !flow) {
+        return (
+            <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center p-4">
+                <Card className="max-w-md w-full">
+                    <CardContent className="p-8 text-center">
+                        <Donna
+                            message="Oops! Something went wrong. Let me help you get back on track."
+                            mood="concerned"
+                            size="lg"
+                        />
+                        <p className="text-sm text-zinc-500 mt-4 mb-6">{error || "Could not load"}</p>
+                        <Button onClick={() => router.push(`/pipeline/${sessionId}`)} variant="outline">
+                            <ArrowLeft className="w-4 h-4 mr-2" />
+                            Back to Pipeline
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
+    const candidate = flow.candidate || {};
+    const job = flow?.job || {};
+    const steps = flow?.phases || [];
+    const completedCount = steps.filter((s: any) => s.status === "completed").length;
+    const progress = {
+        completed: completedCount,
+        total: steps.length,
+        percentage: Math.round((completedCount / steps.length) * 100)
+    };
+
+    // Get step actions
+    const getStepAction = (step: FlowStep) => {
+        switch (step.id) {
+            case "enrichment":
+                if (step.status === "pending") return { action: startEnrichment, label: "Start Analysis" };
+                break;
+            case "contact":
+                if (step.action_needed === "manual_email") return { action: () => setShowManualEmail(true), label: "Add Email" };
+                break;
+            case "outreach":
+                if (step.status === "ready") return { action: () => setShowEmailPanel(true), label: "Compose Email" };
+                break;
+        }
+        return null;
+    };
+
+    // Find candidate email for email panel
+    const candidateEmail = steps.find((s: FlowStep) => s.id === "contact")?.result?.email || "";
+
+    return (
+        <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
+            {/* Header */}
+            <ProgressHeader
+                completed={flow?.phases?.filter((p: any) => p.status === "completed").length || 0}
+                total={flow?.phases?.length || 7}
+                currentStep={flow?.current_stage}
+                candidate={flow?.candidate || {}}
+                job={flow?.job || {}}
+                onBack={() => router.push(`/pipeline/${sessionId}`)}
+            />
+
+            {/* Main Content */}
+            <main className={cn(
+                "max-w-4xl mx-auto px-4 sm:px-6 py-8 transition-all duration-300",
+                showEmailPanel && "mr-[600px]"
+            )}>
+                {/* Donna Welcome */}
+                <div className="mb-8">
+                    <Donna
+                        message={
+                            progress.completed === 0
+                                ? "Ready to start! Click 'Start Analysis' to begin evaluating this candidate."
+                                : progress.completed === progress.total
+                                    ? "Amazing work! You have completed the hiring journey for this candidate."
+                                    : `Making progress! ${progress.total - progress.completed} steps to go.`
+                        }
+                        mood={progress.completed === progress.total ? "excited" : "helpful"}
+                        size="md"
                     />
-                )}
-                {showOutreachModal && (
-                    <OutreachModal
-                        candidate={candidate}
-                        contact={pipeline.contact || candidate.contact}
-                        onSubmit={confirmOutreach}
-                        onClose={() => setShowOutreachModal(false)}
-                        loading={actionLoading}
+                </div>
+
+                {/* Timeline */}
+                <div className="space-y-0">
+                    {steps.map((step: any, index: number) => {
+                        const stepAction = getStepAction(step);
+                        const isActive = step.status === "in_progress";
+
+                        return (
+                            <TimelinePhase
+                                key={step.id}
+                                step={step}
+                                index={index}
+                                isExpanded={expandedStep === step.id}
+                                onToggle={() => setExpandedStep(expandedStep === step.id ? null : step.id)}
+                                isLast={index === steps.length - 1}
+                                onAction={stepAction?.action}
+                                actionLabel={stepAction?.label}
+                                actionLoading={actionLoading && isActive}
+                            >
+                                {step.id === "enrichment" && <EnrichmentExpandedContent data={step.data} />}
+                                {step.id === "outreach" && (
+                                    <OutreachExpandedContent
+                                        data={step.data}
+                                        onComposeEmail={() => setShowEmailPanel(true)}
+                                        hasEmail={!!candidateEmail}
+                                    />
+                                )}
+                                {step.id === "scheduling" && <SchedulingExpandedContent data={step.data} />}
+                                {step.id === "interview" && <InterviewExpandedContent data={step.data} />}
+                                {step.id === "decision" && (
+                                    <DecisionExpandedContent
+                                        data={step.data}
+                                        onMakeDecision={handleDecision}
+                                        isLoading={actionLoading}
+                                    />
+                                )}
+                            </TimelinePhase>
+                        );
+                    })}
+                </div>
+            </main>
+
+            {/* Gmail-style Email Side Panel */}
+            <AnimatePresence>
+                {showEmailPanel && (
+                    <EmailSidePanel
+                        isOpen={showEmailPanel}
+                        onClose={() => setShowEmailPanel(false)}
+                        pipelineId={pipelineId}
+                        candidateName={candidate.name || ""}
+                        candidateEmail={candidateEmail}
+                        onSend={handleSendEmail}
                     />
                 )}
             </AnimatePresence>
-        </div>
-    );
-}
 
-// --- Components ---
-
-function StageIndicator({ stage, stageLabel }: { stage: string; stageLabel: string }) {
-    const config: any = {
-        [CandidateStage.ENRICHED]: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-        [CandidateStage.OUTREACH_SENT]: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-        default: "bg-zinc-800 text-zinc-400 border-zinc-700"
-    };
-    const style = config[stage] || config.default;
-    return <Badge variant="outline" className={`${style} uppercase tracking-wider text-[10px]`}>{stageLabel}</Badge>;
-}
-
-// 1. The Dossier Card (Left Sidebar)
-function CandidateDossier({ candidate, job, contact }: any) {
-    return (
-        <Card className="bg-zinc-900/80 border-zinc-800 overflow-hidden backdrop-blur-sm">
-            <div className="p-6 text-center border-b border-zinc-800 bg-zinc-900">
-                <div className="w-24 h-24 rounded-full mx-auto mb-4 p-1 bg-gradient-to-b from-zinc-700 to-zinc-900 border border-zinc-700">
-                    <div className="w-full h-full rounded-full bg-zinc-800 flex items-center justify-center overflow-hidden">
-                        {candidate.profile_picture_url ? (
-                            <img src={candidate.profile_picture_url} alt="" className="w-full h-full object-cover opacity-90" />
-                        ) : (
-                            <User className="w-10 h-10 text-zinc-600" />
-                        )}
-                    </div>
-                </div>
-                <h2 className="text-xl font-bold text-white mb-1">{candidate.name}</h2>
-                <div className="flex items-center justify-center gap-2 text-xs text-zinc-500">
-                    <MapPin className="w-3 h-3" /> {candidate.location || "Unknown"}
-                </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-                <div className="space-y-4">
-                    <InfoRow icon={Building} label="Current Role" value={candidate.current_company || "Not listed"} sub={candidate.current_title} />
-                    <InfoRow icon={Briefcase} label="Experience" value={`${candidate.experience_years || 0} Years`} />
-                    <InfoRow
-                        icon={Mail}
-                        label="Contact Status"
-                        value={contact?.email || "Locked / Missing"}
-                        valueColor={contact?.email ? "text-emerald-400 font-mono" : "text-zinc-600 italic"}
-                    />
-                </div>
-
-                <div className="p-4 bg-zinc-950 rounded-lg border border-zinc-800">
-                    <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 font-semibold">Targeting For</div>
-                    <div className="font-medium text-indigo-300">{job.job_title}</div>
-                    <div className="text-xs text-zinc-500 mt-0.5">{job.company_name}</div>
-                </div>
-            </div>
-        </Card>
-    );
-}
-
-function InfoRow({ icon: Icon, label, value, sub, valueColor = "text-zinc-300" }: any) {
-    return (
-        <div className="flex gap-3">
-            <div className="mt-0.5 w-8 h-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">
-                <Icon className="w-4 h-4 text-zinc-500" />
-            </div>
-            <div className="min-w-0">
-                <div className="text-xs text-zinc-500 font-medium">{label}</div>
-                <div className={`text-sm truncate ${valueColor}`}>{value}</div>
-                {sub && <div className="text-xs text-zinc-500 truncate">{sub}</div>}
-            </div>
-        </div>
-    );
-}
-
-// 2. The Main Intelligence Dashboard
-function EnrichedView({ pipeline, hasEmail, onStartOutreach, onManualContact, loading }: any) {
-    const rootData = pipeline || {};
-    const nestedData = pipeline.enrichment_data || {};
-
-    const get = (key: string) => rootData[key] || nestedData[key] || {};
-
-    const match = get('match_analysis');
-    const skills = get('skill_validation');
-    const salary = get('salary_timeline');
-    const rec = match.hiring_recommendation || {};
-    const assessment = match.experience_assessment || {};
-    const footprint = get('professional_footprint');
-    const responseLikelihood = get('response_likelihood');
-
-    const strengths = match.strengths || match.top_strengths || [];
-    const concerns = match.concerns || [];
-    const gaps = match.gaps || [];
-    const evidence = skills.evidence || [];
-
-    const score = match.overall_match_score || 0;
-    const isBadMatch = score < 40;
-
-    return (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-
-            {/* Verdict Banner */}
-            <RecommendationBanner
-                recommendation={rec}
-                isBadMatch={isBadMatch}
-                hasEmail={hasEmail}
-                onOutreach={onStartOutreach}
-                onManualContact={onManualContact}
-                loading={loading}
+            {/* Manual Email Dialog */}
+            <ManualEmailDialog
+                isOpen={showManualEmail}
+                onClose={() => setShowManualEmail(false)}
+                onSubmit={handleManualEmail}
+                candidateName={candidate.name || ""}
             />
-
-            {pipeline.candidate?.outreach?.initial_email_sent_at && (
-                <PipelineStatusTimeline
-                    candidate={pipeline.candidate}
-                    outreach={pipeline.candidate.outreach}
-                    interview={pipeline.candidate.interview}
-                />
-            )}
-
-            {/* Metrics */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-xl flex items-center gap-4">
-                    <ScoreCircle score={score} />
-                    <div>
-                        <div className="text-xs text-zinc-500 uppercase font-bold">Match</div>
-                        <div className={`text-sm font-medium ${isBadMatch ? 'text-red-400' : 'text-zinc-300'}`}>
-                            {match.match_label || "Analyzed"}
-                        </div>
-                    </div>
-                </div>
-
-                <MetricCard
-                    icon={Briefcase}
-                    label="Exp Reality"
-                    value={`${assessment.actual_years || 0} Years`}
-                    sublabel={`Required: ${assessment.required_years || 5}+ Years`}
-                    variant={assessment.meets_requirement ? "success" : "danger"}
-                />
-
-                <MetricCard
-                    icon={DollarSign}
-                    label="Current Comp"
-                    value={salary.current_estimated_ctc?.most_likely ? `₹${salary.current_estimated_ctc.most_likely}L` : "N/A"}
-                    sublabel={salary.current_estimated_ctc?.note || "Insufficient history"}
-                    variant={salary.current_estimated_ctc?.most_likely ? "neutral" : "warning"}
-                />
-
-                <MetricCard
-                    icon={BrainCircuit}
-                    label="Skill Confidence"
-                    value={`${skills.overall_confidence || 0}%`}
-                    sublabel="AI Validation Score"
-                    variant={skills.overall_confidence > 70 ? "success" : "neutral"}
-                />
-            </div>
-
-            {/* Deep Dive Tabs */}
-            <Card className="bg-zinc-900/30 border-zinc-800">
-                <Tabs defaultValue="intel" className="w-full">
-                    <div className="border-b border-zinc-800 px-6">
-                        <TabsList className="bg-transparent h-14 w-full justify-start gap-6">
-                            <TabTrigger value="intel" label="Intelligence" icon={BrainCircuit} />
-                            <TabTrigger value="skills" label="Skill Check" icon={Target} />
-                            <TabTrigger value="gaps" label="Gap Analysis" icon={GitBranch} />
-                        </TabsList>
-                    </div>
-
-                    <TabsContent value="intel" className="p-6 space-y-6">
-                        <div className="bg-zinc-900 p-5 rounded-lg border border-zinc-800">
-                            <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                                <MessageSquare className="w-4 h-4" /> Advisor Note
-                            </h3>
-                            <p className="text-zinc-300 leading-relaxed text-sm">
-                                {match.recruiter_summary?.elevator_pitch || match.assessment || "No summary available."}
-                            </p>
-                        </div>
-
-                        <div className="grid md:grid-cols-2 gap-6">
-                            <Card className={`p-5 border bg-emerald-950/5 border-emerald-900/20`}>
-                                <h4 className={`text-sm font-bold flex items-center gap-2 mb-4 text-emerald-400`}>
-                                    <CheckCircle2 className="w-4 h-4" /> Candidate Assets
-                                </h4>
-                                <ul className="space-y-4">
-                                    {strengths.length > 0 ? strengths.map((item: any, i: number) => {
-                                        const text = typeof item === 'string' ? item : item.strength;
-                                        const sub = typeof item === 'object' ? item.evidence : null;
-                                        return (
-                                            <li key={i} className="text-sm text-zinc-300 flex items-start gap-3">
-                                                <span className={`mt-1.5 w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0`} />
-                                                <div>
-                                                    <span className="font-medium text-zinc-200 block">{text}</span>
-                                                    {sub && <span className="text-zinc-500 text-xs">{sub}</span>}
-                                                </div>
-                                            </li>
-                                        )
-                                    }) : <p className="text-xs text-zinc-500 italic">No major strengths found.</p>}
-                                </ul>
-                            </Card>
-
-                            <Card className={`p-5 border bg-red-950/5 border-red-900/20`}>
-                                <h4 className={`text-sm font-bold flex items-center gap-2 mb-4 text-red-400`}>
-                                    <AlertTriangle className="w-4 h-4" /> Critical Blockers
-                                </h4>
-                                <ul className="space-y-4">
-                                    {concerns.length > 0 ? concerns.map((item: any, i: number) => {
-                                        const text = typeof item === 'string' ? item : item.concern;
-                                        const sub = typeof item === 'object' ? item.mitigation || item.evidence : null;
-                                        return (
-                                            <li key={i} className="text-sm text-zinc-300 flex items-start gap-3">
-                                                <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                                                <div>
-                                                    <span className="font-medium text-zinc-200 block">{text}</span>
-                                                    {sub && <span className="text-red-400/60 text-xs">{sub}</span>}
-                                                </div>
-                                            </li>
-                                        )
-                                    }) : <p className="text-xs text-zinc-500 italic">No critical concerns.</p>}
-                                </ul>
-                            </Card>
-                        </div>
-
-                        {rec.alternative_roles && rec.alternative_roles.length > 0 && (
-                            <div className="mt-4 p-4 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/30">
-                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3">Better Fit For</h4>
-                                <div className="flex flex-wrap gap-2">
-                                    {rec.alternative_roles.map((role: string, i: number) => (
-                                        <Badge key={i} variant="secondary" className="bg-zinc-800 text-zinc-300 hover:bg-zinc-700">
-                                            {role}
-                                        </Badge>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </TabsContent>
-
-                    <TabsContent value="skills" className="p-6">
-                        <div className="grid gap-4">
-                            {evidence.length > 0 ? evidence.map((item: any, i: number) => (
-                                <div key={i} className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <h4 className="font-bold text-zinc-200 flex items-center gap-2">
-                                            {item.skill}
-                                            <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500">
-                                                Confidence: {item.confidence}/10
-                                            </Badge>
-                                        </h4>
-                                    </div>
-                                    <p className="text-sm text-zinc-400 mb-2">{item.evidence_description}</p>
-                                    {item.evidence_sources && (
-                                        <div className="flex gap-2 flex-wrap">
-                                            {item.evidence_sources.map((src: string, j: number) => (
-                                                <span key={j} className="text-[10px] bg-zinc-800 text-zinc-500 px-2 py-1 rounded">
-                                                    {src}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            )) : (
-                                <div className="text-center py-10 text-zinc-600">
-                                    <BrainCircuit className="w-10 h-10 mx-auto mb-2 opacity-20" />
-                                    No verifiable skills found in public footprint.
-                                </div>
-                            )}
-                        </div>
-                    </TabsContent>
-
-                    <TabsContent value="gaps" className="p-6">
-                        <div className="space-y-4">
-                            {gaps.length > 0 ? gaps.map((gap: any, i: number) => {
-                                const text = gap.gap;
-                                const fix = gap.time_to_close;
-                                return (
-                                    <div key={i} className="flex gap-4 p-4 rounded-lg bg-zinc-900/50 border border-zinc-800">
-                                        <div className="mt-1"><Ban className="w-5 h-5 text-red-500" /></div>
-                                        <div>
-                                            <h4 className="font-medium text-zinc-200">{text}</h4>
-                                            <p className="text-sm text-zinc-500 mt-1">Reality check: {fix}</p>
-                                        </div>
-                                    </div>
-                                )
-                            }) : (
-                                <div className="text-center p-8">
-                                    <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-3" />
-                                    <p className="text-zinc-400">No critical gaps found!</p>
-                                </div>
-                            )}
-                        </div>
-                    </TabsContent>
-                </Tabs>
-            </Card>
-        </motion.div>
-    );
-}
-
-function PipelineStatusTimeline({ candidate, outreach, interview }: any) {
-    const stages = [
-        {
-            id: 'enriched',
-            label: 'Analysis Complete',
-            icon: BrainCircuit,
-            completed: candidate.enrichment?.is_enriched,
-            timestamp: candidate.enrichment?.enriched_at,
-            color: 'text-emerald-500'
-        },
-        {
-            id: 'outreach_sent',
-            label: 'Email Sent',
-            icon: Send,
-            completed: outreach?.initial_email_sent_at,
-            timestamp: outreach?.initial_email_sent_at,
-            color: 'text-purple-500',
-            sublabel: outreach?.initial_email_sent_at ? 'Delivered successfully' : null
-        },
-        {
-            id: 'email_opened',
-            label: 'Email Opened',
-            icon: Eye,
-            completed: outreach?.first_opened_at,
-            timestamp: outreach?.first_opened_at,
-            color: 'text-blue-500',
-            sublabel: outreach?.total_opens > 0 ? `Opened ${outreach.total_opens}x` : null
-        },
-        {
-            id: 'link_clicked',
-            label: 'Link Clicked',
-            icon: MousePointer,
-            completed: outreach?.first_clicked_at,
-            timestamp: outreach?.first_clicked_at,
-            color: 'text-cyan-500',
-            sublabel: 'Scheduling interest shown'
-        },
-        {
-            id: 'responded',
-            label: 'Candidate Responded',
-            icon: MessageSquare,
-            completed: outreach?.candidate_responded,
-            timestamp: outreach?.response_received_at,
-            color: 'text-indigo-500'
-        },
-        {
-            id: 'scheduled',
-            label: 'Interview Scheduled',
-            icon: Calendar,
-            completed: interview?.scheduled_datetime,
-            timestamp: interview?.scheduled_datetime,
-            color: 'text-pink-500',
-            sublabel: interview?.scheduled_datetime ? new Date(interview.scheduled_datetime).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit'
-            }) : null
-        },
-        {
-            id: 'interviewed',
-            label: 'Interview Completed',
-            icon: Video,
-            completed: interview?.call_ended_at,
-            timestamp: interview?.call_ended_at,
-            color: 'text-orange-500',
-            sublabel: interview?.call_duration_seconds ? `Duration: ${Math.floor(interview.call_duration_seconds / 60)}m` : null
-        }
-    ];
-
-    return (
-        <Card className="bg-zinc-900/50 border-zinc-800 p-6">
-            <div className="flex items-center justify-between mb-6">
-                <h3 className="text-sm font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-2">
-                    <GitBranch className="w-4 h-4 text-indigo-500" />
-                    Pipeline Journey
-                </h3>
-                <Badge variant="outline" className="bg-zinc-800 border-zinc-700 text-zinc-400 text-xs">
-                    Live Tracking
-                </Badge>
-            </div>
-
-            <div className="relative space-y-6">
-                {/* Vertical line */}
-                <div className="absolute left-4 top-3 bottom-3 w-0.5 bg-zinc-800" />
-
-                {stages.map((stage, index) => {
-                    const isActive = stage.completed;
-                    const isNext = !isActive && index > 0 && stages[index - 1]?.completed;
-
-                    return (
-                        <motion.div
-                            key={stage.id}
-                            initial={{ opacity: 0, x: -20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: index * 0.1 }}
-                            className="relative flex items-start gap-4"
-                        >
-                            {/* Status Indicator */}
-                            <div className={`
-                                relative z-10 w-8 h-8 rounded-full border-2 flex items-center justify-center shrink-0 transition-all
-                                ${isActive
-                                    ? `border-transparent bg-gradient-to-br from-${stage.color.split('-')[1]}-500 to-${stage.color.split('-')[1]}-600 shadow-lg shadow-${stage.color.split('-')[1]}-500/50`
-                                    : isNext
-                                        ? 'border-zinc-700 bg-zinc-800 animate-pulse'
-                                        : 'border-zinc-800 bg-zinc-900'
-                                }
-                            `}>
-                                {isActive ? (
-                                    <CheckCircle2 className="w-4 h-4 text-white" />
-                                ) : (
-                                    <stage.icon className={`w-4 h-4 ${isNext ? 'text-zinc-500' : 'text-zinc-700'}`} />
-                                )}
-                            </div>
-
-                            {/* Content */}
-                            <div className="flex-1 pb-6">
-                                <div className="flex items-start justify-between">
-                                    <div>
-                                        <h4 className={`text-sm font-semibold ${isActive ? 'text-white' : isNext ? 'text-zinc-400' : 'text-zinc-600'}`}>
-                                            {stage.label}
-                                        </h4>
-                                        {stage.sublabel && isActive && (
-                                            <p className="text-xs text-zinc-500 mt-0.5">{stage.sublabel}</p>
-                                        )}
-                                    </div>
-                                    {stage.timestamp && (
-                                        <Badge variant="outline" className="bg-zinc-950 border-zinc-800 text-zinc-500 text-[10px] font-mono">
-                                            {new Date(stage.timestamp).toLocaleDateString('en-US', {
-                                                month: 'short',
-                                                day: 'numeric',
-                                                hour: '2-digit',
-                                                minute: '2-digit'
-                                            })}
-                                        </Badge>
-                                    )}
-                                </div>
-
-                                {/* Progress indicator for active stage */}
-                                {isNext && (
-                                    <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                        <span>Waiting for candidate action...</span>
-                                    </div>
-                                )}
-                            </div>
-                        </motion.div>
-                    );
-                })}
-            </div>
-
-            {/* Summary Stats */}
-            {outreach && (
-                <div className="mt-6 pt-6 border-t border-zinc-800 grid grid-cols-3 gap-4">
-                    <div className="text-center">
-                        <div className="text-2xl font-bold text-zinc-300">{outreach.total_opens || 0}</div>
-                        <div className="text-xs text-zinc-600 uppercase tracking-wider">Opens</div>
-                    </div>
-                    <div className="text-center">
-                        <div className="text-2xl font-bold text-zinc-300">{outreach.total_clicks || 0}</div>
-                        <div className="text-xs text-zinc-600 uppercase tracking-wider">Clicks</div>
-                    </div>
-                    <div className="text-center">
-                        <div className="text-2xl font-bold text-zinc-300">{outreach.reminder_count || 0}</div>
-                        <div className="text-xs text-zinc-600 uppercase tracking-wider">Reminders</div>
-                    </div>
-                </div>
-            )}
-        </Card>
-    );
-}
-
-// 3. The "Verdict" Banner
-function RecommendationBanner({ recommendation, isBadMatch, hasEmail, onOutreach, onManualContact, loading }: any) {
-    const [showOverride, setShowOverride] = useState(false);
-
-    if (!recommendation) return null;
-
-    const action = recommendation.action || "Review";
-    const reason = recommendation.reasoning || "Please review the analysis below.";
-    const isPass = action === "Pass" || isBadMatch;
-
-    return (
-        <Card className={`border-l-4 ${isPass ? 'border-l-red-500 bg-red-500/5' : 'border-l-emerald-500 bg-emerald-500/5'} border-y-0 border-r-0 rounded-r-xl rounded-l-none`}>
-            <div className="p-6">
-                <div className="flex flex-col md:flex-row gap-6 items-start justify-between">
-                    <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-3">
-                            <Badge className={`${isPass ? 'bg-red-500' : 'bg-emerald-500'} hover:bg-current text-white border-0 font-bold tracking-wide px-3 py-1`}>
-                                {isPass ? '⚠️ DO NOT REACH OUT' : '✅ PROCEED'}
-                            </Badge>
-                            <span className="text-xs text-zinc-500 font-mono">
-                                AI CONFIDENCE: {recommendation.confidence}%
-                            </span>
-                        </div>
-                        <h3 className={`text-lg font-bold ${isPass ? 'text-red-400' : 'text-emerald-400'} mb-2`}>
-                            {isPass ? "Critical Mismatch Detected" : "Strong Match - Ready for Outreach"}
-                        </h3>
-                        <p className="text-sm text-zinc-300 leading-relaxed max-w-2xl">
-                            {reason}
-                        </p>
-
-                        {/* Alternative roles suggestion */}
-                        {isPass && recommendation.alternative_roles?.length > 0 && (
-                            <div className="mt-4 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
-                                <div className="text-xs text-zinc-500 mb-2">💡 Better fit for:</div>
-                                <div className="flex flex-wrap gap-2">
-                                    {recommendation.alternative_roles.map((role: string, i: number) => (
-                                        <Badge key={i} variant="secondary" className="bg-zinc-800 text-zinc-400 hover:bg-zinc-700">
-                                            {role}
-                                        </Badge>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="flex-shrink-0 flex flex-col gap-2 min-w-[200px]">
-                        {isPass ? (
-                            <>
-                                {/* Disabled primary button */}
-                                <Button
-                                    variant="outline"
-                                    className="border-red-900/50 text-red-400 hover:bg-red-950/20 cursor-not-allowed opacity-60 w-full"
-                                    disabled
-                                >
-                                    <Ban className="w-4 h-4 mr-2" />
-                                    Outreach Blocked
-                                </Button>
-
-                                {/* Override option */}
-                                {!showOverride ? (
-                                    <Button
-                                        onClick={() => setShowOverride(true)}
-                                        variant="ghost"
-                                        size="sm"
-                                        className="text-zinc-500 hover:text-zinc-300 text-xs h-8"
-                                    >
-                                        Override Warning
-                                        <ChevronRight className="w-3 h-3 ml-1" />
-                                    </Button>
-                                ) : (
-                                    <div className="space-y-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
-                                        <p className="text-xs text-amber-400 font-semibold">
-                                            ⚠️ Confirm Override
-                                        </p>
-                                        <p className="text-[10px] text-zinc-500 leading-relaxed">
-                                            This will proceed despite AI recommendation. Ensure you have valid reasons.
-                                        </p>
-                                        <div className="flex gap-2">
-                                            <Button
-                                                onClick={() => setShowOverride(false)}
-                                                variant="ghost"
-                                                size="sm"
-                                                className="flex-1 h-8 text-xs"
-                                            >
-                                                Cancel
-                                            </Button>
-                                            <Button
-                                                onClick={hasEmail ? onOutreach : onManualContact}
-                                                disabled={loading}
-                                                size="sm"
-                                                className="flex-1 bg-amber-600 hover:bg-amber-500 text-white h-8 text-xs"
-                                            >
-                                                {loading ? (
-                                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                                ) : (
-                                                    <>
-                                                        <Send className="w-3 h-3 mr-1" />
-                                                        Force Send
-                                                    </>
-                                                )}
-                                            </Button>
-                                        </div>
-                                    </div>
-                                )}
-                            </>
-                        ) : hasEmail ? (
-                            <Button
-                                onClick={onOutreach}
-                                disabled={loading}
-                                className="bg-emerald-600 hover:bg-emerald-500 text-white w-full h-11"
-                            >
-                                {loading ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                    <>
-                                        <Rocket className="w-4 h-4 mr-2" />
-                                        Launch Outreach
-                                    </>
-                                )}
-                            </Button>
-                        ) : (
-                            <Button
-                                onClick={onManualContact}
-                                variant="outline"
-                                className="border-zinc-700 text-zinc-400 w-full"
-                            >
-                                <Mail className="w-4 h-4 mr-2" />
-                                Add Contact First
-                            </Button>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </Card>
-    );
-}
-
-// 4. The Outreach Modal (Mission Control)
-function OutreachModal({ candidate, contact, onSubmit, onClose, loading }: any) {
-    return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-0 overflow-hidden">
-                <div className="p-6 border-b border-zinc-800 bg-zinc-950">
-                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                        <Rocket className="w-5 h-5 text-purple-500" />
-                        Initialize Sequence
-                    </h2>
-                    <p className="text-sm text-zinc-500 mt-1">Confirm outreach parameters before launch.</p>
-                </div>
-
-                <div className="p-6 space-y-6">
-                    {/* Target Card */}
-                    <div className="flex items-center gap-4 p-4 rounded-lg bg-zinc-800/50 border border-zinc-700">
-                        <div className="w-10 h-10 rounded-full bg-zinc-700 flex items-center justify-center">
-                            <User className="w-5 h-5 text-zinc-400" />
-                        </div>
-                        <div>
-                            <div className="text-sm font-medium text-white">{candidate.name}</div>
-                            <div className="text-xs text-zinc-400 font-mono">{contact?.email}</div>
-                        </div>
-                        <Badge className="ml-auto bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Verified</Badge>
-                    </div>
-
-                    {/* Configuration */}
-                    <div className="space-y-4">
-                        <div>
-                            <label className="text-xs uppercase tracking-wider text-zinc-500 font-bold mb-2 block">Strategy</label>
-                            <div className="p-3 text-sm text-zinc-300 bg-zinc-950 border border-zinc-800 rounded-md">
-                                AI-Personalized Invitation (Context: Github & Experience)
-                            </div>
-                        </div>
-                        <div>
-                            <label className="text-xs uppercase tracking-wider text-zinc-500 font-bold mb-2 block">Agent</label>
-                            <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                                <span className="text-sm text-zinc-300">Donna AI (Active)</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="p-4 bg-zinc-950 border-t border-zinc-800 flex justify-end gap-3">
-                    <Button onClick={onClose} variant="ghost" className="text-zinc-400 hover:text-white">Abort</Button>
-                    <Button onClick={onSubmit} disabled={loading} className="bg-purple-600 hover:bg-purple-500 text-white min-w-[120px]">
-                        {loading ? (
-                            <>
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                Launching...
-                            </>
-                        ) : (
-                            <>
-                                <Send className="w-4 h-4 mr-2" />
-                                Confirm Launch
-                            </>
-                        )}
-                    </Button>
-                </div>
-            </motion.div>
-        </div>
-    );
-}
-
-// --- Helpers & Loaders (Keep existing) ---
-
-function TabTrigger({ value, label, icon: Icon }: any) {
-    return (
-        <TabsTrigger
-            value={value}
-            className="data-[state=active]:bg-transparent data-[state=active]:text-indigo-400 data-[state=active]:border-b-2 data-[state=active]:border-indigo-500 rounded-none pb-3 px-2 text-zinc-500 hover:text-zinc-300 transition-all"
-        >
-            <Icon className="w-4 h-4 mr-2" />
-            {label}
-        </TabsTrigger>
-    );
-}
-
-function NotEnrichedView({ onStartEnrichment, loading }: any) {
-    return (
-        <Card className="p-12 bg-zinc-900/50 border-dashed border-2 border-zinc-800 text-center">
-            <div className="w-16 h-16 bg-zinc-900 rounded-2xl border border-zinc-800 flex items-center justify-center mx-auto mb-6">
-                <Lock className="w-8 h-8 text-zinc-600" />
-            </div>
-            <h2 className="text-xl font-bold text-white mb-2">Deep Intel Locked</h2>
-            <p className="text-zinc-400 max-w-md mx-auto mb-8 text-sm">
-                Run a deep scan to reveal salary estimations, true fit analysis, and contact details.
-            </p>
-            <Button onClick={onStartEnrichment} disabled={loading} size="lg" className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-full">
-                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Zap className="w-4 h-4 mr-2 fill-current" />}
-                Analyze Candidate
-            </Button>
-        </Card>
-    );
-}
-
-function EnrichingView() {
-    return (
-        <Card className="p-12 bg-zinc-900/50 border-zinc-800 text-center relative overflow-hidden">
-            <motion.div className="absolute top-0 left-0 w-full h-0.5 bg-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.5)]" animate={{ top: ["0%", "100%"] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} />
-            <Loader2 className="w-10 h-10 text-blue-500 animate-spin mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-white mb-2">Analyzing Footprint...</h2>
-            <p className="text-zinc-500 font-mono text-xs">CROSS-REFERENCING GITHUB • ESTIMATING CTC • VERIFYING SKILLS</p>
-        </Card>
-    );
-}
-
-function LoadingScreen() {
-    return (
-        <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
-                <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
-                <p className="text-zinc-500 text-sm font-mono tracking-widest">LOADING INTEL...</p>
-            </div>
-        </div>
-    );
-}
-
-function ErrorScreen({ error, router, sessionId }: any) {
-    return (
-        <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-            <Card className="bg-zinc-900 border-zinc-800 p-8 text-center max-w-md">
-                <XCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-                <h2 className="text-lg font-bold text-white mb-2">System Error</h2>
-                <p className="text-zinc-500 mb-6 text-sm">{error || "Pipeline not found."}</p>
-                <Button onClick={() => router.push(`/pipeline/${sessionId}`)} variant="outline" className="border-zinc-700 text-zinc-300">
-                    Return to Mission Control
-                </Button>
-            </Card>
-        </div>
-    );
-}
-
-function ManualContactModal({ email, phone, onEmailChange, onPhoneChange, onSubmit, onClose, loading }: any) {
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <Card className="w-full max-w-md bg-zinc-900 border-zinc-800 p-6">
-                <h2 className="text-lg font-bold text-white mb-4">Manual Entry</h2>
-                <div className="space-y-4 mb-6">
-                    <div>
-                        <Label className="text-zinc-400">Email</Label>
-                        <Input value={email} onChange={(e) => onEmailChange(e.target.value)} className="bg-zinc-950 border-zinc-800 mt-1.5 text-white" />
-                    </div>
-                    <div>
-                        <Label className="text-zinc-400">Phone</Label>
-                        <Input value={phone} onChange={(e) => onPhoneChange(e.target.value)} className="bg-zinc-950 border-zinc-800 mt-1.5 text-white" />
-                    </div>
-                </div>
-                <div className="flex gap-3">
-                    <Button onClick={onClose} variant="ghost" className="flex-1 text-zinc-400">Cancel</Button>
-                    <Button onClick={onSubmit} disabled={loading} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white">Save</Button>
-                </div>
-            </Card>
         </div>
     );
 }

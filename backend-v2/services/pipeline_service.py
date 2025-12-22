@@ -2380,6 +2380,654 @@ class PipelineService:
         
         return filepath
 
+    # =========================================================================
+    # ENHANCED SINGLE ENRICHMENT WITH DETAILED STATUS
+    # =========================================================================
+    
+    async def enrich_candidate_with_status(
+        self,
+        pipeline_id: str,
+        username: str,
+        include_contact_fetch: bool = True,
+        auto_outreach: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Enrich single candidate with detailed status tracking.
+        Returns enrichment result with all details for frontend.
+        """
+        pipeline = await self.get_pipeline(pipeline_id)
+        if not pipeline:
+            raise ValueError("Pipeline not found")
+        
+        if pipeline.username != username:
+            raise PermissionError("Access denied")
+        
+        candidate = pipeline.candidate
+        jd_text = pipeline.job.jd_text or pipeline.job.get_jd_summary()
+        
+        result = {
+            "pipeline_id": pipeline_id,
+            "candidate_id": candidate.candidate_id,
+            "candidate_name": candidate.display_name,
+            "stages_completed": [],
+            "current_stage": "starting",
+            "email_status": {
+                "found": False,
+                "email": None,
+                "source": None,
+                "errors": [],
+                "needs_manual": False
+            },
+            "enrichment_status": {
+                "completed": False,
+                "match_score": None,
+                "match_label": None,
+                "error": None
+            },
+            "outreach_status": {
+                "sent": False,
+                "error": None
+            },
+            "final_stage": None,
+            "success": False
+        }
+        
+        try:
+            # Update stage to enriching
+            candidate.update_stage(CandidateStage.ENRICHING, triggered_by="system")
+            await self._save_pipeline(pipeline)
+            result["stages_completed"].append("stage_updated")
+            result["current_stage"] = "fetching_contact"
+            
+            # ========== STEP 1: Fetch Contact with Waterfall ==========
+            if include_contact_fetch and not candidate.contact.email:
+                contact_result = await self._fetch_candidate_contact_waterfall(
+                    candidate,
+                    session_id=pipeline.conversation_session_id
+                )
+                
+                result["email_status"] = {
+                    "found": bool(contact_result.get("email")),
+                    "email": contact_result.get("email"),
+                    "source": contact_result.get("source"),
+                    "errors": contact_result.get("errors", []),
+                    "needs_manual": contact_result.get("needs_manual", False)
+                }
+                
+                if contact_result.get("email"):
+                    candidate.contact.email = contact_result["email"]
+                    candidate.contact.email_verified = True
+                    candidate.contact.email_source = ContactFetchSource(contact_result["source"]) if contact_result["source"] in ["hatch_api", "brightdata_scrape"] else ContactFetchSource.HATCH_API
+                    candidate.contact.email_fetched_at = get_current_timestamp()
+                    result["stages_completed"].append("email_found")
+                else:
+                    candidate.contact.email_fetch_error = "; ".join(contact_result.get("errors", []))
+                    result["stages_completed"].append("email_fetch_failed")
+            
+            result["current_stage"] = "deep_enrichment"
+            
+            # ========== STEP 2: Deep Enrichment ==========
+            if self.enrichment:
+                try:
+                    deep_dive_result = await self.enrichment.deep_dive_candidate(
+                        linkedin_url=candidate.linkedin_url,
+                        job_description=jd_text,
+                        force_scrape=True
+                    )
+                    
+                    # Store enrichment data
+                    candidate.enrichment.is_enriched = True
+                    candidate.enrichment.enriched_at = get_current_timestamp()
+                    candidate.enrichment.full_enrichment_data = deep_dive_result.model_dump()
+                    
+                    if deep_dive_result.match_analysis:
+                        ma = deep_dive_result.match_analysis
+                        candidate.enrichment.match_score = ma.overall_match_score
+                        candidate.enrichment.match_label = self._score_to_label(ma.overall_match_score)
+                        
+                        # Extract strengths and concerns
+                        strengths = getattr(ma, 'top_strengths', [])[:5]
+                        candidate.enrichment.top_strengths = [
+                            s.get('strength') if isinstance(s, dict) else str(s)
+                            for s in strengths
+                        ]
+                        
+                        concerns = getattr(ma, 'concerns', [])[:5]
+                        candidate.enrichment.concerns = [
+                            c.get('concern') if isinstance(c, dict) else str(c)
+                            for c in concerns
+                        ]
+                    
+                    result["enrichment_status"] = {
+                        "completed": True,
+                        "match_score": candidate.enrichment.match_score,
+                        "match_label": candidate.enrichment.match_label,
+                        "error": None
+                    }
+                    result["stages_completed"].append("enrichment_completed")
+                    
+                except Exception as e:
+                    logger.error(f"Deep enrichment failed: {e}")
+                    result["enrichment_status"]["error"] = str(e)
+                    candidate.enrichment.enrichment_error = str(e)
+            
+            # ========== STEP 3: Determine Final Stage ==========
+            if candidate.enrichment.is_enriched and candidate.contact.email:
+                candidate.update_stage(CandidateStage.ENRICHED, triggered_by="system")
+                result["final_stage"] = "enriched"
+                result["success"] = True
+                
+                # ========== STEP 4: Auto Outreach if enabled ==========
+                if auto_outreach:
+                    result["current_stage"] = "sending_outreach"
+                    try:
+                        outreach_result = await self._send_single_outreach(pipeline, candidate)
+                        result["outreach_status"] = outreach_result
+                        if outreach_result.get("sent"):
+                            result["stages_completed"].append("outreach_sent")
+                            result["final_stage"] = "outreach_sent"
+                    except Exception as e:
+                        result["outreach_status"]["error"] = str(e)
+                        
+            elif candidate.enrichment.is_enriched and not candidate.contact.email:
+                candidate.update_stage(
+                    CandidateStage.ENRICHED,
+                    triggered_by="system",
+                    notes="Email not found - manual input required"
+                )
+                result["final_stage"] = "enriched_needs_email"
+                result["success"] = True  # Enrichment succeeded, just needs email
+                
+            else:
+                candidate.update_stage(CandidateStage.ENRICHMENT_FAILED, triggered_by="system")
+                result["final_stage"] = "failed"
+            
+            pipeline.update_candidate(candidate)
+            await self._save_pipeline(pipeline)
+            
+        except Exception as e:
+            logger.error(f"Enrichment failed for {pipeline_id}: {e}", exc_info=True)
+            result["error"] = str(e)
+            candidate.enrichment.enrichment_error = str(e)
+            candidate.update_stage(CandidateStage.ENRICHMENT_FAILED, triggered_by="system")
+            pipeline.update_candidate(candidate)
+            await self._save_pipeline(pipeline)
+        
+        return result
+    
+    async def _send_single_outreach(
+        self,
+        pipeline: RecruitmentPipeline,
+        candidate: PipelineCandidate
+    ) -> Dict[str, Any]:
+        """Send outreach to a single candidate."""
+        result = {"sent": False, "error": None}
+        
+        if not candidate.contact.email:
+            result["error"] = "No email available"
+            return result
+        
+        if candidate.outreach and candidate.outreach.initial_email_sent_at:
+            result["error"] = "Outreach already sent"
+            return result
+        
+        try:
+            # Generate scheduling token and link
+            scheduling_token = generate_scheduling_token()
+            scheduling_link = f"{self.base_url}/schedule/{scheduling_token}"
+            
+            # Create outreach record
+            outreach = OutreachRecord(
+                scheduling_token=scheduling_token,
+                scheduling_link=scheduling_link,
+                scheduling_link_expires_at=(
+                    datetime.utcnow() + timedelta(days=pipeline.settings.scheduling_link_expiry_days)
+                ).isoformat()
+            )
+            
+            # Generate and send email
+            if self.email_service:
+                email_content = await self.email_service.generate_outreach_email(
+                    candidate=candidate,
+                    job=pipeline.job,
+                    scheduling_link=scheduling_link
+                )
+                
+                await self.email_service.send_email(
+                    to_email=candidate.contact.email,
+                    to_name=candidate.display_name,
+                    subject=email_content["subject"],
+                    body_html=email_content["body_html"],
+                    body_plain=email_content["body"]
+                )
+                
+                email_record = OutreachEmailRecord(
+                    email_type=OutreachType.INITIAL,
+                    subject=email_content["subject"],
+                    body_plain=email_content["body"],
+                    body_html=email_content["body_html"],
+                    status=OutreachStatus.SENT,
+                    sent_at=get_current_timestamp()
+                )
+                outreach.add_email(email_record)
+                
+                candidate.outreach = outreach
+                candidate.update_stage(CandidateStage.OUTREACH_SENT, triggered_by="system")
+                
+                result["sent"] = True
+                logger.info(f"   ✅ Outreach sent to {candidate.display_name}")
+            else:
+                result["error"] = "Email service not configured"
+                
+        except Exception as e:
+            result["error"] = str(e)
+            logger.error(f"   ❌ Outreach failed: {e}")
+        
+        return result
+    
+    # =========================================================================
+    # MANUAL EMAIL INPUT WITH AUTO-OUTREACH
+    # =========================================================================
+    
+    async def provide_manual_email_and_outreach(
+        self,
+        pipeline_id: str,
+        email: str,
+        phone: Optional[str],
+        username: str,
+        auto_send_outreach: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Accept manual email input and optionally trigger outreach automatically.
+        """
+        pipeline = await self.get_pipeline(pipeline_id)
+        if not pipeline or pipeline.username != username:
+            raise PermissionError("Access denied")
+        
+        candidate = pipeline.candidate
+        
+        # Validate email
+        if not self._is_valid_email(email):
+            return {
+                "success": False,
+                "error": "Invalid email format"
+            }
+        
+        # Update contact info
+        candidate.contact.email = email
+        candidate.contact.email_verified = False  # Manual input not verified
+        candidate.contact.email_source = ContactFetchSource.MANUAL_INPUT
+        candidate.contact.email_fetched_at = get_current_timestamp()
+        
+        if phone:
+            candidate.contact.phone = phone
+            candidate.contact.phone_source = ContactFetchSource.MANUAL_INPUT
+            candidate.contact.phone_fetched_at = get_current_timestamp()
+        
+        # Update stage if was waiting for email
+        if candidate.stage == CandidateStage.ENRICHMENT_FAILED:
+            candidate.update_stage(CandidateStage.ENRICHED, triggered_by="user")
+        
+        result = {
+            "success": True,
+            "email_saved": True,
+            "outreach_sent": False,
+            "message": "Email saved successfully"
+        }
+        
+        # Auto-send outreach if enabled
+        if auto_send_outreach and candidate.enrichment.is_enriched:
+            outreach_result = await self._send_single_outreach(pipeline, candidate)
+            result["outreach_sent"] = outreach_result.get("sent", False)
+            if outreach_result.get("sent"):
+                result["message"] = "Email saved and outreach sent!"
+            elif outreach_result.get("error"):
+                result["outreach_error"] = outreach_result["error"]
+        
+        pipeline.update_candidate(candidate)
+        await self._save_pipeline(pipeline)
+        
+        return result
+
+    # =========================================================================
+    # WATERFALL EMAIL FETCHING
+    # =========================================================================
+    
+    async def _fetch_candidate_contact_waterfall(
+        self, 
+        candidate: PipelineCandidate, 
+        session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetch contact info using waterfall strategy:
+        1. Try Hatch API (fastest, cached)
+        2. Try Brightdata scraping (slower, fresh data)
+        3. Mark as needs_manual if all fail
+        
+        Returns detailed result with source and errors.
+        """
+        result = {
+            "email": None, 
+            "phone": None, 
+            "source": None,
+            "errors": [],
+            "needs_manual": False
+        }
+        
+        # ========== STEP 1: Try Hatch API ==========
+        if self.hatch and candidate.profile_id:
+            try:
+                logger.info(f"   📧 Step 1: Trying Hatch API for {candidate.display_name}")
+                hatch_result = await self.hatch.find_email_by_profile_id(
+                    profile_id=candidate.profile_id,
+                    session_id=session_id
+                )
+                
+                if hatch_result.get("success") and hatch_result.get("email"):
+                    result["email"] = hatch_result["email"]
+                    result["source"] = "hatch_api"
+                    logger.info(f"   ✅ Hatch found email: {result['email']}")
+                    return result
+                else:
+                    error_msg = hatch_result.get("error", "No email in Hatch response")
+                    result["errors"].append(f"Hatch: {error_msg}")
+                    logger.info(f"   ⚠️ Hatch failed: {error_msg}")
+                    
+            except Exception as e:
+                result["errors"].append(f"Hatch: {str(e)}")
+                logger.warning(f"   ⚠️ Hatch exception: {e}")
+        else:
+            if not self.hatch:
+                result["errors"].append("Hatch: Service not configured")
+            if not candidate.profile_id:
+                result["errors"].append("Hatch: No profile_id available")
+        
+        # ========== STEP 2: Try Brightdata Scraping ==========
+        if self.enrichment and candidate.linkedin_url:
+            try:
+                logger.info(f"   📧 Step 2: Trying Brightdata scrape for {candidate.display_name}")
+                
+                # Use the enrichment orchestrator's scraping capability
+                scrape_result = await self.enrichment._scrape_fresh_linkedin(
+                    candidate.linkedin_url
+                )
+                
+                if scrape_result:
+                    # Brightdata sometimes returns email in profile data
+                    scraped_email = scrape_result.get("email") or scrape_result.get("contact_email")
+                    
+                    if scraped_email and self._is_valid_email(scraped_email):
+                        result["email"] = scraped_email
+                        result["source"] = "brightdata_scrape"
+                        logger.info(f"   ✅ Brightdata found email: {result['email']}")
+                        return result
+                    else:
+                        result["errors"].append("Brightdata: No email in scraped profile")
+                        logger.info(f"   ⚠️ Brightdata: No email found in profile")
+                else:
+                    result["errors"].append("Brightdata: Scrape returned no data")
+                    
+            except Exception as e:
+                result["errors"].append(f"Brightdata: {str(e)}")
+                logger.warning(f"   ⚠️ Brightdata exception: {e}")
+        else:
+            if not self.enrichment:
+                result["errors"].append("Brightdata: Enrichment service not configured")
+            if not candidate.linkedin_url:
+                result["errors"].append("Brightdata: No LinkedIn URL available")
+        
+        # ========== STEP 3: Mark as needs manual input ==========
+        result["needs_manual"] = True
+        logger.info(f"   ❌ All sources failed for {candidate.display_name}, needs manual input")
+        
+        return result
+    
+    def _is_valid_email(self, email: str) -> bool:
+        """Basic email validation."""
+        if not email:
+            return False
+        import re
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return bool(re.match(pattern, email.strip()))
+
+    async def _get_interview_details(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch interview details from VapiInterviewService."""
+        if not self.vapi_service:
+            return None
+        
+        try:
+            result = await self.vapi_service.get_interview_results(session_id)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to fetch interview details: {e}")
+            return None
+
+    async def generate_email_preview(
+        self,
+        candidate: PipelineCandidate,
+        job: JobContext,
+        tone: str = "professional",
+        custom_subject: Optional[str] = None,
+        custom_greeting: Optional[str] = None,
+        custom_body: Optional[str] = None,
+        custom_closing: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Generate email preview with optional customizations."""
+        
+        first_name = candidate.display_name.split()[0]
+        
+        # Generate scheduling link
+        scheduling_token = candidate.contact.scheduling_token or f"sched-{candidate.candidate_id[:12]}"
+        scheduling_link = f"{self.webhook_base_url}/schedule/{scheduling_token}"
+        
+        # Default content based on tone
+        tones = {
+            "professional": {
+                "greeting": f"Hi {first_name},",
+                "closing": "Looking forward to hearing from you.",
+                "signature": "Best regards"
+            },
+            "friendly": {
+                "greeting": f"Hey {first_name}!",
+                "closing": "Would love to chat soon!",
+                "signature": "Cheers"
+            },
+            "casual": {
+                "greeting": f"Hi {first_name},",
+                "closing": "Let me know if you're interested!",
+                "signature": "Thanks"
+            }
+        }
+        
+        tone_defaults = tones.get(tone, tones["professional"])
+        
+        # Use custom content or generate with AI
+        if custom_body:
+            body = custom_body
+        else:
+            # Generate personalized body using LLM
+            body = await self._generate_email_body(candidate, job, tone)
+        
+        subject = custom_subject or await self._generate_email_subject(candidate, job)
+        greeting = custom_greeting or tone_defaults["greeting"]
+        closing = custom_closing or tone_defaults["closing"]
+        signature = tone_defaults["signature"]
+        
+        # Build full email
+        full_text = f"""{greeting}
+
+    {body}
+
+    {closing}
+
+    {signature},
+    The NeuraLeap Team
+
+    ---
+    Schedule your interview: {scheduling_link}
+    """
+
+        full_html = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <p style="color: #374151; font-size: 16px; line-height: 1.6;">{greeting}</p>
+        
+        <p style="color: #374151; font-size: 16px; line-height: 1.6; white-space: pre-line;">{body}</p>
+        
+        <p style="color: #374151; font-size: 16px; line-height: 1.6;">{closing}</p>
+        
+        <div style="margin-top: 24px;">
+            <a href="{scheduling_link}" style="display: inline-block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
+                Schedule Your Interview
+            </a>
+        </div>
+        
+        <p style="color: #6b7280; font-size: 14px; margin-top: 24px;">
+            {signature},<br>
+            The NeuraLeap Team
+        </p>
+    </div>
+    """
+
+        return {
+            "subject": subject,
+            "greeting": greeting,
+            "body": body,
+            "closing": closing,
+            "signature": signature,
+            "scheduling_link": scheduling_link,
+            "full_preview_text": full_text,
+            "full_preview_html": full_html,
+            "placeholders_used": [
+                f"{{first_name}} = {first_name}",
+                f"{{job_title}} = {job.job_title}",
+                f"{{company}} = {job.company_name or 'our client'}"
+            ],
+            "word_count": len(body.split()),
+            "estimated_read_time": "30 seconds"
+        }
+
+
+    async def _generate_email_subject(self, candidate: PipelineCandidate, job: JobContext) -> str:
+        """Generate personalized email subject."""
+        first_name = candidate.display_name.split()[0]
+        
+        # Use templates based on candidate data
+        if candidate.current_company:
+            return f"{first_name} - {job.job_title} opportunity"
+        else:
+            return f"Quick question about your experience, {first_name}"
+
+
+    async def _generate_email_body(
+        self,
+        candidate: PipelineCandidate,
+        job: JobContext,
+        tone: str
+    ) -> str:
+        """Generate personalized email body using LLM."""
+        
+        prompt = f"""Write a brief outreach email body for a recruiter reaching out to a candidate.
+
+    CANDIDATE:
+    - Name: {candidate.display_name}
+    - Current Role: {candidate.current_title}
+    - Company: {candidate.current_company}
+    - Experience: {candidate.experience_years} years
+    - Skills: {', '.join(candidate.skills[:5]) if candidate.skills else 'Not specified'}
+
+    JOB:
+    - Title: {job.job_title}
+    - Company: {job.company_name or 'a growing company'}
+    - Required Skills: {', '.join(job.required_skills[:5])}
+
+    TONE: {tone}
+
+    RULES:
+    1. Keep it under 100 words
+    2. Mention ONE specific thing from their background
+    3. Be genuine, not salesy
+    4. Do NOT include the greeting or closing (just the body)
+    5. Do NOT include the scheduling link (it will be added automatically)
+    6. End with a simple ask to chat
+
+    Write the email body only:"""
+
+        try:
+            response = await self._call_llm(prompt, temperature=0.7, max_tokens=200)
+            return response.strip()
+        except Exception as e:
+            logger.error(f"Email generation failed: {e}")
+            # Fallback template
+            first_name = candidate.display_name.split()[0]
+            return f"""I came across your profile and was impressed by your background in {candidate.current_title or 'your field'}.
+
+    We're looking for someone with your experience for a {job.job_title} role at {job.company_name or 'our client'}. Based on your work at {candidate.current_company or 'your current company'}, I think you could be a great fit.
+
+    Would you be open to a quick 10-minute chat? I've included a link below where you can pick a time that works for you."""
+
+
+    async def send_custom_outreach_email(
+        self,
+        pipeline_id: str,
+        username: str,
+        subject: str,
+        body: str
+    ) -> Dict[str, Any]:
+        """Send outreach email with custom subject and body."""
+        
+        pipeline = await self.get_pipeline(pipeline_id)
+        if not pipeline or pipeline.username != username:
+            raise PermissionError("Access denied")
+        
+        candidate = pipeline.candidate
+        
+        if not candidate.contact.email:
+            raise ValueError("No email address for candidate")
+        
+        # Generate scheduling token if not exists
+        if not candidate.contact.scheduling_token:
+            candidate.contact.scheduling_token = f"sched-{candidate.candidate_id[:12]}"
+        
+        scheduling_link = f"{self.webhook_base_url}/schedule/{candidate.contact.scheduling_token}"
+        
+        # Send via email service
+        result = await self.email_service.send_outreach_email(
+            to_email=candidate.contact.email,
+            to_name=candidate.display_name,
+            subject=subject,
+            body=body,
+            scheduling_link=scheduling_link,
+            pipeline_id=pipeline_id,
+            candidate_id=candidate.candidate_id
+        )
+        
+        if result.get("success"):
+            # Update candidate outreach status
+            from models.pipeline_models import OutreachTracker
+            
+            if not candidate.outreach:
+                candidate.outreach = OutreachTracker()
+            
+            candidate.outreach.initial_email_sent_at = get_current_timestamp()
+            candidate.outreach.scheduling_link = scheduling_link
+            candidate.update_stage(CandidateStage.OUTREACH_SENT, triggered_by="user")
+            
+            await self._save_pipeline(pipeline)
+        
+        return result
+
+
+    async def enrich_candidate_background(self, pipeline_id: str, username: str):
+        """Background task for enrichment."""
+        try:
+            await self.start_enrichment(
+                pipeline_id=pipeline_id,
+                username=username,
+                include_contact_fetch=True
+            )
+        except Exception as e:
+            logger.error(f"Background enrichment failed: {e}")
+
 
 # ============================================================================
 # EXPORT

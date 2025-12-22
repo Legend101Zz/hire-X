@@ -113,11 +113,13 @@ class OutreachType(str, Enum):
 
 class ContactFetchSource(str, Enum):
     """Source of contact information."""
+class ContactFetchSource(str, Enum):
     HATCH_API = "hatch_api"
-    LINKEDIN_SCRAPE = "linkedin_scrape"
-    RESUME_EXTRACT = "resume_extract"
+    BRIGHTDATA_SCRAPE = "brightdata_scrape"
     MANUAL_INPUT = "manual_input"
-    EXISTING_DB = "existing_db"
+    LINKEDIN_SCRAPE = "linkedin_scrape"
+    RESUME_PARSE = "resume_parse"
+    UNKNOWN = "unknown"
 
 
 # ===================================================================
@@ -532,6 +534,28 @@ class EnrichmentSummary(BaseModel):
     
     # Errors
     enrichment_error: Optional[str] = None
+    
+    @field_validator('concerns', 'top_strengths', mode='before')
+    @classmethod
+    def normalize_list_items(cls, v):
+        """Fixes data where strings were saved as dicts (e.g. {'concern': '...'})"""
+        if not v:
+            return []
+        
+        normalized = []
+        for item in v:
+            if isinstance(item, dict):
+                # Extract text from common keys or just take the first value
+                if 'concern' in item:
+                    normalized.append(str(item['concern']))
+                elif 'strength' in item:
+                    normalized.append(str(item['strength']))
+                else:
+                    # Fallback: grab the first available value
+                    normalized.append(str(next(iter(item.values()), "")))
+            else:
+                normalized.append(str(item))
+        return normalized
 
 
 # ===================================================================
