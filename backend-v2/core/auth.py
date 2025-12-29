@@ -53,10 +53,8 @@ def get_password_hash(password: str) -> str:
     with very long or Unicode-rich passwords.
     """
     try:
-        print('pass',password)
         # Step 1: Pre-hash password to a fixed 64-character hex string
         prehashed = hashlib.sha256(password.encode("utf-8")).hexdigest()
-        print('hashed',prehashed)
         # Step 2: Pass the short, fixed-length hash to bcrypt
         hashed = pwd_context.hash(prehashed)
 
@@ -117,7 +115,7 @@ def verify_token(token: str) -> dict:
         
     Raises:
         jwt.ExpiredSignatureError: If token has expired
-        jwt.JWTError: If token is invalid
+        jwt.PyJWTError: If token is invalid
     """
     try:
         # Decode and verify token
@@ -126,7 +124,7 @@ def verify_token(token: str) -> dict:
         
         if username is None:
             logger.warning("Token verification failed: No username in payload")
-            raise jwt.JWTError("Invalid token payload")
+            raise jwt.PyJWTError("Invalid token payload")
         
         logger.debug("Token verification successful", extra={
             "username": username
@@ -138,7 +136,7 @@ def verify_token(token: str) -> dict:
         logger.warning("Token verification failed: Token expired")
         raise
         
-    except jwt.JWTError as e:
+    except jwt.PyJWTError as e:
         logger.error(f"Token verification failed: {e}", exc_info=True)
         raise
 
@@ -159,7 +157,7 @@ def decode_token(token: str) -> Optional[str]:
     try:
         payload = verify_token(token)
         return payload.get("sub")
-    except (jwt.ExpiredSignatureError, jwt.JWTError):
+    except (jwt.ExpiredSignatureError, jwt.PyJWTError):
         return None
 
 

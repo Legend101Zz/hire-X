@@ -1,24 +1,26 @@
 """
-Vapi Voice Interview Service V3
+Vapi Voice Interview Service V4
 ===============================
 Main service for conducting AI-powered voice interviews using Vapi.
 
 Architecture:
 - Vapi handles STT → LLM → TTS orchestration
-- Cartesia Sonic 3 for natural TTS
+- Cartesia Sonic 3 for natural TTS with emotion/SSML support
 - Deepgram for multi-language STT (English + Hindi)
 - OpenRouter for flexible LLM selection
 - Twilio for telephony (via Vapi integration)
 
 Features:
-- Dynamic interview plan generation
-- Real-time webhook processing
-- Recording management & clip extraction
-- Post-interview analysis
+- Dynamic interview plan generation using candidate context
+- Real-time webhook processing with comprehensive error handling
+- Natural conversational flow with SSML tags
+- Post-interview analysis with evidence-based assessment
+- Verification questions (notice period, salary, availability)
 - Multi-language support (English, Hindi, Hinglish)
+- Short, focused interviews (5-10 minutes)
 
 Author: NeuraLeap Engineering
-Version: 3.0
+Version: 4.0
 """
 
 import asyncio
@@ -31,7 +33,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from pydub import AudioSegment
 
 from core.logging_config import get_logger
 from models.vapi_interview_models import (CallEndReason, ConfidenceLevel,
@@ -59,145 +60,398 @@ logger = get_logger(__name__)
 # Vapi API
 VAPI_API_BASE = "https://api.vapi.ai"
 
-# Voice presets for Indian demographic
-VOICE_PRESETS = {
-    "neura_professional": {
-        "id": "f786b574-daa5-4673-aa0c-cbe3e8534c02",  # Katie - stable, warm
-        "name": "Neura",
-        "description": "Professional female voice, clear English, warm tone"
-    },
-    "neura_expressive": {
-        "id": "6ccbfb76-1fc6-48f7-b71d-91ac6298247b",  # Tessa - emotive
-        "name": "Neura (Expressive)",
-        "description": "Expressive female voice for warmth"
-    },
-    "arjun_professional": {
-        "id": "228fca29-3a0a-435c-8728-5cb483251068",  # Kiefer - professional male
-        "name": "Arjun",
-        "description": "Professional male voice, engaging"
-    }
+# Model Configuration - Different models for different purposes
+MODEL_PLANNING = "anthropic/claude-sonnet-4.5"  # For interview planning (quality)
+MODEL_REALTIME = "google/gemini-3-flash-preview"   # For real-time responses (speed ~300ms)
+MODEL_ANALYSIS = "anthropic/claude-sonnet-4.5"  # For post-interview analysis
+
+
+# Default Voice Configuration - Sonic 3 with natural settings
+# DEFAULT_VOICE_ID = "cbaf8084-f009-4838-a096-07ee2e6612b1" # English Id 
+DEFAULT_VOICE_ID = "faf0731e-dfb9-4cfc-8119-259a79b27e12" # Indian accent Riya
+DEFAULT_VOICE_SPEED = 0.88 # Slightly slower for consistency
+DEFAULT_VOICE_VOLUME = 0.80  # Lower volume to prevent loud starts
+
+# Voice emotion presets for different conversation moments
+EMOTION_PRESETS = {
+    "greeting": "enthusiastic",
+    "listening": "curious",
+    "acknowledgment": "content",
+    "follow_up": "curious",
+    "concern": "sympathetic",
+    "closing": "grateful",
+    "error_handling": "apologetic"
 }
 
-# Interview defaults
-DEFAULT_MAX_QUESTIONS = 8
-DEFAULT_CALL_DURATION = 1800  # 30 minutes
-SILENCE_TIMEOUT = 30  # seconds
+# Interview Configuration - Short, focused interviews
+DEFAULT_MAX_QUESTIONS = 8  # Reduced for 5-10 min interviews
+DEFAULT_CALL_DURATION = 6720  # 12 minutes max
+MIN_CALL_DURATION = 180  # 3 minutes minimum for meaningful interview
+SILENCE_TIMEOUT = 12  # seconds - reduced to keep pace
+MAX_RESPONSE_TOKENS = 120  # Keep AI responses concise
+
+# Barge-in settings
+BARGE_IN_MIN_WORDS = 3  # Require 3+ words before interrupting AI
+
+# Call Status Constants
+TERMINAL_STATUSES = ["completed", "failed", "no_answer", "voicemail", "cancelled"]
+RETRY_STATUSES = ["busy", "failed"]
+MAX_RETRY_ATTEMPTS = 2
 
 
 # ============================================================================
-# INTERVIEW PROMPTS
+# SSML HELPER CLASS
+# ============================================================================
+
+class SSMLBuilder:
+    """
+    Helper class for building natural-sounding speech with SSML tags.
+    Cartesia Sonic 3 supports: speed, volume, emotion, break, spell tags.
+    """
+    
+    @staticmethod
+    def normalize_start(text: str) -> str:
+        """Normalize volume at start to prevent loud openings."""
+        return f'<volume ratio="0.85">{text[:50]}</volume>{text[50:]}' if len(text) > 50 else f'<volume ratio="0.85">{text}</volume>'
+
+    @staticmethod
+    def add_emotion(text: str, emotion: str) -> str:
+        """Wrap text with emotion tag."""
+        return f'<emotion value="{emotion}" />{text}'
+    
+    @staticmethod
+    def add_pause(duration_ms: int = 500) -> str:
+        """Insert a pause/break."""
+        return f'<break time="{duration_ms}ms" />'
+    
+    @staticmethod
+    def add_speed(text: str, ratio: float = 1.0) -> str:
+        """Adjust speech speed."""
+        return f'<speed ratio="{ratio}" />{text}'
+    
+    @staticmethod
+    def add_volume(text: str, ratio: float = 1.0) -> str:
+        """Adjust volume."""
+        return f'<volume ratio="{ratio}" />{text}'
+    
+    @staticmethod
+    def spell_out(text: str) -> str:
+        """Spell out text (useful for IDs, numbers)."""
+        return f'<spell>{text}</spell>'
+    
+    @staticmethod
+    def build_natural_sentence(text: str, emotion: str = None, pause_after: int = 0) -> str:
+        """Build a natural-sounding sentence with optional emotion and pause."""
+        result = text
+        if emotion:
+            result = SSMLBuilder.add_emotion(result, emotion)
+        if pause_after > 0:
+            result += SSMLBuilder.add_pause(pause_after)
+        return result
+    
+    @staticmethod
+    def build_greeting(name: str) -> str:
+        """First message - ONLY ask if it's them, wait for response."""
+        return (
+            f'<volume ratio="0.85"><speed ratio="0.88">'
+            f"Hello, is this {name}?"
+            f'</speed></volume>'
+        )
+
+    @staticmethod  
+    def build_intro_after_confirmation(name: str, job_title: str) -> str:
+        """Second part - after they confirm identity."""
+        return (
+            f"Great. As mentioned in our email, I'm Neura, an AI Hiring Agent from NeuraLeap. "
+            f'<break time="0.4s" />'
+            f"I'll be conducting a brief interview with you today for the {job_title} position. "
+            f'<break time="0.3s" />'
+            f"Please don't feel any stress. This is just a casual conversation to understand your background better. "
+            f'<break time="0.3s" />'
+            f"The call should take about 8 to 10 minutes. Does that work for you?"
+        )
+    
+    @staticmethod
+    def build_role_intro(job: 'InterviewJobContext') -> str:
+        """Brief role explanation."""
+        company = job.company_name or "our client"
+        skills = ", ".join(job.required_skills[:3]) if job.required_skills else "relevant skills"
+        return (
+            f'<break time="0.5s" />'
+            f"Let me quickly tell you about the role. "
+            f"We're looking for a {job.job_title} at {company}. "
+            f"The key areas include {skills}. "
+            f'<break time="0.3s" />'
+            f"Does this sound like something you'd be interested in?"
+        )
+    
+    @staticmethod
+    def build_closing(name: str) -> str:
+        """Professional closing with next steps."""
+        return (
+            f'<break time="0.5s" />'
+            f"That's all from my side, {name}. "
+            f'<break time="0.3s" />'
+            f"Thank you so much for your time today. "
+            f"We're currently reviewing a few candidates for this role, "
+            f"and our team will reach out with next steps once we complete the process. "
+            f'<break time="0.3s" />'
+            f"Take care and have a great day!"
+        )
+    
+    @staticmethod
+    def build_acknowledgment(style: str = "positive") -> str:
+        """Build natural acknowledgment phrases."""
+        acknowledgments = {
+            "positive": [
+                SSMLBuilder.add_emotion("That's great!", "content"),
+                SSMLBuilder.add_emotion("Excellent!", "enthusiastic"),
+                SSMLBuilder.add_emotion("I see, that's helpful.", "content"),
+                SSMLBuilder.add_emotion("Thank you for sharing that.", "grateful"),
+            ],
+            "neutral": [
+                SSMLBuilder.add_emotion("I understand.", "content"),
+                SSMLBuilder.add_emotion("Got it.", "content"),
+                SSMLBuilder.add_emotion("Okay, thank you.", "content"),
+            ],
+            "empathetic": [
+                SSMLBuilder.add_emotion("I understand that can be challenging.", "sympathetic"),
+                SSMLBuilder.add_emotion("That makes sense.", "content"),
+            ]
+        }
+        import random
+        return random.choice(acknowledgments.get(style, acknowledgments["neutral"]))
+    
+    @staticmethod
+    def build_transition(to_topic: str = None) -> str:
+        """Build natural topic transitions."""
+        base_transitions = [
+            "Now, I'd love to ask you about",
+            "Moving on, could you tell me about",
+            "Let me ask you about",
+            "I'm curious about",
+        ]
+        import random
+        transition = random.choice(base_transitions)
+        if to_topic:
+            return f'{SSMLBuilder.add_pause(300)}{SSMLBuilder.add_emotion(f"{transition} {to_topic}.", "curious")}'
+        return f'{SSMLBuilder.add_pause(300)}{transition}'
+    
+
+
+# ============================================================================
+# INTERVIEW PROMPTS 
 # ============================================================================
 
 class InterviewPrompts:
     """
     Prompt templates for the AI interviewer.
+    Optimized for short, natural conversations.
     """
     
     @staticmethod
     def get_system_prompt(
         candidate: InterviewCandidateContext,
         job: InterviewJobContext,
-        plan: InterviewPlan
+        plan: InterviewPlan,
+        verification_needed: Dict[str, bool],
+        role_specific_questions: List[str]
     ) -> str:
-        """Generate the main system prompt for the interviewer."""
-        
         first_name = candidate.name.split()[0]
+        candidate_context = InterviewPrompts._build_candidate_context(candidate)
         
-        return f"""You are Neura, an AI interviewer from NeuraLeap conducting a professional voice interview.
+        return f"""You are Neura, an AI Hiring Agent from NeuraLeap conducting voice interviews.
 
-## YOUR IDENTITY
+## IDENTITY
 - Name: Neura
-- Role: Senior Technical Recruiter at NeuraLeap
-- Personality: Warm, professional, genuinely curious about candidates
-- Communication: Clear, concise (under 50 words per response), natural pauses with " - "
+- Role: AI Hiring Agent at NeuraLeap
+- Tone: Warm, professional, calm, encouraging
+- NEVER sound robotic or overly excited
+
+## CRITICAL: VOICE CONSISTENCY
+- Maintain the SAME calm, professional tone throughout
+- Do NOT get excited or raise volume at any point
+- Use natural pauses instead of rushing
+- Speak at a steady, moderate pace always
+
+## CRITICAL: HANDLING INTERRUPTIONS
+When the candidate speaks while you're talking:
+1. STOP immediately and LISTEN
+2. Acknowledge what they said: "I heard you mention..."
+3. Address their point before continuing your question
+4. Do NOT repeat what you were saying - move forward naturally
+5. If you missed something: "Sorry, I didn't catch that clearly. Could you repeat?"
+
+Example:
+- You: "Could you tell me about your experience with—"
+- Candidate: [interrupts] "Oh yes, I worked on that at my last company"
+- You: "Great, you worked on that at your last company. Tell me more about that project."
+
+## RESPONSE RULES
+- Maximum 25 words per response
+- ONE question at a time only
+- Wait fully for candidate to finish
+- Use 3-second pause if they're thinking
+- Natural acknowledgments: "I see", "Got it", "That's helpful"
+
+## VOICE TAGS (USE THESE)
+- `<break time="0.5s" />` - Natural pauses
+- `<speed ratio="0.88">` - Slower for clarity  
+- `<emotion value="content">` - Calm, neutral (USE THIS ALWAYS)
+- NEVER use: enthusiastic, excited, curious with high energy
+- Keep acknowledgments simple: "I see", "Got it", "Okay" - no "That's interesting!"
+
+## CRITICAL: TONE
+- Sound like a calm, professional recruiter - NOT an excited salesperson
+- Acknowledgments should be LOW ENERGY: "Got it", "I see", "Okay, thanks"
+- NEVER say "That's interesting!" or "Excellent!" or "Great!" with enthusiasm
+- Questions should sound curious but CALM, not excited
+- If impressed, say it matter-of-factly: "That's solid experience" not "Wow, that's amazing!"
 
 ## CANDIDATE CONTEXT
-- Name: {candidate.name} (call them {first_name})
-- Current Role: {candidate.current_title} at {candidate.current_company or 'their current company'}
-- Experience: {candidate.experience_years} years
-- Key Skills: {', '.join(candidate.skills[:8])}
-- Location: {candidate.location or 'India'}
+{candidate_context}
 
-## JOB REQUIREMENTS
+## JOB DETAILS
 - Position: {job.job_title}
 - Company: {job.company_name or 'our client'}
-- Required Skills: {', '.join(job.required_skills[:6])}
-- Experience Needed: {job.experience_required}
-- Key Responsibilities: {', '.join(job.key_responsibilities[:4])}
+- Key Skills: {', '.join(job.required_skills[:5])}
 
-## INTERVIEW FOCUS
-{plan.interview_focus}
+## INTERVIEW FLOW (Follow this order)
 
-## INTERVIEW GUIDELINES
+### Phase 1: Identity Confirmation
+- First message is just: "Hello, is this {first_name}?"
+- WAIT for them to confirm ("yes", "speaking", etc.)
+- After confirmation, say: "{SSMLBuilder.build_intro_after_confirmation(first_name, job.job_title)}"
 
-### Opening
-{plan.opening_context}
+### Phase 2: About Them (2-3 min)
+- "Tell me a bit about yourself and what you're currently working on."
+- "What made you interested in exploring new opportunities?"
+- Listen actively, acknowledge their points
 
-### Question Flow
-1. Start with the introduction question
-2. Use the provided questions but adapt based on responses
-3. Ask follow-ups when candidate gives vague answers
-4. Skip redundant questions if already answered
-5. Watch time - keep moving if running long
+### Phase 3: Role-Specific Questions (3-4 min)
+Ask these intelligent questions for the {job.job_title} role:
+{chr(10).join(f"- {q}" for q in role_specific_questions)}
 
-### Communication Style
-- Acknowledge responses warmly: "That's great" - "I see" - "Thank you for sharing that"
-- Use natural transitions: "Now - let me ask you about..." - "Moving on..."
-- Add pauses with " - " for natural speech rhythm
-- Keep responses under 50 words
-- Don't repeat what candidate said back to them
+Use follow-ups like:
+- "Could you give me a specific example?"
+- "What was the outcome of that?"
+- "How did you handle that challenge?"
 
-### Handling Different Responses
-- If candidate is nervous: "Take your time - no rush"
-- If answer is vague: Ask a specific follow-up
-- If answer is excellent: Acknowledge and move on
-- If candidate asks a question: Answer briefly, then continue
+### Phase 4: Verification (1 min)
+- "What's your current notice period?"
+- "What are your salary expectations for this role?"
+- "When would you be available to start if selected?"
 
-### Language Handling
-- Conduct interview in English
-- If candidate responds in Hindi/Hinglish, acknowledge naturally
-- Example: "Bahut accha - thank you. Please feel free to continue in whichever language you're comfortable with."
+### Phase 5: Their Questions (1 min)
+- "Do you have any questions about the role or the company?"
+- Answer briefly (under 20 words), honestly
 
-### Closing
-{plan.closing_notes}
+### Phase 6: Closing
+- Thank them genuinely
+- Mention you're reviewing other candidates
+- Say team will reach out with next steps
+- Call `end_interview` tool
 
-## TOOLS AVAILABLE
-- `get_next_question`: Get the next planned question
-- `record_response_quality`: Mark response as strong/weak/concerning
-- `add_follow_up`: Note that you asked a follow-up
-- `end_interview`: Signal interview completion
+## WHAT NOT TO DO
+- Don't say "question 1", "next question" etc.
+- Don't sound scripted or robotic
+- Don't get louder when excited
+- Don't repeat candidate's words back verbatim
+- Don't ask multiple questions at once
+- Don't interrupt them - always let them finish
+- Don't ignore what they said if they interrupted you
 
-## IMPORTANT RULES
-1. NEVER reveal you're reading from a script
-2. NEVER mention "question 1", "question 2", etc.
-3. NEVER ask more than one question at a time
-4. ALWAYS acknowledge before asking the next question
-5. BE NATURAL - like a friendly senior colleague, not a robot
+## LANGUAGE
+- Primarily English
+- If they use Hindi/Hinglish: "No problem, feel free to continue in whatever language you're comfortable with."
 
-Begin the interview when the candidate answers the call."""
+Remember: Calm, consistent tone. Listen actively. Move naturally through the conversation."""
+
+    @staticmethod
+    def get_first_message(candidate: InterviewCandidateContext) -> str:
+        first_name = candidate.name.split()[0]
+        return SSMLBuilder.build_greeting(first_name)
+    
+    @staticmethod
+    def _build_candidate_context(candidate: InterviewCandidateContext) -> str:
+        """Build rich candidate context from available data."""
+        first_name = candidate.name.split()[0]
+        
+        context_parts = [
+            f"- Name: {candidate.name} (call them {first_name})",
+            f"- Current Role: {candidate.current_title}",
+        ]
+        
+        if candidate.current_company:
+            context_parts.append(f"- Company: {candidate.current_company}")
+        
+        context_parts.append(f"- Experience: {candidate.experience_years} years")
+        
+        if candidate.skills:
+            context_parts.append(f"- Key Skills: {', '.join(candidate.skills[:6])}")
+        
+        if candidate.location:
+            context_parts.append(f"- Location: {candidate.location}")
+        
+        if candidate.education:
+            context_parts.append(f"- Education: {candidate.education}")
+        
+        # Add enrichment insights if available
+        if candidate.enrichment_summary:
+            context_parts.append(f"\n### Background Insights\n{candidate.enrichment_summary}")
+        
+        if candidate.skill_validations:
+            validated = candidate.skill_validations.get("validated_skills", [])
+            if validated:
+                context_parts.append(f"- Verified Skills: {', '.join(validated[:5])}")
+        
+        if candidate.response_likelihood:
+            likelihood = candidate.response_likelihood
+            if likelihood >= 70:
+                context_parts.append("- Note: High engagement likelihood - keep conversation positive")
+            elif likelihood <= 30:
+                context_parts.append("- Note: May be passive candidate - be extra warm and respectful of time")
+        
+        return "\n".join(context_parts)
+    
+    @staticmethod
+    def _build_verification_instructions(verification_needed: Dict[str, bool]) -> str:
+        """Build instructions for what needs to be verified."""
+        if not any(verification_needed.values()):
+            return ""
+        
+        instructions = ["## MUST VERIFY IN THIS CALL"]
+        
+        if verification_needed.get("notice_period"):
+            instructions.append("- Notice period: Ask 'What's your notice period?'")
+        
+        if verification_needed.get("salary_expectation"):
+            instructions.append("- Salary: Ask 'What are your salary expectations for this role?'")
+        
+        if verification_needed.get("current_ctc"):
+            instructions.append("- Current CTC: Ask 'What's your current compensation?'")
+        
+        if verification_needed.get("availability"):
+            instructions.append("- Availability: Ask 'When could you start if selected?'")
+        
+        if verification_needed.get("relocation"):
+            instructions.append("- Relocation: Ask 'Are you open to relocating?'")
+        
+        instructions.append("\nCapture these using the `capture_verification_data` tool.")
+        
+        return "\n".join(instructions)
 
     @staticmethod
     def get_first_message(candidate: InterviewCandidateContext, job: InterviewJobContext) -> str:
-        """Generate the opening message."""
+        """Generate the opening message with SSML for natural delivery."""
         first_name = candidate.name.split()[0]
-        return (
-            f"Hello! - Is this {first_name}? - "
-            f"Hi {first_name}, this is Neura calling from NeuraLeap. - "
-            f"Thank you so much for taking the time to speak with me today. - "
-            f"I'm really looking forward to learning more about you and your experience. - "
-            f"Before we begin, - can you hear me clearly?"
-        )
+        return SSMLBuilder.build_greeting(first_name)
 
     @staticmethod
     def get_end_call_message(candidate: InterviewCandidateContext) -> str:
-        """Generate the closing message."""
+        """Generate the closing message with SSML for natural delivery."""
         first_name = candidate.name.split()[0]
-        return (
-            f"Thank you so much for your time today, {first_name}. - "
-            f"It was a pleasure speaking with you. - "
-            f"Our team will be in touch soon with next steps. - "
-            f"Take care, and have a wonderful day!"
-        )
+        return SSMLBuilder.build_closing(first_name)
 
 
 # ============================================================================
@@ -207,6 +461,12 @@ Begin the interview when the candidate answers the call."""
 class VapiInterviewService:
     """
     Main service for conducting voice interviews via Vapi.
+    
+    Features:
+    - Natural conversation with SSML support
+    - Comprehensive error handling
+    - Short, focused interviews (5-10 min)
+    - Rich candidate context utilization
     """
     
     def __init__(
@@ -217,8 +477,7 @@ class VapiInterviewService:
         vapi_api_key: Optional[str] = None,
         vapi_phone_number_id: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
-        webhook_base_url: Optional[str] = None,
-        storage_path: str = "./interview_recordings"
+        webhook_base_url: Optional[str] = None
     ):
         """Initialize the Vapi Interview Service."""
         self.db = mongodb
@@ -231,15 +490,11 @@ class VapiInterviewService:
         self.openrouter_api_key = openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
         self.webhook_base_url = webhook_base_url or os.getenv("WEBHOOK_BASE_URL", "https://neuraleap.shop")
         
-        # Validate
+        # Validate configuration
         if not self.vapi_api_key:
             logger.warning("⚠️ VAPI_API_KEY not set - interviews will fail")
         if not self.vapi_phone_number_id:
             logger.warning("⚠️ VAPI_PHONE_NUMBER_ID not set - outbound calls will fail")
-        
-        # Storage
-        self.storage_path = Path(storage_path)
-        self.storage_path.mkdir(parents=True, exist_ok=True)
         
         # In-memory session cache (for standalone testing)
         self._sessions: Dict[str, InterviewSession] = {}
@@ -247,14 +502,25 @@ class VapiInterviewService:
         # HTTP client
         self._http_client: Optional[httpx.AsyncClient] = None
         
-        logger.info("✅ VapiInterviewService initialized")
+        # Retry tracking
+        self._retry_counts: Dict[str, int] = {}
+        
+        # Verification data cache
+        self._verification_data: Dict[str, Dict[str, Any]] = {}
+        
+        logger.info("✅ VapiInterviewService V4 initialized")
         logger.info(f"   Webhook URL: {self.webhook_base_url}")
-        logger.info(f"   Storage: {self.storage_path}")
+        logger.info(f"   Default Voice ID: {DEFAULT_VOICE_ID}")
+        logger.info(f"   Planning Model: {MODEL_PLANNING}")
+        logger.info(f"   Real-time Model: {MODEL_REALTIME}")
+        logger.info(f"   Max Duration: {DEFAULT_CALL_DURATION}s ({DEFAULT_CALL_DURATION//60} min)")
     
     async def _get_http_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
+        """Get or create HTTP client with appropriate timeouts."""
         if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(timeout=60.0)
+            self._http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0, connect=10.0)
+            )
         return self._http_client
     
     async def close(self):
@@ -274,31 +540,45 @@ class VapiInterviewService:
         """
         Create a new interview session.
         
-        1. Generate interview plan based on candidate + job
-        2. Create Vapi assistant with custom prompts
-        3. Optionally start the call
+        Steps:
+        1. Generate interview plan based on candidate context + job
+        2. Create Vapi assistant with natural voice settings
+        3. Optionally start the call immediately
         """
         session_id = f"interview-{uuid.uuid4().hex[:12]}"
         
         logger.info(f"Creating interview session: {session_id}")
         logger.info(f"  Candidate: {request.candidate.name}")
         logger.info(f"  Job: {request.job.job_title}")
+        logger.info(f"  Experience: {request.candidate.experience_years} years")
         
-        # 1. Generate interview plan
+        # Generate role-specific intelligent questions
+        role_questions = await self._generate_role_specific_questions(
+            request.job,
+            request.candidate
+        )
+        # 1. Determine what verification data we need
+        verification_needed = self._determine_verification_needs(request.candidate)
+        logger.info(f"  Verification needed: {verification_needed}")
+        
+         # 2. Generate interview plan using analysis model (quality matters here)
         plan = await self._generate_interview_plan(
             request.candidate,
             request.job,
-            request.custom_questions
+            request.custom_questions or role_questions,
+            verification_needed
         )
         
-        # 2. Create Vapi assistant config
+         # 3. Configure voice (minimal settings for natural sound)
         voice_config = request.voice_config or VapiVoiceConfig(
             provider="cartesia",
-            voice_id=VOICE_PRESETS["neura_professional"]["id"],
+            voice_id=DEFAULT_VOICE_ID,
             model="sonic-3",
-            speed=0.9
+            speed=DEFAULT_VOICE_SPEED,
+            volume=DEFAULT_VOICE_VOLUME
         )
         
+        # 4. Build assistant configuration with fast LLM model for real-time (speed)
         assistant_config = VapiAssistantConfig(
             name=f"Neura - Interview {session_id}",
             first_message=InterviewPrompts.get_first_message(request.candidate, request.job),
@@ -307,31 +587,37 @@ class VapiInterviewService:
                 provider="deepgram",
                 model="nova-2",
                 language="multi",  # Auto-detect English/Hindi
-                endpointing=300
+                endpointing=350,  # Slightly longer to let candidate finish
+                smart_format=True
             ),
             model=VapiModelConfig(
                 provider="openrouter",
-                model="anthropic/claude-sonnet-4.5",
-                temperature=0.7,
-                max_tokens=500,
+                model=MODEL_REALTIME, 
+                temperature=0.6,
+                max_tokens=MAX_RESPONSE_TOKENS,  # Keep responses concise
                 system_prompt=InterviewPrompts.get_system_prompt(
-                    request.candidate, request.job, plan
+                    request.candidate, request.job, plan, verification_needed,role_questions
                 ),
-                tools=self._get_interview_tools()
+                # tools=self._get_interview_tools()
+                tools=[]
             ),
             silence_timeout_seconds=SILENCE_TIMEOUT,
             max_duration_seconds=DEFAULT_CALL_DURATION,
             end_call_message=InterviewPrompts.get_end_call_message(request.candidate),
-            server_url=f"{self.webhook_base_url}/voice-interview/webhook",
+            server_url=None,
             recording_enabled=True,
             background_sound="office",
-            barge_in_enabled=True
+            barge_in_enabled=True  # Allow candidate to interrupt
         )
         
-        # 3. Create Vapi assistant
-        vapi_assistant_id = await self._create_vapi_assistant(assistant_config)
+        # 5. Create Vapi assistant
+        try:
+            vapi_assistant_id = await self._create_vapi_assistant(assistant_config)
+        except Exception as e:
+            logger.error(f"Failed to create Vapi assistant: {e}")
+            raise ValueError(f"Could not create interview assistant: {str(e)}")
         
-        # 4. Create session
+        # 6. Create session
         session = InterviewSession(
             session_id=session_id,
             candidate=request.candidate,
@@ -346,24 +632,40 @@ class VapiInterviewService:
             created_by=username
         )
         
-        # 5. Store session
+        # 7. Store session
         await self._store_session(session)
         
-        # 6. Create storage directory
-        session_dir = self.storage_path / session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
+        # 8. Store verification needs
+        self._verification_data[session_id] = {
+            "needed": verification_needed,
+            "captured": {}
+        }
         
-        # 7. Optionally start the call
+        # 9. Map call_id to session for webhook lookups
+        if self.redis:
+            await self.redis.set(
+                f"assistant_to_session:{vapi_assistant_id}",
+                session_id,
+                ex=86400  # 24 hours
+            )
+        
+        # 10. Optionally start the call
         call_id = None
         if request.auto_call:
-            call_response = await self.start_call(session_id)
-            call_id = call_response.call_id
-            session.status = InterviewStatus.CALLING
-            await self._store_session(session)
+            try:
+                call_response = await self.start_call(session_id)
+                call_id = call_response.call_id
+            except Exception as e:
+                logger.error(f"Auto-call failed: {e}")
+                session.status = InterviewStatus.FAILED
+                await self._store_session(session)
+                raise
         
         logger.info(f"✅ Created interview: {session_id}")
         logger.info(f"   Assistant ID: {vapi_assistant_id}")
         logger.info(f"   Questions: {len(plan.questions)}")
+        logger.info(f"   Model: {MODEL_REALTIME} (for speed)")
+        logger.info(f"   Max Duration: {DEFAULT_CALL_DURATION//60} minutes")
         
         return CreateInterviewResponse(
             session_id=session_id,
@@ -374,6 +676,33 @@ class VapiInterviewService:
             call_id=call_id
         )
     
+    def _determine_verification_needs(
+        self,
+        candidate: InterviewCandidateContext
+    ) -> Dict[str, bool]:
+        """Determine what verification data we need from the call."""
+        needs = {
+            "notice_period": True,  # Always verify
+            "salary_expectation": True,  # Always ask
+            "current_ctc": False,
+            "availability": True,  # When can they start
+            "relocation": False
+        }
+        
+        # Check what we already have from enrichment
+        if candidate.salary_estimate:
+            # If we have salary data, still verify but it's lower priority
+            if candidate.salary_estimate.get("current_ctc"):
+                needs["current_ctc"] = False
+        
+        # Check location requirements
+        if candidate.location:
+            # If they're not in the target location, ask about relocation
+            # This could be enhanced with job location data
+            pass
+        
+        return needs
+    
     async def start_call(self, session_id: str) -> StartCallResponse:
         """Start the outbound call for an interview session."""
         session = await self.get_session(session_id)
@@ -383,27 +712,61 @@ class VapiInterviewService:
         if session.status not in [InterviewStatus.PENDING, InterviewStatus.SCHEDULED]:
             raise ValueError(f"Cannot start call - session status is {session.status}")
         
-        # Place outbound call via Vapi
-        call_data = await self._create_vapi_call(
-            assistant_id=session.vapi_assistant_id,
-            phone_number=session.phone_number_called,
-            phone_number_id=session.vapi_phone_number_id
-        )
+        # Validate phone number
+        phone = session.phone_number_called
+        if not phone or not phone.startswith("+"):
+            raise ValueError(f"Invalid phone number format: {phone}")
         
-        # Update session
-        session.vapi_call_id = call_data.get("id")
-        session.status = InterviewStatus.CALLING
-        session.call_start_time = datetime.utcnow().isoformat()
-        await self._store_session(session)
+        logger.info(f"📞 Initiating call for {session_id} to {phone}")
         
-        logger.info(f"📞 Started call for {session_id}: {session.vapi_call_id}")
+        try:
+            # Place outbound call via Vapi
+            call_data = await self._create_vapi_call(
+                assistant_id=session.vapi_assistant_id,
+                phone_number=phone,
+                phone_number_id=session.vapi_phone_number_id
+            )
+            
+            call_id = call_data.get("id")
+            
+            # Update session
+            session.vapi_call_id = call_id
+            session.status = InterviewStatus.CALLING
+            session.call_start_time = datetime.utcnow().isoformat()
+            await self._store_session(session)
+            
+            # Map call_id to session for webhook lookups
+            if self.redis:
+                await self.redis.set(
+                    f"call_to_session:{call_id}",
+                    session_id,
+                    ex=86400  # 24 hours
+                )
+            
+            logger.info(f"✅ Call initiated: {call_id}")
+            
+            return StartCallResponse(
+                session_id=session_id,
+                call_id=call_id,
+                status=InterviewStatus.CALLING,
+                message="Call initiated successfully"
+            )
+            
+        except httpx.HTTPStatusError as e:
+            error_detail = e.response.text if e.response else str(e)
+            logger.error(f"Vapi call failed: {error_detail}")
+            
+            # Update session status
+            session.status = InterviewStatus.FAILED
+            session.call_end_reason = CallEndReason.TECHNICAL_ERROR
+            await self._store_session(session)
+            raise ValueError(f"Failed to initiate call: {error_detail}")
         
-        return StartCallResponse(
-            session_id=session_id,
-            call_id=session.vapi_call_id,
-            status=InterviewStatus.CALLING,
-            message="Call initiated successfully"
-        )
+        except Exception as e:
+            logger.error(f"Call initiation error: {e}")
+            session.status = InterviewStatus.FAILED
+            await self._store_session(session)
+            raise
     
     async def get_session(self, session_id: str) -> Optional[InterviewSession]:
         """Retrieve interview session."""
@@ -440,9 +803,11 @@ class VapiInterviewService:
                 {
                     "status": session.status.value,
                     "call_id": session.vapi_call_id,
-                    "assistant_id": session.vapi_assistant_id
+                    "assistant_id": session.vapi_assistant_id,
+                    "candidate_name": session.candidate.name,
+                    "start_time": session.call_start_time
                 },
-                expire_seconds=3600 * 24  # 24 hours
+                expire_seconds=86400  # 24 hours
             )
     
     # =========================================================================
@@ -453,7 +818,7 @@ class VapiInterviewService:
         """Create a Vapi assistant and return its ID."""
         client = await self._get_http_client()
         
-        # Build assistant payload
+        # Build assistant payload with proper voice configuration
         payload = {
             "name": config.name,
             "firstMessage": config.first_message,
@@ -462,7 +827,7 @@ class VapiInterviewService:
                 "model": config.transcriber.model,
                 "language": config.transcriber.language,
                 "smartFormat": config.transcriber.smart_format,
-                "endpointing": config.transcriber.endpointing
+                "endpointing": 400,  # Slightly longer to let candidate finish
             },
             "model": {
                 "provider": config.model.provider,
@@ -476,27 +841,48 @@ class VapiInterviewService:
             "voice": {
                 "provider": config.voice.provider,
                 "voiceId": config.voice.voice_id,
-                "model": config.voice.model
+                "model": config.voice.model,
+                "generationConfig": 
+                {
+                    "speed": 0.95,   # Consistent, slightly slower
+                    "volume": 0.75,  # Prevent loud starts
+                 }
             },
             "silenceTimeoutSeconds": config.silence_timeout_seconds,
             "maxDurationSeconds": config.max_duration_seconds,
             "endCallMessage": config.end_call_message,
-            "serverUrl": config.server_url,
+            # "serverUrl": config.server_url,
             "recordingEnabled": config.recording_enabled,
             "backgroundSound": config.background_sound,
-            "backchannelingEnabled": True,
-            "hipaaEnabled": False
+            "backchannelingEnabled": True,  # Natural "uh-huh", "I see" sounds
+            "hipaaEnabled": False,
+            # Additional settings for better conversation flow
+            # "serverMessages": [
+            #     "status-update",
+            #     "end-of-call-report",
+            #     "tool-calls",
+            #     "transcript",
+            #     "hang",
+            #     "speech-update"
+            # ],
+            "clientMessages": [
+                "transcript",
+                "hang",
+                "speech-update"
+            ]
         }
         
         # Add tools if defined
         if config.model.tools:
             payload["model"]["tools"] = config.model.tools
         
-        # Cartesia speed goes in generationConfig
-        if config.voice.provider == "cartesia" and config.voice.speed:
-            payload["voice"]["generationConfig"] = {
-                "speed": config.voice.speed
-            }
+        # Cartesia Sonic 3 voice configuration with volume and speed
+        if config.voice.provider == "cartesia":
+            payload["voice"]["generationConfig"] = {}
+            if config.voice.speed:
+                payload["voice"]["generationConfig"]["speed"] = config.voice.speed
+            if config.voice.volume:
+                payload["voice"]["generationConfig"]["volume"] = config.voice.volume
         
         headers = {
             "Authorization": f"Bearer {self.vapi_api_key}",
@@ -555,53 +941,87 @@ class VapiInterviewService:
             logger.error(f"Response: {e.response.text}")
             raise
     
+    async def _end_vapi_call(self, call_id: str) -> bool:
+        """End a Vapi call programmatically."""
+        if not call_id:
+            return False
+        
+        client = await self._get_http_client()
+        headers = {
+            "Authorization": f"Bearer {self.vapi_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            response = await client.patch(
+                f"{VAPI_API_BASE}/call/{call_id}",
+                headers=headers,
+                json={"status": "ended"}
+            )
+            response.raise_for_status()
+            logger.info(f"Call {call_id} ended programmatically")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to end call {call_id}: {e}")
+            return False
+    
     def _get_interview_tools(self) -> List[Dict[str, Any]]:
         """Get tool definitions for the interview assistant."""
         return [
             {
                 "type": "function",
                 "function": {
-                    "name": "get_next_question",
-                    "description": "Get the next planned interview question. Call this when transitioning to a new topic.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "current_question_index": {
-                                "type": "integer",
-                                "description": "The index of the question just completed (0-based)"
-                            },
-                            "skip_reason": {
-                                "type": "string",
-                                "description": "Optional reason for skipping to next question"
-                            }
-                        },
-                        "required": ["current_question_index"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "record_response_quality",
-                    "description": "Record the quality of the candidate's response for analysis.",
+                    "description": "Record the quality of the candidate's response for analysis. Call this after each substantive answer.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "question_index": {
-                                "type": "integer",
-                                "description": "Which question this response was for"
+                            "question_topic": {
+                                "type": "string",
+                                "description": "Brief topic of the question (e.g., 'technical skills', 'teamwork')"
                             },
                             "quality": {
                                 "type": "string",
                                 "enum": ["excellent", "good", "adequate", "weak", "concerning"],
                                 "description": "Quality assessment"
                             },
-                            "notes": {
-                                "type": "string",
-                                "description": "Brief notes about the response"
+                            "key_points": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Key points from the response"
+                            },
+                            "follow_up_needed": {
+                                "type": "boolean",
+                                "description": "Whether a follow-up question is warranted"
                             }
                         },
-                        "required": ["question_index", "quality"]
+                        "required": ["question_topic", "quality"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "capture_verification_data",
+                    "description": "Capture verification data like notice period, salary, availability.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "data_type": {
+                                "type": "string",
+                                "enum": ["notice_period", "salary_expectation", "current_ctc", "availability", "relocation"],
+                                "description": "Type of data being captured"
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "The value (e.g., '30 days', '25 LPA', 'immediately')"
+                            },
+                            "notes": {
+                                "type": "string",
+                                "description": "Any additional context"
+                            }
+                        },
+                        "required": ["data_type", "value"]
                     }
                 }
             },
@@ -609,20 +1029,48 @@ class VapiInterviewService:
                 "type": "function",
                 "function": {
                     "name": "end_interview",
-                    "description": "Signal that the interview should end. Call this after the closing question or if needed.",
+                    "description": "Signal that the interview should end. Use when: all questions completed, time is up, or candidate needs to go.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "reason": {
                                 "type": "string",
+                                "enum": ["completed", "time_constraint", "candidate_request", "technical_issue", "poor_connection"],
                                 "description": "Why the interview is ending"
                             },
-                            "completed_questions": {
+                            "questions_completed": {
                                 "type": "integer",
-                                "description": "How many questions were completed"
+                                "description": "How many questions were covered"
+                            },
+                            "overall_impression": {
+                                "type": "string",
+                                "enum": ["positive", "neutral", "negative"],
+                                "description": "Quick overall impression"
                             }
                         },
                         "required": ["reason"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "handle_issue",
+                    "description": "Report an issue during the call for logging.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "issue_type": {
+                                "type": "string",
+                                "enum": ["connection_problem", "audio_quality", "candidate_distracted", "language_barrier", "candidate_confused"],
+                                "description": "Type of issue encountered"
+                            },
+                            "resolved": {
+                                "type": "boolean",
+                                "description": "Whether the issue was resolved"
+                            }
+                        },
+                        "required": ["issue_type"]
                     }
                 }
             }
@@ -636,133 +1084,257 @@ class VapiInterviewService:
         self,
         candidate: InterviewCandidateContext,
         job: InterviewJobContext,
-        custom_questions: List[str]
+        custom_questions: List[str],
+        verification_needed: Dict[str, bool]
     ) -> InterviewPlan:
-        """Generate a comprehensive interview plan."""
+        """Generate interview plan using ANALYSIS MODEL for quality."""
         plan_id = f"plan-{uuid.uuid4().hex[:8]}"
         
         questions = []
-        
-        # 1. Introduction question (always first)
         first_name = candidate.name.split()[0]
+        
+        # 1. Opening question
         questions.append(InterviewPlanQuestion(
             question_id=f"q-{uuid.uuid4().hex[:8]}",
-            question_text=(
-                f"Great, thank you {first_name}. - "
-                f"So, I see you're currently working as a {candidate.current_title}"
-                f"{' at ' + candidate.current_company if candidate.current_company else ''}. - "
-                f"To start us off, could you tell me a bit about yourself - "
-                f"your background and what brings you to this opportunity?"
-            ),
+            question_text=self._build_opening_question(candidate, job),
             question_type=QuestionType.INTRODUCTION,
             order=1,
-            expected_topics=["background", "current role", "motivation"],
-            time_limit_seconds=180,
-            weight=0.8
+            expected_topics=["current role", "interest"],
+            time_limit_seconds=60,
+            weight=0.5
         ))
         
-        # 2. Add custom questions
-        for i, q_text in enumerate(custom_questions[:3]):
+        # 2. Add custom question if provided
+        if custom_questions:
             questions.append(InterviewPlanQuestion(
                 question_id=f"q-custom-{uuid.uuid4().hex[:8]}",
-                question_text=q_text,
+                question_text=custom_questions[0],
                 question_type=QuestionType.TECHNICAL,
-                order=len(questions) + 1,
-                weight=1.5
+                order=2,
+                weight=1.5,
+                time_limit_seconds=90
             ))
         
-        # 3. Generate AI questions
-        remaining = DEFAULT_MAX_QUESTIONS - len(questions) - 1  # -1 for closing
+        # 3. Generate AI questions (uses SONNET)
+        remaining = DEFAULT_MAX_QUESTIONS - len(questions) - 2  # Reserve for verification + closing
         if remaining > 0:
-            ai_questions = await self._generate_ai_questions(
-                candidate, job, remaining
+            ai_questions = await self._generate_contextual_questions(
+                candidate, job, min(remaining, 2)
             )
             for q in ai_questions:
                 q.order = len(questions) + 1
                 questions.append(q)
         
-        # 4. Closing question (always last)
+        # 4. Verification questions
+        if any(verification_needed.values()):
+            questions.append(InterviewPlanQuestion(
+                question_id=f"q-verify-{uuid.uuid4().hex[:8]}",
+                question_text="Quick verification questions - what's your notice period and salary expectations?",
+                question_type=QuestionType.EXPERIENCE,
+                order=len(questions) + 1,
+                expected_topics=["notice period", "salary", "availability"],
+                time_limit_seconds=60,
+                weight=0.8
+            ))
+        
+        # 5. Closing
         questions.append(InterviewPlanQuestion(
-            question_id=f"q-{uuid.uuid4().hex[:8]}",
-            question_text=(
-                f"Alright {first_name}, - those are all the questions I had. - "
-                f"Before we wrap up, - is there anything you'd like to ask me "
-                f"about the role or the company?"
-            ),
+            question_id=f"q-close-{uuid.uuid4().hex[:8]}",
+            question_text=f"That's all from me, {first_name}. Any quick questions?",
             question_type=QuestionType.CLOSING,
             order=len(questions) + 1,
-            expected_topics=["candidate questions", "interest level"],
-            time_limit_seconds=120,
-            weight=0.5
+            expected_topics=["questions", "interest"],
+            time_limit_seconds=45,
+            weight=0.3
         ))
         
-        # Build interview focus summary
-        interview_focus = await self._generate_interview_focus(candidate, job)
+        interview_focus = self._build_interview_focus(candidate, job)
         
         return InterviewPlan(
             plan_id=plan_id,
             candidate_id=candidate.candidate_id,
-            job_id=job.job_id,
+            job_id=job.job_id if hasattr(job, 'job_id') else None,
             interview_focus=interview_focus,
             questions=questions,
             interviewer_personality="warm_professional",
-            opening_context=(
-                f"This interview focuses on assessing {first_name}'s fit for the "
-                f"{job.job_title} role. Key areas to evaluate: {', '.join(job.required_skills[:4])}. "
-                f"The candidate has {candidate.experience_years} years of experience."
-            ),
-            closing_notes=(
-                "End on a positive note. Thank the candidate warmly. "
-                "Mention that the team will be in touch with next steps."
+            opening_context=f"Quick screening call for {first_name}, {candidate.experience_years}y exp",
+            closing_notes="Thank warmly, mention next steps, call end_interview tool"
+        )
+
+    def _build_opening_question(
+        self,
+        candidate: InterviewCandidateContext,
+        job: InterviewJobContext
+    ) -> str:
+        """Build contextual opening question."""
+        first_name = candidate.name.split()[0]
+        
+        # Use enrichment data to personalize if available
+        if candidate.enrichment_summary:
+            return (
+                f"Great, thank you {first_name}. - "
+                f"I've seen you're currently at {candidate.current_company or 'your company'} "
+                f"as a {candidate.current_title}. - "
+                f"What's got you interested in exploring new opportunities?"
             )
+        
+        return (
+            f"Great, thank you {first_name}. - "
+            f"Could you give me a quick overview of what you're currently working on "
+            f"and what excites you about the {job.job_title} role?"
         )
     
-    async def _generate_ai_questions(
+    def _build_closing_question(self, first_name: str) -> str:
+        """Build closing question."""
+        return (
+            f"Alright {first_name}, - that's all from my side. - "
+            f"Do you have any quick questions for me about the role or team?"
+        )
+    
+    async def _generate_role_specific_questions(
+        self,
+        job: InterviewJobContext,
+        candidate: InterviewCandidateContext
+    ) -> List[str]:
+        """Generate intelligent questions specific to the role."""
+        
+        prompt = f"""Generate 3 highly specific interview questions for a {job.job_title} role.
+
+    ROLE: {job.job_title}
+    REQUIRED SKILLS: {', '.join(job.required_skills[:6])}
+    CANDIDATE EXPERIENCE: {candidate.experience_years} years as {candidate.current_title}
+
+    Rules:
+    1. Questions must reveal TRUE competence, not just knowledge
+    2. Ask for specific numbers, examples, or situations
+    3. Avoid generic questions like "tell me about your experience"
+    4. Make questions role-specific and measurable
+
+    Examples of GOOD role-specific questions:
+    - For HR/Recruiter: "What's the highest CTC offer you've successfully closed, and how did you negotiate it?"
+    - For Sales: "What was your largest deal size and how long was your typical sales cycle?"
+    - For Engineer: "Describe the most complex system you've designed. What was the scale?"
+    - For Manager: "How many people have you managed directly, and how did you handle underperformers?"
+    - For Marketing: "What's the best ROI you've achieved on a campaign, and what made it successful?"
+
+    Return ONLY a JSON array of 3 questions:
+    ["question1", "question2", "question3"]"""
+
+        try:
+            response = await self._call_llm(prompt, temperature=0.7, max_tokens=400)
+            json_match = re.search(r'\[[\s\S]*?\]', response)
+            if json_match:
+                questions = json.loads(json_match.group())
+                return questions[:3]
+        except Exception as e:
+            logger.error(f"Role question generation failed: {e}")
+        
+        # Fallback generic but still specific questions
+        return [
+            f"What's the biggest achievement in your career as a {candidate.current_title}?",
+            f"Tell me about a challenging situation in your work and how you resolved it.",
+            f"What specific skills make you a strong fit for this {job.job_title} role?"
+        ]
+    
+    def _build_interview_focus(
+        self,
+        candidate: InterviewCandidateContext,
+        job: InterviewJobContext
+    ) -> str:
+        """Build interview focus based on candidate-job fit analysis."""
+        focus_areas = []
+        
+        # Analyze skill gaps and overlaps
+        candidate_skills = set(s.lower() for s in candidate.skills)
+        required_skills = set(s.lower() for s in job.required_skills)
+        
+        matched = candidate_skills & required_skills
+        missing = required_skills - candidate_skills
+        
+        if matched:
+            focus_areas.append(f"Validate depth in: {', '.join(list(matched)[:3])}")
+        
+        if missing:
+            focus_areas.append(f"Explore experience with: {', '.join(list(missing)[:2])}")
+        
+        # Use enrichment insights
+        if candidate.skill_validations:
+            validated = candidate.skill_validations.get("validated_skills", [])
+            gaps = candidate.skill_validations.get("skill_gaps", [])
+            if gaps:
+                focus_areas.append(f"Address gaps: {', '.join(gaps[:2])}")
+        
+        # Experience level alignment
+        years = candidate.experience_years
+        if "senior" in job.job_title.lower() and years < 5:
+            focus_areas.append("Assess readiness for senior responsibilities")
+        elif years > 10:
+            focus_areas.append("Explore leadership and mentoring experience")
+        
+        return " | ".join(focus_areas) if focus_areas else "General technical and cultural fit assessment"
+    
+    def _build_opening_context(
+        self,
+        candidate: InterviewCandidateContext,
+        job: InterviewJobContext
+    ) -> str:
+        """Build context for the interview opening."""
+        first_name = candidate.name.split()[0]
+        
+        context_parts = [
+            f"Interviewing {first_name} for {job.job_title}.",
+            f"They have {candidate.experience_years} years experience."
+        ]
+        
+        if candidate.response_likelihood:
+            if candidate.response_likelihood >= 70:
+                context_parts.append("High engagement likelihood - be enthusiastic.")
+            elif candidate.response_likelihood <= 30:
+                context_parts.append("Passive candidate - respect their time.")
+        
+        return " ".join(context_parts)
+    
+    async def _generate_contextual_questions(
         self,
         candidate: InterviewCandidateContext,
         job: InterviewJobContext,
         count: int
     ) -> List[InterviewPlanQuestion]:
-        """Generate questions using LLM."""
+        """Generate questions tailored to candidate context."""
         
-        prompt = f"""Generate {count} interview questions for this candidate and role.
+        # Build rich context for question generation
+        candidate_context = self._build_question_generation_context(candidate)
+        
+        prompt = f"""Generate {count} SHORT interview questions for a 5-10 minute phone interview.
 
 CANDIDATE:
-- Name: {candidate.name}
-- Current Role: {candidate.current_title}
-- Company: {candidate.current_company or 'N/A'}
-- Experience: {candidate.experience_years} years
-- Skills: {', '.join(candidate.skills[:10])}
+{candidate_context}
 
-JOB REQUIREMENTS:
+JOB:
 - Title: {job.job_title}
-- Required Skills: {', '.join(job.required_skills[:8])}
-- Nice to Have: {', '.join(job.nice_to_have_skills[:5])}
-- Experience Required: {job.experience_required}
-- Responsibilities: {', '.join(job.key_responsibilities[:5])}
+- Required: {', '.join(job.required_skills[:5])}
+- Nice to have: {', '.join(job.nice_to_have_skills[:3])}
 
-INSTRUCTIONS:
-1. Be WARM and CONVERSATIONAL
-2. Use candidate's first name occasionally
-3. Add pauses with " - " for natural speech
-4. Questions should invite storytelling
-5. Mix: 2 technical, 1-2 behavioral, 1 experience-based
+RULES:
+1. Questions must be CONCISE - under 25 words each
+2. Use natural pauses with " - " 
+3. Focus on verifiable skills and real experiences
+4. Include the candidate's first name occasionally
+5. Mix: 1 technical/skill question, 1-2 behavioral/experience questions
 
-Return ONLY a JSON array:
+Return ONLY JSON array:
 [
   {{
-    "question_text": "The question with - for pauses",
-    "question_type": "technical|behavioral|experience|situational",
-    "expected_topics": ["topic1", "topic2"],
-    "skill_tags": ["skill1"],
-    "weight": 1.0
+    "question_text": "Short question with - for pauses",
+    "question_type": "technical|behavioral|experience",
+    "focus_area": "What skill/trait this evaluates",
+    "expected_duration_seconds": 90
   }}
 ]"""
 
         try:
-            response = await self._call_llm(prompt, temperature=0.7)
+            response = await self._call_llm(prompt, temperature=0.7, max_tokens=800)
             
-            # Parse JSON
             json_match = re.search(r'\[[\s\S]*\]', response)
             if json_match:
                 questions_data = json.loads(json_match.group())
@@ -770,14 +1342,14 @@ Return ONLY a JSON array:
                 return self._get_fallback_questions(candidate, job, count)
             
             questions = []
+            q_type_map = {
+                "technical": QuestionType.TECHNICAL,
+                "behavioral": QuestionType.BEHAVIORAL,
+                "experience": QuestionType.EXPERIENCE,
+                "situational": QuestionType.SITUATIONAL
+            }
+            
             for q_data in questions_data[:count]:
-                q_type_map = {
-                    "technical": QuestionType.TECHNICAL,
-                    "behavioral": QuestionType.BEHAVIORAL,
-                    "experience": QuestionType.EXPERIENCE,
-                    "situational": QuestionType.SITUATIONAL
-                }
-                
                 questions.append(InterviewPlanQuestion(
                     question_id=f"q-ai-{uuid.uuid4().hex[:8]}",
                     question_text=q_data.get("question_text", ""),
@@ -786,10 +1358,9 @@ Return ONLY a JSON array:
                         QuestionType.TECHNICAL
                     ),
                     order=0,
-                    expected_topics=q_data.get("expected_topics", []),
-                    skill_tags=q_data.get("skill_tags", []),
-                    weight=float(q_data.get("weight", 1.0)),
-                    time_limit_seconds=180
+                    expected_topics=[q_data.get("focus_area", "")],
+                    time_limit_seconds=q_data.get("expected_duration_seconds", 90),
+                    weight=1.0
                 ))
             
             return questions if questions else self._get_fallback_questions(candidate, job, count)
@@ -797,6 +1368,29 @@ Return ONLY a JSON array:
         except Exception as e:
             logger.error(f"AI question generation failed: {e}")
             return self._get_fallback_questions(candidate, job, count)
+    
+    def _build_question_generation_context(self, candidate: InterviewCandidateContext) -> str:
+        """Build rich context for question generation."""
+        parts = [
+            f"- Name: {candidate.name}",
+            f"- Current: {candidate.current_title} at {candidate.current_company or 'current company'}",
+            f"- Experience: {candidate.experience_years} years",
+            f"- Skills: {', '.join(candidate.skills[:8])}"
+        ]
+        
+        if candidate.enrichment_summary:
+            parts.append(f"- Background: {candidate.enrichment_summary[:200]}")
+        
+        if candidate.skill_validations:
+            validated = candidate.skill_validations.get("validated_skills", [])
+            if validated:
+                parts.append(f"- Verified skills: {', '.join(validated[:5])}")
+            
+            gaps = candidate.skill_validations.get("skill_gaps", [])
+            if gaps:
+                parts.append(f"- Potential gaps: {', '.join(gaps[:3])}")
+        
+        return "\n".join(parts)
     
     def _get_fallback_questions(
         self,
@@ -806,90 +1400,48 @@ Return ONLY a JSON array:
     ) -> List[InterviewPlanQuestion]:
         """Fallback questions if LLM fails."""
         first_name = candidate.name.split()[0]
-        skill = candidate.skills[0] if candidate.skills else "your primary skill"
+        skill = candidate.skills[0] if candidate.skills else "your work"
         
         fallback = [
             InterviewPlanQuestion(
                 question_id=f"q-fb-{uuid.uuid4().hex[:8]}",
                 question_text=(
-                    f"I'd love to hear about a challenging project you've worked on, {first_name}. - "
-                    f"Perhaps something involving {skill}? - "
-                    f"Walk me through the situation and how you approached it."
+                    f"Tell me about a challenging project you've worked on - "
+                    f"ideally something involving {skill}."
                 ),
                 question_type=QuestionType.TECHNICAL,
                 order=1,
                 expected_topics=["problem", "approach", "outcome"],
+                time_limit_seconds=120,
                 weight=1.5
             ),
             InterviewPlanQuestion(
                 question_id=f"q-fb-{uuid.uuid4().hex[:8]}",
                 question_text=(
-                    "Tell me about a time you had to work with someone "
-                    "who had a very different working style. - "
-                    "How did you handle that?"
+                    f"What's motivated you to explore new opportunities, {first_name}?"
                 ),
                 question_type=QuestionType.BEHAVIORAL,
                 order=1,
-                expected_topics=["situation", "approach", "resolution"],
-                weight=1.2
+                expected_topics=["motivation", "goals"],
+                time_limit_seconds=90,
+                weight=1.0
             ),
             InterviewPlanQuestion(
                 question_id=f"q-fb-{uuid.uuid4().hex[:8]}",
                 question_text=(
-                    f"What's a project you're particularly proud of, {first_name}? - "
-                    f"What made it special to you?"
-                ),
-                question_type=QuestionType.EXPERIENCE,
-                order=1,
-                expected_topics=["achievement", "impact", "learnings"],
-                weight=1.3
-            ),
-            InterviewPlanQuestion(
-                question_id=f"q-fb-{uuid.uuid4().hex[:8]}",
-                question_text=(
-                    "How do you stay current with new developments in your field? - "
-                    "What's something interesting you've learned recently?"
+                    "How do you typically approach learning new technologies?"
                 ),
                 question_type=QuestionType.CULTURE_FIT,
                 order=1,
-                expected_topics=["learning habits", "curiosity"],
-                weight=1.0
+                expected_topics=["learning", "growth"],
+                time_limit_seconds=90,
+                weight=0.8
             )
         ]
         return fallback[:count]
     
-    async def _generate_interview_focus(
-        self,
-        candidate: InterviewCandidateContext,
-        job: InterviewJobContext
-    ) -> str:
-        """Generate a summary of what to focus on."""
-        # Find skill gaps and overlaps
-        candidate_skills = set(s.lower() for s in candidate.skills)
-        required_skills = set(s.lower() for s in job.required_skills)
-        
-        matched = candidate_skills & required_skills
-        missing = required_skills - candidate_skills
-        
-        focus_areas = []
-        
-        if matched:
-            focus_areas.append(f"Validate depth in: {', '.join(list(matched)[:4])}")
-        
-        if missing:
-            focus_areas.append(f"Probe for experience in: {', '.join(list(missing)[:3])}")
-        
-        # Experience alignment
-        years = candidate.experience_years
-        if "senior" in job.job_title.lower() and years < 5:
-            focus_areas.append("Assess readiness for senior-level responsibilities")
-        elif "lead" in job.job_title.lower() or "manager" in job.job_title.lower():
-            focus_areas.append("Evaluate leadership and mentoring experience")
-        
-        return " | ".join(focus_areas) or "General technical and behavioral assessment"
-    
     # =========================================================================
-    # WEBHOOK HANDLING
+    # WEBHOOK HANDLING - COMPREHENSIVE
     # =========================================================================
     
     async def handle_webhook(
@@ -900,42 +1452,43 @@ Return ONLY a JSON array:
         """
         Handle incoming Vapi webhook events.
         
-        Event types:
-        - assistant-request: Vapi asking for assistant config (not used - we pre-create)
-        - function-call: Tool invocation from the LLM
+        Handles all event types:
+        - function-call / tool-calls: Tool invocations
         - status-update: Call status changes
-        - end-of-call-report: Final report with recording URLs
-        - transcript: Real-time transcript updates
+        - end-of-call-report: Final report
+        - transcript: Real-time transcripts
+        - hang: Connection issues
+        - speech-update: Speaking turns
         """
         event_type = event.type
         call_data = event.call or {}
         call_id = call_data.get("id")
         
-        logger.info(f"📥 Webhook: {event_type} for call {call_id}")
+        logger.info(f"Webhook: {event_type} for call {call_id}")
         
         # Find session by call_id
         session = await self._get_session_by_call_id(call_id)
         
-        if event_type == "function-call":
-            return await self._handle_function_call(session, event, raw_body)
+        # Handle different event types
+        handlers = {
+            "tool-calls": self._handle_tool_calls,
+            "function-call": self._handle_tool_calls,  # Legacy name
+            "status-update": self._handle_status_update,
+            "end-of-call-report": self._handle_end_of_call,
+            "transcript": self._handle_transcript_update,
+            "hang": self._handle_hang_notification,
+            "speech-update": self._handle_speech_update,
+            "conversation-update": self._handle_conversation_update,
+        }
         
-        elif event_type == "status-update":
-            await self._handle_status_update(session, event)
-            return {"status": "acknowledged"}
+        handler = handlers.get(event_type)
+        if handler:
+            return await handler(session, event, raw_body)
         
-        elif event_type == "end-of-call-report":
-            await self._handle_end_of_call(session, event, raw_body)
-            return {"status": "acknowledged"}
-        
-        elif event_type == "transcript":
-            await self._handle_transcript_update(session, event)
-            return {"status": "acknowledged"}
-        
-        else:
-            logger.debug(f"Unhandled event type: {event_type}")
-            return {"status": "ignored"}
+        logger.debug(f"Unhandled event type: {event_type}")
+        return {"status": "ignored"}
     
-    async def _handle_function_call(
+    async def _handle_tool_calls(
         self,
         session: Optional[InterviewSession],
         event: VapiWebhookEvent,
@@ -943,27 +1496,35 @@ Return ONLY a JSON array:
     ) -> Dict[str, Any]:
         """Handle tool/function calls from the LLM."""
         
-        # Extract function call details
         message = raw_body.get("message", {})
-        tool_calls = message.get("toolCalls", [])
+        tool_calls = message.get("toolCalls", []) or message.get("toolCallList", [])
         
         results = []
         
         for tool_call in tool_calls:
-            func_name = tool_call.get("function", {}).get("name")
-            func_args = tool_call.get("function", {}).get("arguments", {})
-            tool_call_id = tool_call.get("id")
+            # Handle both formats
+            if "function" in tool_call:
+                func_name = tool_call["function"].get("name")
+                func_args = tool_call["function"].get("arguments", {})
+            else:
+                func_name = tool_call.get("name")
+                func_args = tool_call.get("parameters", {})
             
-            logger.info(f"🔧 Function call: {func_name}")
+            tool_call_id = tool_call.get("id") or tool_call.get("toolCallId")
             
-            if func_name == "get_next_question":
-                result = await self._tool_get_next_question(session, func_args)
-            elif func_name == "record_response_quality":
+            logger.info(f"Tool call: {func_name}")
+            
+            # Route to appropriate handler
+            if func_name == "record_response_quality":
                 result = await self._tool_record_quality(session, func_args)
+            elif func_name == "capture_verification_data":
+                result = await self._tool_capture_verification(session, func_args)
             elif func_name == "end_interview":
                 result = await self._tool_end_interview(session, func_args)
+            elif func_name == "handle_issue":
+                result = await self._tool_handle_issue(session, func_args)
             else:
-                result = {"error": f"Unknown function: {func_name}"}
+                result = {"status": "unknown_function", "function": func_name}
             
             results.append({
                 "toolCallId": tool_call_id,
@@ -972,53 +1533,61 @@ Return ONLY a JSON array:
         
         return {"results": results}
     
-    async def _tool_get_next_question(
-        self,
-        session: Optional[InterviewSession],
-        args: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Get the next planned question."""
-        if not session or not session.plan:
-            return {"next_question": "Tell me about your experience.", "index": 0}
-        
-        current_idx = args.get("current_question_index", 0)
-        next_idx = current_idx + 1
-        
-        if next_idx >= len(session.plan.questions):
-            return {
-                "message": "All questions completed. Proceed to closing.",
-                "is_last": True
-            }
-        
-        next_q = session.plan.questions[next_idx]
-        return {
-            "next_question": next_q.question_text,
-            "question_type": next_q.question_type.value,
-            "index": next_idx,
-            "is_last": next_idx == len(session.plan.questions) - 1
-        }
-    
     async def _tool_record_quality(
         self,
         session: Optional[InterviewSession],
         args: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Record response quality for later analysis."""
+        quality_data = {
+            "question_topic": args.get("question_topic", "unknown"),
+            "quality": args.get("quality", "adequate"),
+            "key_points": args.get("key_points", []),
+            "follow_up_needed": args.get("follow_up_needed", False),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        if session and self.redis:
+            # Store in Redis list for this session
+            await self.redis.redis.rpush(
+                f"interview:{session.session_id}:quality_log",
+                json.dumps(quality_data)
+            )
+        
+        logger.info(f"Recorded: {quality_data['question_topic']} = {quality_data['quality']}")
+        return {"status": "recorded", "acknowledged": True}
+    
+    async def _tool_capture_verification(
+        self,
+        session: Optional[InterviewSession],
+        args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Capture verification data."""
+        data_type = args.get("data_type", "unknown")
+        value = args.get("value", "")
+        notes = args.get("notes", "")
+        
+        verification_entry = {
+            "type": data_type,
+            "value": value,
+            "notes": notes,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
         if session:
-            # Store in Redis for quick access during call
+            session_id = session.session_id
+            if session_id in self._verification_data:
+                self._verification_data[session_id]["captured"][data_type] = verification_entry
+            
             if self.redis:
-                quality_data = {
-                    "question_index": args.get("question_index"),
-                    "quality": args.get("quality"),
-                    "notes": args.get("notes", ""),
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                await self.redis.rpush(
-                    f"interview:{session.session_id}:quality",
-                    json.dumps(quality_data)
+                await self.redis.redis.hset(
+                    f"interview:{session_id}:verification",
+                    data_type,
+                    json.dumps(verification_entry)
                 )
         
-        return {"status": "recorded"}
+        logger.info(f"✅ Captured {data_type}: {value}")
+        return {"status": "captured", "data_type": data_type}
     
     async def _tool_end_interview(
         self,
@@ -1026,133 +1595,357 @@ Return ONLY a JSON array:
         args: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Signal interview completion."""
-        logger.info(f"Interview ending: {args.get('reason')}")
+        reason = args.get("reason", "completed")
+        
+        logger.info(f"Interview ending: {reason}")
+        
+        if session:
+            # Store end metadata
+            end_data = {
+                "reason": reason,
+                "questions_completed": args.get("questions_completed", 0),
+                "overall_impression": args.get("overall_impression", "neutral"),
+                "ended_at": datetime.utcnow().isoformat()
+            }
+            
+            if self.redis:
+                await self.redis.store_session_data(
+                    session.session_id,
+                    "interview_end_data",
+                    end_data,
+                    expire_seconds=86400
+                )
+                
+            # ACTUALLY END THE CALL via Vapi API
+            if session.vapi_call_id:
+                logger.info(f"Terminating call {session.vapi_call_id}")
+                # Schedule call termination after a brief delay (let closing message play)
+                asyncio.create_task(self._delayed_call_end(session.vapi_call_id, delay=3.0))
+        
+        
         return {
-            "message": "Interview complete. Delivering closing message.",
-            "action": "end_call"
+            "status": "ending",
+            "action": "deliver_closing_message",
+            "message": "Thank the candidate and end the call."
+        }
+        
+    async def _delayed_call_end(self, call_id: str, delay: float = 3.0):
+        """End call after a delay to let closing message play."""
+        await asyncio.sleep(delay)
+        await self._end_vapi_call(call_id)
+    
+    async def _tool_handle_issue(
+        self,
+        session: Optional[InterviewSession],
+        args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle reported issues during the call."""
+        issue_type = args.get("issue_type", "unknown")
+        resolved = args.get("resolved", False)
+        
+        logger.warning(f"⚠️ Issue reported: {issue_type}, resolved: {resolved}")
+        
+        if session and self.redis:
+            issue_data = {
+                "issue_type": issue_type,
+                "resolved": resolved,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            await self.redis.redis.rpush(
+                f"interview:{session.session_id}:issues",
+                json.dumps(issue_data)
+            )
+        
+        # Provide guidance based on issue type
+        guidance = {
+            "connection_problem": "If persistent, apologize and offer to reschedule.",
+            "audio_quality": "Ask candidate to move to a quieter location if possible.",
+            "candidate_distracted": "Offer to continue at a better time.",
+            "language_barrier": "Slow down and use simpler language.",
+            "candidate_confused": "Rephrase the question more simply."
+        }
+        
+        return {
+            "status": "logged",
+            "guidance": guidance.get(issue_type, "Continue as best as possible.")
         }
     
     async def _handle_status_update(
         self,
         session: Optional[InterviewSession],
-        event: VapiWebhookEvent
-    ):
+        event: VapiWebhookEvent,
+        raw_body: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Handle call status changes."""
         status = event.status
         call_data = event.call or {}
         
-        logger.info(f"📊 Status update: {status}")
+        logger.info(f"Status update: {status}")
         
         if not session:
-            return
+            logger.warning("No session found for status update")
+            return {"status": "acknowledged"}
         
+        # Map Vapi statuses to our statuses
         status_map = {
             "ringing": InterviewStatus.RINGING,
             "in-progress": InterviewStatus.IN_PROGRESS,
             "forwarding": InterviewStatus.IN_PROGRESS,
-            "ended": InterviewStatus.COMPLETED
+            "ended": InterviewStatus.COMPLETED,
+            "queued": InterviewStatus.CALLING,
         }
         
         if status in status_map:
+            old_status = session.status
             session.status = status_map[status]
             
+            # Record call start time
             if status == "in-progress" and not session.call_start_time:
                 session.call_start_time = datetime.utcnow().isoformat()
+                logger.info(f"📞 Call started for {session.session_id}")
             
             await self._store_session(session)
+            logger.info(f"   {old_status.value} → {session.status.value}")
+        
+        return {"status": "acknowledged"}
     
     async def _handle_end_of_call(
         self,
         session: Optional[InterviewSession],
         event: VapiWebhookEvent,
         raw_body: Dict[str, Any]
-    ):
-        """Handle end-of-call report with recordings."""
+    ) -> Dict[str, Any]:
+        """Handle end-of-call report with recordings and transcript."""
         logger.info("📞 Call ended - processing report")
         
         if not session:
             logger.warning("No session found for end-of-call report")
-            return
+            return {"status": "acknowledged"}
         
-        # Extract data from report
         message = raw_body.get("message", {})
         
-        # Update session with recording URLs
+        # Extract recording URLs (Vapi handles storage)
         session.recording_url = message.get("recordingUrl")
         session.stereo_recording_url = message.get("stereoRecordingUrl")
         session.call_end_time = datetime.utcnow().isoformat()
         
         # Calculate duration
         if session.call_start_time:
-            start = datetime.fromisoformat(session.call_start_time)
-            end = datetime.fromisoformat(session.call_end_time)
-            session.call_duration_seconds = (end - start).total_seconds()
+            try:
+                start = datetime.fromisoformat(session.call_start_time.replace('Z', '+00:00'))
+                end = datetime.fromisoformat(session.call_end_time)
+                session.call_duration_seconds = (end - start).total_seconds()
+            except Exception as e:
+                logger.warning(f"Could not calculate duration: {e}")
         
         # Extract transcript
-        transcript = message.get("transcript", "")
-        session.full_transcript = self._parse_transcript(transcript)
+        transcript_text = message.get("transcript", "")
+        session.full_transcript = self._parse_transcript(transcript_text)
         
-        # Set end reason
-        ended_reason = message.get("endedReason", "completed")
+        # Determine end reason
+        ended_reason = message.get("endedReason", "unknown")
+        session.call_end_reason = self._map_end_reason(ended_reason)
+        
+        # Set final status based on end reason
+        session.status = self._determine_final_status(session.call_end_reason, session.call_duration_seconds)
+        
+        await self._store_session(session)
+        
+        logger.info(f"   Duration: {session.call_duration_seconds:.1f}s")
+        logger.info(f"   End reason: {session.call_end_reason.value}")
+        logger.info(f"   Status: {session.status.value}")
+        logger.info(f"   Recording: {'Yes' if session.recording_url else 'No'}")
+        
+        # Trigger async analysis if call was meaningful
+        if session.call_duration_seconds and session.call_duration_seconds > 60:
+            asyncio.create_task(self._run_post_interview_analysis(session.session_id))
+        else:
+            logger.info("Call too short for analysis")
+        
+        return {"status": "acknowledged"}
+    
+    async def _handle_hang_notification(
+        self,
+        session: Optional[InterviewSession],
+        event: VapiWebhookEvent,
+        raw_body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle hang/delay notifications."""
+        logger.warning("Hang notification received - potential delay or issue")
+        
+        if session:
+            # Log the hang event
+            if self.redis:
+                await self.redis.redis.rpush(
+                    f"interview:{session.session_id}:events",
+                    json.dumps({
+                        "event": "hang",
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                )
+        
+        return {"status": "acknowledged"}
+    
+    async def _handle_speech_update(
+        self,
+        session: Optional[InterviewSession],
+        event: VapiWebhookEvent,
+        raw_body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle speech turn updates."""
+        message = raw_body.get("message", {})
+        speech_status = message.get("status")  # "started" or "stopped"
+        role = message.get("role")  # "assistant" or "user"
+        
+        # This can be used for real-time UI updates
+        if session and self.redis:
+            await self.redis.store_session_data(
+                session.session_id,
+                "speech_status",
+                {"status": speech_status, "role": role},
+                expire_seconds=60
+            )
+        
+        return {"status": "acknowledged"}
+    
+    async def _handle_conversation_update(
+        self,
+        session: Optional[InterviewSession],
+        event: VapiWebhookEvent,
+        raw_body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle conversation history updates."""
+        message = raw_body.get("message", {})
+        messages = message.get("messages", [])
+        
+        if session:
+            # Update transcript in real-time
+            session.full_transcript = [
+                {"role": m.get("role"), "content": m.get("message", m.get("content", ""))}
+                for m in messages
+            ]
+            # Don't save to DB on every update - too frequent
+            # Just update Redis for real-time access
+            if self.redis:
+                await self.redis.store_session_data(
+                    session.session_id,
+                    "live_transcript",
+                    session.full_transcript,
+                    expire_seconds=3600
+                )
+        
+        return {"status": "acknowledged"}
+    
+    async def _handle_transcript_update(
+        self,
+        session: Optional[InterviewSession],
+        event: VapiWebhookEvent,
+        raw_body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle real-time transcript updates."""
+        message = raw_body.get("message", {})
+        
+        if session and self.redis:
+            transcript_entry = {
+                "role": message.get("role", "unknown"),
+                "transcript": message.get("transcript", ""),
+                "type": message.get("transcriptType", "partial"),  # partial or final
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # Only store final transcripts
+            if transcript_entry["type"] == "final":
+                await self.redis.redis.rpush(
+                    f"interview:{session.session_id}:transcript_stream",
+                    json.dumps(transcript_entry)
+                )
+        
+        return {"status": "acknowledged"}
+    
+    def _map_end_reason(self, vapi_reason: str) -> CallEndReason:
+        """Map Vapi end reason to our CallEndReason enum."""
         reason_map = {
             "customer-ended-call": CallEndReason.HANGUP_CANDIDATE,
             "assistant-ended-call": CallEndReason.COMPLETED,
             "silence-timed-out": CallEndReason.SILENCE_TIMEOUT,
             "max-duration-reached": CallEndReason.MAX_DURATION,
             "voicemail": CallEndReason.VOICEMAIL,
-            "no-answer": CallEndReason.NO_ANSWER
+            "no-answer": CallEndReason.NO_ANSWER,
+            "busy": CallEndReason.BUSY,
+            "failed": CallEndReason.TECHNICAL_ERROR,
+            "error": CallEndReason.TECHNICAL_ERROR,
+            "machine-detected": CallEndReason.VOICEMAIL,
+            "customer-busy": CallEndReason.BUSY,
+            "customer-did-not-answer": CallEndReason.NO_ANSWER,
         }
-        session.call_end_reason = reason_map.get(ended_reason, CallEndReason.COMPLETED)
-        
-        # Set final status
-        if session.call_end_reason in [CallEndReason.COMPLETED, CallEndReason.HANGUP_CANDIDATE]:
-            session.status = InterviewStatus.COMPLETED
-        elif session.call_end_reason == CallEndReason.NO_ANSWER:
-            session.status = InterviewStatus.NO_ANSWER
-        elif session.call_end_reason == CallEndReason.VOICEMAIL:
-            session.status = InterviewStatus.VOICEMAIL
-        else:
-            session.status = InterviewStatus.FAILED
-        
-        await self._store_session(session)
-        
-        # Trigger async analysis
-        asyncio.create_task(self._run_post_interview_analysis(session.session_id))
+        return reason_map.get(vapi_reason, CallEndReason.COMPLETED)
     
-    async def _handle_transcript_update(
+    def _determine_final_status(
         self,
-        session: Optional[InterviewSession],
-        event: VapiWebhookEvent
-    ):
-        """Handle real-time transcript updates."""
-        if not session:
-            return
+        end_reason: CallEndReason,
+        duration: Optional[float]
+    ) -> InterviewStatus:
+        """Determine final interview status based on end reason and duration."""
         
-        # Store transcript chunks for real-time display
-        if self.redis and event.transcript:
-            for entry in event.transcript:
-                await self.redis.rpush(
-                    f"interview:{session.session_id}:transcript",
-                    json.dumps(entry)
-                )
+        # Successful completions
+        if end_reason == CallEndReason.COMPLETED:
+            return InterviewStatus.COMPLETED
+        
+        if end_reason == CallEndReason.HANGUP_CANDIDATE:
+            # If they talked for a while, consider it completed
+            if duration and duration > 90:  # More than 1:30 minutes
+                return InterviewStatus.COMPLETED
+            return InterviewStatus.CANCELLED
+        
+        # Unsuccessful attempts
+        if end_reason == CallEndReason.NO_ANSWER:
+            return InterviewStatus.NO_ANSWER
+        
+        if end_reason == CallEndReason.VOICEMAIL:
+            return InterviewStatus.VOICEMAIL
+        
+        if end_reason == CallEndReason.BUSY:
+            return InterviewStatus.FAILED
+        
+        if end_reason in [CallEndReason.TECHNICAL_ERROR, CallEndReason.NETWORK_ERROR]:
+            return InterviewStatus.FAILED
+        
+        if end_reason == CallEndReason.MAX_DURATION:
+            return InterviewStatus.COMPLETED  # They talked the whole time
+        
+        if end_reason == CallEndReason.SILENCE_TIMEOUT:
+            if duration and duration > 60:
+                return InterviewStatus.COMPLETED
+            return InterviewStatus.FAILED
+        
+        return InterviewStatus.COMPLETED
     
     def _parse_transcript(self, transcript: str) -> List[Dict[str, Any]]:
         """Parse transcript string into structured format."""
         entries = []
+        if not transcript:
+            return entries
+        
         lines = transcript.split('\n')
         
         for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
             if line.startswith("AI:") or line.startswith("Assistant:"):
+                content = line.split(":", 1)[1].strip() if ":" in line else line
                 entries.append({
                     "role": "assistant",
-                    "content": line.split(":", 1)[1].strip() if ":" in line else line,
-                    "timestamp": 0
+                    "content": content,
+                    "timestamp": None
                 })
             elif line.startswith("User:") or line.startswith("Human:"):
+                content = line.split(":", 1)[1].strip() if ":" in line else line
                 entries.append({
                     "role": "user",
-                    "content": line.split(":", 1)[1].strip() if ":" in line else line,
-                    "timestamp": 0
+                    "content": content,
+                    "timestamp": None
                 })
         
         return entries
@@ -1189,7 +1982,7 @@ Return ONLY a JSON array:
     
     async def _run_post_interview_analysis(self, session_id: str):
         """Run comprehensive analysis after interview completes."""
-        logger.info(f"🔍 Starting post-interview analysis for {session_id}")
+        logger.info(f"Starting post-interview analysis for {session_id}")
         
         try:
             session = await self.get_session(session_id)
@@ -1197,23 +1990,19 @@ Return ONLY a JSON array:
                 logger.error(f"Session not found for analysis: {session_id}")
                 return
             
-            # 1. Download recording if available
-            if session.recording_url:
-                await self._download_recording(session)
+            # 1. Gather quality logs from Redis
+            quality_logs = await self._get_quality_logs(session_id)
+            verification_data = self._verification_data.get(session_id, {}).get("captured", {})
             
             # 2. Generate clips from transcript
-            clips = await self._generate_clips(session)
+            clips = await self._generate_clips(session, quality_logs)
             session.clips = clips
             
-            # 3. Analyze each clip/response
-            for clip in clips:
-                clip.analysis = await self._analyze_response(session, clip)
-            
-            # 4. Generate final assessment
-            assessment = await self._generate_final_assessment(session)
+            # 3. Generate final assessment
+            assessment = await self._generate_final_assessment(session, quality_logs, verification_data)
             session.final_assessment = assessment
             
-            # 5. Save everything
+            # 4. Save everything
             await self._store_session(session)
             
             logger.info(f"✅ Analysis complete for {session_id}")
@@ -1221,232 +2010,175 @@ Return ONLY a JSON array:
             logger.info(f"   Recommendation: {assessment.recommendation}")
             
         except Exception as e:
-            logger.error(f"Post-interview analysis failed: {e}")
+            logger.error(f"Post-interview analysis failed: {e}", exc_info=True)
     
-    async def _download_recording(self, session: InterviewSession):
-        """Download and save the recording locally."""
-        if not session.recording_url:
-            return
+    async def _get_quality_logs(self, session_id: str) -> List[Dict[str, Any]]:
+        """Retrieve quality logs from Redis."""
+        if not self.redis:
+            return []
         
         try:
-            client = await self._get_http_client()
-            response = await client.get(session.recording_url)
-            response.raise_for_status()
-            
-            session_dir = self.storage_path / session.session_id
-            recording_path = session_dir / "full_recording.wav"
-            
-            with open(recording_path, "wb") as f:
-                f.write(response.content)
-            
-            session.recording_local_path = str(recording_path)
-            logger.info(f"Downloaded recording to {recording_path}")
-            
+            logs = []
+            raw_logs = self.redis.redis.lrange(f"interview:{session_id}:quality_log", 0, -1)
+            for log in raw_logs:
+                if isinstance(log, str):
+                    logs.append(json.loads(log))
+                elif isinstance(log, bytes):
+                    logs.append(json.loads(log.decode()))
+            return logs
         except Exception as e:
-            logger.error(f"Failed to download recording: {e}")
+            logger.error(f"Failed to get quality logs: {e}")
+            return []
     
-    async def _generate_clips(self, session: InterviewSession) -> List[InterviewClip]:
-        """Generate clips from transcript, one per Q&A pair."""
+    async def _generate_clips(
+        self,
+        session: InterviewSession,
+        quality_logs: List[Dict[str, Any]]
+    ) -> List[InterviewClip]:
+        """Generate clips from transcript with quality annotations."""
         clips = []
         
-        if not session.full_transcript or not session.plan:
+        if not session.full_transcript:
             return clips
         
         # Group transcript by Q&A exchanges
         current_question = None
         current_response_parts = []
-        question_idx = 0
+        clip_index = 0
         
         for entry in session.full_transcript:
             role = entry.get("role", "")
             content = entry.get("content", "")
             
             if role == "assistant" and "?" in content:
-                # This is likely a question
+                # Save previous Q&A
                 if current_question and current_response_parts:
-                    # Save previous Q&A as clip
-                    clips.append(self._create_clip_from_qa(
+                    clip = self._create_clip(
                         session,
                         current_question,
                         current_response_parts,
-                        question_idx
-                    ))
-                    question_idx += 1
+                        clip_index,
+                        quality_logs
+                    )
+                    if clip:
+                        clips.append(clip)
+                    clip_index += 1
                 
                 current_question = content
                 current_response_parts = []
             
-            elif role == "user":
+            elif role == "user" and content:
                 current_response_parts.append(content)
         
-        # Don't forget the last Q&A
+        # Don't forget last Q&A
         if current_question and current_response_parts:
-            clips.append(self._create_clip_from_qa(
+            clip = self._create_clip(
                 session,
                 current_question,
                 current_response_parts,
-                question_idx
-            ))
+                clip_index,
+                quality_logs
+            )
+            if clip:
+                clips.append(clip)
         
         return clips
     
-    def _create_clip_from_qa(
+    def _create_clip(
         self,
         session: InterviewSession,
         question: str,
         response_parts: List[str],
-        idx: int
-    ) -> InterviewClip:
+        index: int,
+        quality_logs: List[Dict[str, Any]]
+    ) -> Optional[InterviewClip]:
         """Create a clip from a Q&A pair."""
         response_text = " ".join(response_parts)
+        if len(response_text) < 10:
+            return None
+        
+        # Find matching quality log
+        quality_data = {}
+        if index < len(quality_logs):
+            quality_data = quality_logs[index]
         
         # Determine question type
         q_type = QuestionType.TECHNICAL
-        if session.plan and idx < len(session.plan.questions):
-            q_type = session.plan.questions[idx].question_type
+        if session.plan and index < len(session.plan.questions):
+            q_type = session.plan.questions[index].question_type
         
         return InterviewClip(
             clip_id=f"clip-{uuid.uuid4().hex[:12]}",
             session_id=session.session_id,
-            start_time_seconds=0,  # Would need audio processing for accurate timing
+            start_time_seconds=0,
             end_time_seconds=0,
             duration_seconds=0,
             question_asked=question,
             question_type=q_type,
-            candidate_response=response_text
+            candidate_response=response_text,
+            is_highlight=quality_data.get("quality") == "excellent",
+            analysis=ResponseAnalysis(
+                key_points_covered=quality_data.get("key_points", []),
+                topics_mentioned=[quality_data.get("question_topic", "")],
+                skills_demonstrated=[],
+                relevance_score=self._quality_to_score(quality_data.get("quality", "adequate")),
+                depth_score=self._quality_to_score(quality_data.get("quality", "adequate")),
+                clarity_score=self._quality_to_score(quality_data.get("quality", "adequate")),
+                overall_score=self._quality_to_score(quality_data.get("quality", "adequate")),
+                confidence_assessment=ConfidenceLevel.MEDIUM,
+                strengths=[],
+                areas_for_improvement=[],
+                red_flags=[],
+                brief_summary=f"Response quality: {quality_data.get('quality', 'not recorded')}"
+            ) if quality_data else None
         )
     
-    async def _analyze_response(
-        self,
-        session: InterviewSession,
-        clip: InterviewClip
-    ) -> ResponseAnalysis:
-        """Analyze a single response."""
-        
-        if not clip.candidate_response or len(clip.candidate_response) < 10:
-            return ResponseAnalysis(
-                key_points_covered=[],
-                topics_mentioned=[],
-                skills_demonstrated=[],
-                relevance_score=0,
-                depth_score=0,
-                clarity_score=0,
-                overall_score=0,
-                confidence_assessment=ConfidenceLevel.UNCERTAIN,
-                strengths=[],
-                areas_for_improvement=["No substantive response"],
-                red_flags=["Minimal response"],
-                brief_summary="Response too brief to analyze"
-            )
-        
-        prompt = f"""Analyze this interview response.
-
-CONTEXT:
-- Candidate: {session.candidate.name} ({session.candidate.experience_years} yrs exp)
-- Role: {session.candidate.current_title}
-- Applying for: {session.job.job_title}
-
-QUESTION: "{clip.question_asked[:300]}"
-RESPONSE: "{clip.candidate_response[:800]}"
-
-Analyze and return JSON:
-{{
-    "key_points_covered": ["point1", "point2"],
-    "topics_mentioned": ["topic1"],
-    "skills_demonstrated": ["skill1"],
-    "relevance_score": 0-100,
-    "depth_score": 0-100,
-    "clarity_score": 0-100,
-    "overall_score": 0-100,
-    "confidence_assessment": "high|medium|low|uncertain",
-    "strengths": ["strength1"],
-    "areas_for_improvement": ["area1"],
-    "red_flags": [],
-    "brief_summary": "One sentence summary"
-}}
-
-SCORING: 80-100=Excellent, 60-79=Good, 40-59=Adequate, 20-39=Weak"""
-
-        try:
-            response = await self._call_llm(prompt, temperature=0.3)
-            
-            json_match = re.search(r'\{[\s\S]*\}', response)
-            if json_match:
-                data = json.loads(json_match.group())
-                return ResponseAnalysis(
-                    key_points_covered=data.get("key_points_covered", []),
-                    topics_mentioned=data.get("topics_mentioned", []),
-                    skills_demonstrated=data.get("skills_demonstrated", []),
-                    relevance_score=float(data.get("relevance_score", 50)),
-                    depth_score=float(data.get("depth_score", 50)),
-                    clarity_score=float(data.get("clarity_score", 50)),
-                    overall_score=float(data.get("overall_score", 50)),
-                    confidence_assessment=ConfidenceLevel(
-                        data.get("confidence_assessment", "medium")
-                    ),
-                    strengths=data.get("strengths", []),
-                    areas_for_improvement=data.get("areas_for_improvement", []),
-                    red_flags=data.get("red_flags", []),
-                    brief_summary=data.get("brief_summary", "Response analyzed")
-                )
-        except Exception as e:
-            logger.error(f"Response analysis failed: {e}")
-        
-        return ResponseAnalysis(
-            key_points_covered=[],
-            topics_mentioned=[],
-            skills_demonstrated=[],
-            relevance_score=50,
-            depth_score=50,
-            clarity_score=50,
-            overall_score=50,
-            confidence_assessment=ConfidenceLevel.UNCERTAIN,
-            strengths=["Response provided"],
-            areas_for_improvement=["Manual review needed"],
-            red_flags=[],
-            brief_summary="Analysis pending review"
-        )
+    def _quality_to_score(self, quality: str) -> float:
+        """Convert quality label to numeric score."""
+        scores = {
+            "excellent": 90,
+            "good": 75,
+            "adequate": 60,
+            "weak": 40,
+            "concerning": 25
+        }
+        return scores.get(quality, 50)
     
     async def _generate_final_assessment(
         self,
-        session: InterviewSession
+        session: InterviewSession,
+        quality_logs: List[Dict[str, Any]],
+          verification_data: Dict[str, Any]
     ) -> InterviewAssessment:
         """Generate comprehensive final assessment."""
         
-        # Gather clip analyses
-        clip_summaries = []
-        total_score = 0
-        score_count = 0
+        # Calculate scores from quality logs
+        scores = [self._quality_to_score(q.get("quality", "adequate")) for q in quality_logs]
+        avg_score = sum(scores) / max(len(scores), 1) if scores else 50
+        verification_summary = {k: v.get("value") for k, v in verification_data.items()}
+        # Build context for assessment
+        quality_summary = []
+        for log in quality_logs:
+            quality_summary.append({
+                "topic": log.get("question_topic", "unknown"),
+                "quality": log.get("quality", "adequate"),
+                "key_points": log.get("key_points", [])
+            })
         
-        for clip in session.clips:
-            if clip.analysis:
-                clip_summaries.append({
-                    "question": clip.question_asked[:200],
-                    "type": clip.question_type.value,
-                    "score": clip.analysis.overall_score,
-                    "summary": clip.analysis.brief_summary
-                })
-                total_score += clip.analysis.overall_score
-                score_count += 1
-        
-        avg_score = total_score / max(score_count, 1)
-        
-        prompt = f"""Generate a comprehensive interview assessment.
+        prompt = f"""Generate a brief interview assessment.
 
 CANDIDATE: {session.candidate.name}
-ROLE: {session.candidate.current_title} at {session.candidate.current_company or 'N/A'}
+ROLE: {session.candidate.current_title}
 EXPERIENCE: {session.candidate.experience_years} years
-SKILLS: {', '.join(session.candidate.skills[:8])}
 
 TARGET ROLE: {session.job.job_title}
-REQUIRED SKILLS: {', '.join(session.job.required_skills[:6])}
+REQUIRED SKILLS: {', '.join(session.job.required_skills[:5])}
+VERIFICATION: {json.dumps(verification_summary)}
+CALL DURATION: {session.call_duration_seconds:.0f} seconds
+QUALITY SUMMARY: {json.dumps(quality_summary)}
+AVERAGE SCORE: {avg_score:.0f}/100
 
-RESPONSE SUMMARIES:
-{json.dumps(clip_summaries, indent=2)}
-
-AVERAGE SCORE: {avg_score:.1f}
-
-Generate assessment JSON:
+Generate JSON:
 {{
     "overall_score": 0-100,
     "technical_score": 0-100,
@@ -1454,31 +2186,21 @@ Generate assessment JSON:
     "culture_fit_score": 0-100,
     "recommendation": "strong_hire|hire|maybe|no_hire",
     "recommendation_confidence": "high|medium|low",
-    "top_strengths": ["strength1", "strength2", "strength3"],
+    "top_strengths": ["strength1", "strength2"],
     "concerns": ["concern1"] or [],
-    "notable_moments": ["moment1"],
-    "executive_summary": "2-3 sentence summary for hiring manager",
-    "language_proficiency": {{"english": "excellent|good|fair|poor"}}
+    "executive_summary": "One sentence summary"
 }}
 
-CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
+SCORING: 80-100=Excellent, 60-79=Good, 40-59=Adequate, <40=Weak"""
 
         try:
-            response = await self._call_llm(prompt, temperature=0.3)
+            response = await self._call_llm(prompt, temperature=0.3, max_tokens=500)
             
             json_match = re.search(r'\{[\s\S]*\}', response)
             if json_match:
                 data = json.loads(json_match.group())
                 
-                # Identify highlight clips
-                highlight_clips = []
-                red_flag_clips = []
-                for clip in session.clips:
-                    if clip.analysis:
-                        if clip.analysis.overall_score >= 80:
-                            highlight_clips.append(clip.clip_id)
-                        if clip.analysis.red_flags:
-                            red_flag_clips.append(clip.clip_id)
+                highlight_clips = [c.clip_id for c in session.clips if c.is_highlight]
                 
                 return InterviewAssessment(
                     overall_score=float(data.get("overall_score", avg_score)),
@@ -1491,17 +2213,17 @@ CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
                     ),
                     skill_scores={},
                     question_scores={
-                        clip.clip_id: clip.analysis.overall_score
-                        for clip in session.clips if clip.analysis
+                        c.clip_id: c.analysis.overall_score
+                        for c in session.clips if c.analysis
                     },
                     top_strengths=data.get("top_strengths", []),
                     concerns=data.get("concerns", []),
-                    notable_moments=data.get("notable_moments", []),
+                    notable_moments=[],
                     highlight_clips=highlight_clips,
-                    red_flag_clips=red_flag_clips,
+                    red_flag_clips=[],
                     executive_summary=data.get("executive_summary", "Interview completed."),
                     detailed_report="",
-                    language_proficiency=data.get("language_proficiency", {"english": "good"})
+                    language_proficiency={"english": "good"}
                 )
                 
         except Exception as e:
@@ -1535,8 +2257,8 @@ CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
         self,
         prompt: str,
         temperature: float = 0.3,
-        max_tokens: int = 2000,
-        model: str = "anthropic/claude-sonnet-4.5"
+        max_tokens: int = 1000,
+        model: str = MODEL_PLANNING
     ) -> str:
         """Call LLM via OpenRouter."""
         if not self.openrouter_api_key:
@@ -1589,14 +2311,17 @@ CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
     # PUBLIC API METHODS
     # =========================================================================
     
-    async def get_interview_results(
-        self,
-        session_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """Get complete interview results for frontend display."""
+  # =========================================================================
+    # PUBLIC API
+    # =========================================================================
+    
+    async def get_interview_results(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get interview results."""
         session = await self.get_session(session_id)
         if not session:
             return None
+        
+        verification = self._verification_data.get(session_id, {}).get("captured", {})
         
         return {
             "session_id": session.session_id,
@@ -1605,39 +2330,33 @@ CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
                 "name": session.candidate.name,
                 "title": session.candidate.current_title,
                 "company": session.candidate.current_company,
-                "phone": session.phone_number_called
+                "experience_years": session.candidate.experience_years
             },
             "job": {
                 "title": session.job.job_title,
                 "company": session.job.company_name
             },
             "call_info": {
+                "duration_seconds": session.call_duration_seconds,
                 "duration_minutes": session.call_duration_seconds / 60 if session.call_duration_seconds else None,
-                "start_time": session.call_start_time,
-                "end_time": session.call_end_time,
                 "end_reason": session.call_end_reason.value if session.call_end_reason else None
             },
+            "verification_data": {k: v.get("value") for k, v in verification.items()},
             "recording_url": session.recording_url,
+            "assessment": session.final_assessment.model_dump() if session.final_assessment else None,
             "clips": [
                 {
-                    "clip_id": clip.clip_id,
-                    "question": clip.question_asked,
-                    "question_type": clip.question_type.value,
-                    "response": clip.candidate_response,
-                    "score": clip.analysis.overall_score if clip.analysis else None,
-                    "summary": clip.analysis.brief_summary if clip.analysis else None,
-                    "is_highlight": clip.is_highlight,
-                    "strengths": clip.analysis.strengths if clip.analysis else [],
-                    "concerns": clip.analysis.red_flags if clip.analysis else []
+                    "clip_id": c.clip_id,
+                    "question": c.question_asked,
+                    "response": c.candidate_response,
+                    "score": c.analysis.overall_score if c.analysis else None,
+                    "is_highlight": c.is_highlight
                 }
-                for clip in session.clips
+                for c in session.clips
             ],
-            "assessment": session.final_assessment.model_dump() if session.final_assessment else None,
-            "transcript": session.full_transcript,
-            "created_at": session.created_at,
-            "completed_at": session.call_end_time
-}
-        
+            "transcript": session.full_transcript
+        }
+    
     async def list_interviews(
         self,
         username: str,
@@ -1645,7 +2364,7 @@ CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
         limit: int = 20,
         offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
-        """List interviews with filtering."""
+        """List interviews."""
         if self.db and hasattr(self.db, 'main_db'):
             collection = self.db.main_db["interview_sessions"]
             
@@ -1664,13 +2383,13 @@ CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
                     "candidate_name": doc.get("candidate", {}).get("name"),
                     "job_title": doc.get("job", {}).get("job_title"),
                     "status": doc.get("status"),
+                    "duration_seconds": doc.get("call_duration_seconds"),
                     "created_at": doc.get("created_at"),
                     "score": doc.get("final_assessment", {}).get("overall_score") if doc.get("final_assessment") else None
                 })
             
             return interviews, total
         
-        # In-memory fallback
         all_sessions = list(self._sessions.values())
         filtered = [s for s in all_sessions if s.created_by == username]
         if status:
@@ -1682,7 +2401,29 @@ CALIBRATION: 85-100=Exceptional, 70-84=Strong, 55-69=Decent, 40-54=Below bar"""
                 "candidate_name": s.candidate.name,
                 "job_title": s.job.job_title,
                 "status": s.status.value,
-                "created_at": s.created_at
+                "score": s.final_assessment.overall_score if s.final_assessment else None
             }
             for s in filtered[offset:offset+limit]
         ], len(filtered)
+    
+    async def retry_failed_call(self, session_id: str) -> StartCallResponse:
+        """Retry failed call."""
+        session = await self.get_session(session_id)
+        if not session:
+            raise ValueError(f"Session not found: {session_id}")
+        
+        retry_count = self._retry_counts.get(session_id, 0)
+        if retry_count >= MAX_RETRY_ATTEMPTS:
+            raise ValueError(f"Max retries exceeded")
+        
+        if session.status not in [InterviewStatus.FAILED, InterviewStatus.NO_ANSWER]:
+            raise ValueError(f"Cannot retry - status is {session.status.value}")
+        
+        session.status = InterviewStatus.PENDING
+        session.vapi_call_id = None
+        session.call_start_time = None
+        await self._store_session(session)
+        
+        self._retry_counts[session_id] = retry_count + 1
+        
+        return await self.start_call(session_id)

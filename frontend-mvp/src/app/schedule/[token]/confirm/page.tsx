@@ -1,4 +1,7 @@
-
+/* eslint-disable react/no-unescaped-entities */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+//@ts-nocheck
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -9,15 +12,15 @@ import {
     CheckCircle2,
     Calendar,
     Clock,
-    MapPin,
-    Mail,
     Phone,
-    CalendarPlus,
+    Mail,
     ArrowRight,
-    Sparkles
+    CalendarPlus
 } from 'lucide-react';
+import { format, parseISO } from 'date-fns';
 
 import { SchedulingLayout } from '@/components/scheduling/SchedulingLayout';
+import { createGoogleCalendarUrl } from '@/utils/calendar';
 
 export default function ConfirmationPage() {
     const params = useParams();
@@ -25,12 +28,46 @@ export default function ConfirmationPage() {
     const token = params.token as string;
     const scheduleId = searchParams.get('id');
 
-    // In a real app, you'd fetch the booking details
-    // For now, we'll show a generic confirmation
+    // Get booking details from session storage (saved during booking)
+    const [bookingDetails, setBookingDetails] = useState<any>(null);
+
+    useEffect(() => {
+        // Retrieve booking details from sessionStorage
+        const savedDetails = sessionStorage.getItem('booking_details');
+        if (savedDetails) {
+            setBookingDetails(JSON.parse(savedDetails));
+        }
+    }, []);
+
+    if (!bookingDetails) {
+        return (
+            <SchedulingLayout>
+                <div className="max-w-xl mx-auto text-center py-20">
+                    <p className="text-white/60">Loading confirmation...</p>
+                </div>
+            </SchedulingLayout>
+        );
+    }
+
+    const startTime = parseISO(bookingDetails.scheduled_datetime);
+    const formattedDate = format(startTime, 'EEEE, MMMM d, yyyy');
+    const formattedTime = format(startTime, 'h:mm a');
+
+    const handleAddToCalendar = () => {
+        const calendarUrl = createGoogleCalendarUrl(
+            `Interview: ${bookingDetails.job_title}`,
+            bookingDetails.scheduled_datetime,
+            bookingDetails.duration_minutes,
+            `AI-powered voice interview for ${bookingDetails.job_title}${bookingDetails.company_name ? ` at ${bookingDetails.company_name}` : ''}.\n\nYou will receive a phone call at ${bookingDetails.phone_number} at the scheduled time.\n\nPlease ensure you're in a quiet location with good phone reception.\n\nBooking ID: ${scheduleId}`,
+            'Phone Call'
+        );
+
+        window.open(calendarUrl, '_blank');
+    };
 
     return (
         <SchedulingLayout>
-            <div className="max-w-xl mx-auto text-center">
+            <div className="max-w-2xl mx-auto">
                 {/* Success Animation */}
                 <motion.div
                     initial={{ scale: 0 }}
@@ -41,14 +78,14 @@ export default function ConfirmationPage() {
                         damping: 15,
                         delay: 0.1
                     }}
-                    className="w-24 h-24 mx-auto mb-8 rounded-full bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center"
+                    className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-xl shadow-emerald-500/30"
                 >
                     <motion.div
                         initial={{ scale: 0, rotate: -180 }}
                         animate={{ scale: 1, rotate: 0 }}
                         transition={{ delay: 0.3, type: "spring" }}
                     >
-                        <CheckCircle2 className="w-12 h-12 text-white" />
+                        <CheckCircle2 className="w-10 h-10 text-white" />
                     </motion.div>
                 </motion.div>
 
@@ -57,13 +94,13 @@ export default function ConfirmationPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.4 }}
+                    className="text-center mb-8"
                 >
-                    <h1 className="text-3xl font-bold text-white mb-3">
-                        You're All Set! 🎉
+                    <h1 className="text-2xl font-bold text-white mb-2">
+                        Interview Confirmed
                     </h1>
-                    <p className="text-[16px] text-white/60 mb-8">
-                        Your interview has been scheduled successfully.
-                        We've sent a confirmation email with all the details.
+                    <p className="text-[14px] text-white/60">
+                        You're all set! Check your email for confirmation details.
                     </p>
                 </motion.div>
 
@@ -72,32 +109,51 @@ export default function ConfirmationPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.5 }}
-                    className="bg-white/[0.03] border border-white/[0.08] rounded-2xl p-6 mb-8 text-left"
+                    className="border border-white/[0.08] rounded-xl overflow-hidden mb-6"
                 >
-                    <div className="flex items-center gap-3 mb-6">
-                        <div className="p-2 bg-green-500/10 rounded-lg">
-                            <Sparkles className="w-5 h-5 text-green-400" />
-                        </div>
-                        <div>
-                            <h3 className="text-[15px] font-semibold text-white">Interview Confirmed</h3>
-                            <p className="text-[13px] text-white/50">Booking ID: {scheduleId?.slice(0, 8) || 'N/A'}</p>
-                        </div>
+                    {/* Header */}
+                    <div className="bg-gradient-to-r from-[#0b6aff]/10 to-emerald-500/10 border-b border-white/[0.08] px-6 py-4">
+                        <h2 className="text-base font-semibold text-white mb-1">
+                            {bookingDetails.job_title}
+                        </h2>
+                        {bookingDetails.company_name && (
+                            <p className="text-[13px] text-white/60">
+                                {bookingDetails.company_name}
+                            </p>
+                        )}
                     </div>
 
-                    <div className="space-y-4">
-                        <InfoRow icon={Calendar} label="What's Next">
-                            <span className="text-white">
-                                You'll receive a phone call at the scheduled time
-                            </span>
-                        </InfoRow>
+                    {/* Details */}
+                    <div className="p-6 space-y-4">
+                        <InfoRow
+                            icon={<Calendar className="w-4 h-4 text-[#0b6aff]" />}
+                            label="Date & Time"
+                            value={`${formattedDate} at ${formattedTime} IST`}
+                        />
+                        <InfoRow
+                            icon={<Clock className="w-4 h-4 text-emerald-400" />}
+                            label="Duration"
+                            value={`${bookingDetails.duration_minutes} minutes`}
+                        />
+                        <InfoRow
+                            icon={<Phone className="w-4 h-4 text-violet-400" />}
+                            label="Phone Number"
+                            value={bookingDetails.phone_number}
+                        />
+                        {bookingDetails.candidate_email && (
+                            <InfoRow
+                                icon={<Mail className="w-4 h-4 text-amber-400" />}
+                                label="Confirmation Sent"
+                                value={bookingDetails.candidate_email}
+                            />
+                        )}
+                    </div>
 
-                        <InfoRow icon={Phone} label="Interview Type">
-                            <span className="text-white">Voice Interview (Phone Call)</span>
-                        </InfoRow>
-
-                        <InfoRow icon={Mail} label="Confirmation">
-                            <span className="text-white">Check your email for details</span>
-                        </InfoRow>
+                    {/* Notice */}
+                    <div className="bg-[#0b6aff]/5 border-t border-[#0b6aff]/10 px-6 py-4">
+                        <p className="text-[12px] text-white/60 leading-relaxed">
+                            You'll receive an AI-powered voice call at your registered phone number. Please ensure you're in a quiet location with good reception.
+                        </p>
                     </div>
                 </motion.div>
 
@@ -108,16 +164,19 @@ export default function ConfirmationPage() {
                     transition={{ delay: 0.6 }}
                     className="space-y-3"
                 >
-                    <button className="w-full py-3.5 bg-white/[0.06] border border-white/[0.08] text-white text-[14px] font-medium rounded-xl hover:bg-white/[0.1] transition-colors flex items-center justify-center gap-2">
+                    <button
+                        onClick={handleAddToCalendar}
+                        className="w-full py-3.5 bg-[#0b6aff] hover:bg-[#0b6aff]/90 text-white text-[14px] font-semibold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#0b6aff]/20"
+                    >
                         <CalendarPlus className="w-5 h-5" />
-                        Add to Calendar
+                        Add to Google Calendar
                     </button>
 
                     <Link
-                        href={`/schedule/${token}/reschedule`}
-                        className="w-full py-3.5 bg-transparent text-white/60 text-[14px] rounded-xl hover:text-white transition-colors flex items-center justify-center gap-2"
+                        href="/"
+                        className="w-full py-3.5 text-white/60 text-[13px] rounded-xl hover:text-white transition-colors flex items-center justify-center gap-2"
                     >
-                        Need to reschedule?
+                        Back to Home
                         <ArrowRight className="w-4 h-4" />
                     </Link>
                 </motion.div>
@@ -127,26 +186,26 @@ export default function ConfirmationPage() {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ delay: 0.8 }}
-                    className="mt-12 pt-8 border-t border-white/[0.08]"
+                    className="mt-10 pt-8 border-t border-white/[0.08]"
                 >
-                    <h3 className="text-[14px] font-medium text-white mb-4">
-                        Tips for Your Interview
+                    <h3 className="text-[13px] font-semibold text-white mb-4 text-center">
+                        Interview Preparation Tips
                     </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <TipCard
-                            emoji="📱"
-                            title="Be Ready"
+                            icon={<Phone className="w-5 h-5 text-[#0b6aff]" />}
+                            title="Phone Ready"
                             description="Keep your phone charged and nearby"
                         />
                         <TipCard
-                            emoji="🤫"
+                            icon={<Calendar className="w-5 h-5 text-emerald-400" />}
                             title="Quiet Space"
                             description="Find a quiet place with good reception"
                         />
                         <TipCard
-                            emoji="📝"
+                            icon={<Clock className="w-5 h-5 text-violet-400" />}
                             title="Be Prepared"
-                            description="Review your experience and achievements"
+                            description="Review your experience beforehand"
                         />
                     </div>
                 </motion.div>
@@ -155,34 +214,26 @@ export default function ConfirmationPage() {
     );
 }
 
-function InfoRow({
-    icon: Icon,
-    label,
-    children
-}: {
-    icon: React.ComponentType<{ className?: string }>;
-    label: string;
-    children: React.ReactNode;
-}) {
+function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
     return (
         <div className="flex items-start gap-3">
-            <div className="p-2 bg-white/[0.06] rounded-lg">
-                <Icon className="w-4 h-4 text-white/60" />
+            <div className="w-8 h-8 rounded-lg bg-white/[0.03] flex items-center justify-center flex-shrink-0">
+                {icon}
             </div>
-            <div>
-                <p className="text-[12px] text-white/40">{label}</p>
-                <div className="text-[14px]">{children}</div>
+            <div className="flex-1">
+                <p className="text-[11px] text-white/40 font-medium mb-0.5">{label}</p>
+                <p className="text-[13px] text-white">{value}</p>
             </div>
         </div>
     );
 }
 
-function TipCard({ emoji, title, description }: { emoji: string; title: string; description: string }) {
+function TipCard({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
     return (
-        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-            <div className="text-2xl mb-2">{emoji}</div>
-            <h4 className="text-[13px] font-medium text-white mb-1">{title}</h4>
-            <p className="text-[12px] text-white/50">{description}</p>
+        <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-4">
+            <div className="mb-2">{icon}</div>
+            <h4 className="text-[12px] font-semibold text-white mb-1">{title}</h4>
+            <p className="text-[11px] text-white/50 leading-relaxed">{description}</p>
         </div>
     );
 }

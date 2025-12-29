@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export type CandidateStage =
   | "sourced"
   | "shortlisted"
@@ -170,22 +171,31 @@ export interface PipelineSettings {
 
 export interface Pipeline {
   pipeline_id: string;
-  name: string;
-  job_title: string;
-  company_name: string | null;
-  source: string;
-  status: string;
-  is_active: boolean;
+  username: string;
+  conversation_session_id: string;
+  search_session_id?: string;
+
+  // Single candidate (not array)
+  candidate: PipelineCandidate;
+
+  job: JobContext;
+  stage: string;
+  stage_label: string;
   created_at: string;
   updated_at: string;
-  stats: PipelineStats;
-  candidates: PipelineCandidate[];
-  total_candidates: number;
-  stage_distribution: Record<string, number>;
-  pipeline_stages: PipelineStage[];
-  funnel: Record<string, number>;
-  settings: PipelineSettings;
-  job: JobContext;
+
+  // Enrichment data (from IntelligentEnrichmentOrchestrator)
+  match_analysis?: any;
+  skill_validation?: any;
+  salary_timeline?: any;
+  notice_period?: any;
+  response_likelihood?: any;
+  professional_footprint?: any;
+
+  contact: {
+    email?: string;
+    phone?: string;
+  };
 }
 
 export interface PipelineListItem {
@@ -198,4 +208,36 @@ export interface PipelineListItem {
   stats: PipelineStats;
   created_at: string;
   updated_at: string;
+}
+
+export interface PipelineSession {
+  session_id: string;
+  batch_id: string;
+  source: "donna_search" | "manual_import";
+  job_title: string;
+  total_candidates: number;
+  status_counts: {
+    pending: number;
+    enriching: number;
+    enriched: number;
+    outreach_sent: number;
+    responded: number;
+    interview_scheduled: number;
+    interview_completed: number;
+    failed: number;
+  };
+  // Action flags - when HR needs to do something
+  needs_action: {
+    needs_email_input: number; // Count of candidates needing manual email
+    needs_outreach_start: number; // Enriched but not contacted
+    needs_review: number; // Responses to review
+  };
+  created_at: string;
+  last_updated: string;
+}
+
+export interface PipelineListResponse {
+  success: boolean;
+  sessions: PipelineSession[];
+  total: number;
 }

@@ -644,6 +644,7 @@ export default function DeepDivePage() {
     const [jobDescription, setJobDescription] = useState("");
     const [jdFile, setJdFile] = useState<File | null>(null);
     const [jdInputMode, setJdInputMode] = useState<"text" | "file">("text");
+    const [isPreFilled, setIsPreFilled] = useState(false);
 
     // UI state
     const [isLoading, setIsLoading] = useState(false);
@@ -669,6 +670,59 @@ export default function DeepDivePage() {
             loadSharedResult(sharedId);
         }
     }, [searchParams]);
+
+    //  Pre-fill from URL params
+    useEffect(() => {
+        const urlLinkedinUrl = searchParams.get('linkedin_url');
+        const urlJd = searchParams.get('jd');
+        const candidateName = searchParams.get('candidate_name');
+        const fromSession = searchParams.get('from_session');
+
+        // If we have LinkedIn URL, pre-fill it
+        if (urlLinkedinUrl) {
+            setLinkedinUrl(urlLinkedinUrl);
+            setIsPreFilled(true);
+        }
+
+        // If JD is provided in URL, use it
+        if (urlJd && urlJd.trim().length > 0) {
+            setJobDescription(urlJd);
+        }
+        // Otherwise, if we have a session ID, fetch the JD from backend
+        else if (fromSession && token) {
+            fetchJobDescriptionFromSession(fromSession);
+        }
+
+        console.log(`Pre-filled data for ${candidateName || 'candidate'} from session ${fromSession || 'search'}`);
+    }, [searchParams, token]);
+
+    // New function to fetch JD from session
+    const fetchJobDescriptionFromSession = async (sessionId: string) => {
+        try {
+            const res = await fetch(
+                `${process.env.NEXT_PUBLIC_API_BASE_URL}/conversation/${sessionId}/job-description`,
+                {
+                    headers: token ? { Authorization: `Bearer ${token}` } : {}
+                }
+            );
+
+            if (!res.ok) {
+                console.error('Failed to fetch JD from session');
+                return;
+            }
+
+            const data = await res.json();
+
+            if (data.success && data.jd_text) {
+                setJobDescription(data.jd_text);
+                console.log(`✅ Loaded JD from session ${sessionId}`);
+            } else {
+                console.warn('No JD text found in session');
+            }
+        } catch (err) {
+            console.error('Error fetching JD from session:', err);
+        }
+    };
 
     const loadSharedResult = async (id: string) => {
         setIsLoading(true);
@@ -1585,7 +1639,14 @@ export default function DeepDivePage() {
                         <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => router.push("/dashboard")}
+                            onClick={() => {
+                                const fromSession = searchParams.get('from_session');
+                                if (fromSession) {
+                                    router.push(`/search/${fromSession}`);
+                                } else {
+                                    router.push("/dashboard");
+                                }
+                            }}
                             className="text-white/60 hover:text-white hover:bg-white/5"
                         >
                             <ArrowLeft className="w-5 h-5" />
@@ -1637,6 +1698,46 @@ export default function DeepDivePage() {
                                 Get comprehensive insights including skill validation, salary estimates, and match analysis.
                             </p>
                         </div>
+
+
+                        {/* ADD PRE-FILLED NOTIFICATION */}
+                        {isPreFilled && (
+                            <motion.div
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className={`mb-6 p-4 rounded-lg flex items-start gap-3 ${jobDescription.trim().length > 0
+                                    ? "bg-emerald-500/10 border border-emerald-500/20"
+                                    : "bg-amber-500/10 border border-amber-500/20"
+                                    }`}
+                            >
+                                {jobDescription.trim().length > 0 ? (
+                                    <>
+                                        <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-emerald-300 mb-1">
+                                                Data Pre-filled from Search Results
+                                            </h4>
+                                            <p className="text-xs text-emerald-200/80">
+                                                We&apos;ve automatically filled in the candidate&apos;s LinkedIn URL and job description.
+                                                Review the details below and click &quot;Analyze Candidate&quot; when ready.
+                                            </p>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-amber-300 mb-1">
+                                                LinkedIn URL Pre-filled
+                                            </h4>
+                                            <p className="text-xs text-amber-200/80">
+                                                We&apos;ve filled in the candidate&apos;s LinkedIn URL. Please add the job description below to continue.
+                                            </p>
+                                        </div>
+                                    </>
+                                )}
+                            </motion.div>
+                        )}
 
                         {/* Form */}
                         <form onSubmit={handleSubmit} className="space-y-6">

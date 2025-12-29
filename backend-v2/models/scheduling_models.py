@@ -20,15 +20,16 @@ from pydantic import BaseModel, Field, field_validator
 
 class ScheduleStatus(str, Enum):
     """Status of an interview schedule."""
-    PENDING = "pending"         # Slot selected, awaiting confirmation
-    CONFIRMED = "confirmed"     # Confirmed by system
-    REMINDER_SENT = "reminder_sent"  # Reminder sent to candidate
-    IN_PROGRESS = "in_progress"  # Interview happening now
-    COMPLETED = "completed"     # Interview finished
-    CANCELLED = "cancelled"     # Cancelled by either party
-    RESCHEDULED = "rescheduled"  # Moved to new time
-    NO_SHOW = "no_show"         # Candidate didn't show up
-    TECHNICAL_ISSUE = "technical_issue"  # Call failed due to tech issues
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    REMINDER_SENT = "reminder_sent"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    RESCHEDULED = "rescheduled"
+    NO_SHOW = "no_show"
+    TECHNICAL_ISSUE = "technical_issue"
+    EXPIRED = "expired"  # Added for old unconfirmed slots
 
 
 class RescheduleReason(str, Enum):
@@ -38,14 +39,6 @@ class RescheduleReason(str, Enum):
     TECHNICAL_ISSUE = "technical_issue"
     EMERGENCY = "emergency"
     OTHER = "other"
-
-
-class TimeSlotType(str, Enum):
-    """Type of time slot."""
-    AVAILABLE = "available"
-    BOOKED = "booked"
-    BLOCKED = "blocked"
-    PAST = "past"
 
 
 # ===================================================================
@@ -62,26 +55,53 @@ def get_current_timestamp() -> str:
     return datetime.utcnow().isoformat()
 
 
+def get_slot_type_from_hour(hour: int) -> str:
+    """Determine time of day category from hour."""
+    if hour < 12:
+        return "morning"
+    elif hour < 17:
+        return "afternoon"
+    else:
+        return "evening"
+
+
 # ===================================================================
 # SUB-MODELS
 # ===================================================================
 
 class TimeSlot(BaseModel):
-    """A single time slot for scheduling."""
+    """Represents an available interview time slot."""
     slot_id: str = Field(default_factory=lambda: f"slot-{uuid.uuid4().hex[:8]}")
     
-    # Time
-    start_datetime: str  # ISO format
-    end_datetime: str    # ISO format
-    duration_minutes: int = 30
-    timezone: str = "Asia/Kolkata"
+    # Date/Time components (for frontend display)
+    date: str = Field(..., description="Date in YYYY-MM-DD format")
+    start_time: str = Field(..., description="Start time in HH:MM format")
+    end_time: str = Field(..., description="End time in HH:MM format")
     
-    # Status
-    slot_type: TimeSlotType = TimeSlotType.AVAILABLE
+    # Full datetime (for backend logic)
+    datetime: str = Field(..., description="Full datetime in ISO format")
     
-    # If booked
-    booked_by_candidate_id: Optional[str] = None
-    booked_at: Optional[str] = None
+    # Metadata
+    timezone: str = Field(default="Asia/Kolkata")
+    is_available: bool = Field(default=True, description="Whether slot can be booked")
+    slot_type: str = Field(
+        default="morning",
+        description="Time of day: morning/afternoon/evening"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "slot_id": "slot-abc123",
+                "date": "2024-12-15",
+                "start_time": "14:00",
+                "end_time": "14:30",
+                "datetime": "2024-12-15T14:00:00Z",
+                "timezone": "Asia/Kolkata",
+                "is_available": True,
+                "slot_type": "afternoon"
+            }
+        }
 
 
 class AvailabilityWindow(BaseModel):
@@ -97,11 +117,11 @@ class AvailabilityWindow(BaseModel):
     
     # Duration
     slot_duration_minutes: int = 30
-    buffer_minutes: int = 15  # Gap between slots
+    buffer_minutes: int = 15
     
     # Active dates
-    valid_from: Optional[str] = None  # ISO date
-    valid_until: Optional[str] = None  # ISO date
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
     
     # Status
     is_active: bool = True
@@ -132,7 +152,7 @@ class InterviewReminder(BaseModel):
     
     # Type
     reminder_type: str  # "email" | "sms" | "whatsapp"
-    hours_before: int  # How many hours before interview
+    hours_before: int
     
     # Status
     sent_at: Optional[str] = None
@@ -180,7 +200,7 @@ class InterviewSchedule(BaseModel):
     @property
     def scheduled_end_datetime(self) -> str:
         """Calculate end time."""
-        start = datetime.fromisoformat(self.scheduled_datetime)
+        start = datetime.fromisoformat(self.scheduled_datetime.replace('Z', '+00:00'))
         end = start + timedelta(minutes=self.duration_minutes)
         return end.isoformat()
     
@@ -188,7 +208,7 @@ class InterviewSchedule(BaseModel):
     status: ScheduleStatus = ScheduleStatus.CONFIRMED
     
     # Interview execution
-    interview_session_id: Optional[str] = None  # From VapiInterviewService
+    interview_session_id: Optional[str] = None
     call_initiated_at: Optional[str] = None
     call_answered_at: Optional[str] = None
     call_ended_at: Optional[str] = None
@@ -196,7 +216,7 @@ class InterviewSchedule(BaseModel):
     
     # Outcome
     interview_completed: bool = False
-    completion_status: Optional[str] = None  # "completed" | "no_answer" | "failed" | "voicemail"
+    completion_status: Optional[str] = None
     
     # Reschedule history
     reschedule_history: List[RescheduleRecord] = Field(default_factory=list)
@@ -207,7 +227,7 @@ class InterviewSchedule(BaseModel):
     reminders_sent: List[InterviewReminder] = Field(default_factory=list)
     
     # Candidate-provided info during booking
-    candidate_preferred_time: Optional[str] = None  # "morning" | "afternoon" | "evening"
+    candidate_preferred_time: Optional[str] = None
     candidate_special_requirements: Optional[str] = None
     candidate_notes: Optional[str] = None
     
@@ -225,11 +245,9 @@ class InterviewSchedule(BaseModel):
         reason_details: Optional[str] = None
     ):
         """Reschedule the interview."""
-        # Save original if first reschedule
         if not self.original_scheduled_datetime:
             self.original_scheduled_datetime = self.scheduled_datetime
         
-        # Create reschedule record
         record = RescheduleRecord(
             original_datetime=self.scheduled_datetime,
             new_datetime=new_datetime,
@@ -239,7 +257,6 @@ class InterviewSchedule(BaseModel):
         )
         self.reschedule_history.append(record)
         
-        # Update schedule
         self.scheduled_datetime = new_datetime
         self.reschedule_count += 1
         self.status = ScheduleStatus.RESCHEDULED
@@ -276,24 +293,24 @@ class SchedulingConfiguration(BaseModel):
     config_id: str = Field(default_factory=lambda: f"schedcfg-{uuid.uuid4().hex[:8]}")
     
     # Owner
-    pipeline_id: Optional[str] = None  # If None, global config
+    pipeline_id: Optional[str] = None
     username: str
     
-    # Availability windows
+    # Availability windows (optional - for restricted scheduling)
     availability_windows: List[AvailabilityWindow] = Field(default_factory=list)
     
     # Blocked dates
-    blocked_dates: List[str] = Field(default_factory=list)  # ISO dates
+    blocked_dates: List[str] = Field(default_factory=list)
     
     # Settings
     timezone: str = "Asia/Kolkata"
-    min_notice_hours: int = 2  # Minimum hours before interview
-    max_advance_days: int = 14  # Maximum days in advance
+    min_notice_hours: int = 1  # Changed to 1 hour minimum
+    max_advance_days: int = 14
     slot_duration_minutes: int = 30
-    buffer_between_slots_minutes: int = 15
+    buffer_between_slots_minutes: int = 0  # No buffer for AI interviews
     
-    # Daily limits
-    max_interviews_per_day: int = 10
+    # Daily limits (optional)
+    max_interviews_per_day: Optional[int] = None
     
     # Reminders
     send_confirmation_email: bool = True
@@ -310,7 +327,13 @@ class SchedulingConfiguration(BaseModel):
         existing_bookings: List[InterviewSchedule] = None
     ) -> List[TimeSlot]:
         """
-        Generate available time slots for a date range.
+        Generate available time slots.
+        
+        NEW LOGIC: Since AI conducts interviews 24/7, generate slots for any time
+        that is:
+        1. At least min_notice_hours from now
+        2. Not in the past
+        3. Not conflicting with existing bookings
         
         Args:
             from_date: Start of range
@@ -323,68 +346,59 @@ class SchedulingConfiguration(BaseModel):
         slots = []
         existing_bookings = existing_bookings or []
         
-        # Get booked times
+        # Get booked datetime strings to avoid conflicts
         booked_times = set()
         for booking in existing_bookings:
-            if booking.status not in [ScheduleStatus.CANCELLED, ScheduleStatus.RESCHEDULED]:
+            if booking.status not in [
+                ScheduleStatus.CANCELLED,
+                ScheduleStatus.RESCHEDULED,
+                ScheduleStatus.COMPLETED,
+                ScheduleStatus.EXPIRED
+            ]:
                 booked_times.add(booking.scheduled_datetime)
         
-        current_date = from_date.date()
-        end_date = to_date.date()
+        # Start generating slots
+        current_time = from_date
         
-        while current_date <= end_date:
-            # Check if date is blocked
-            if current_date.isoformat() in self.blocked_dates:
-                current_date += timedelta(days=1)
+        # Generate slots every 30 minutes
+        while current_time < to_date:
+            # Skip if date is blocked
+            if current_time.date().isoformat() in self.blocked_dates:
+                current_time += timedelta(days=1)
+                current_time = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
                 continue
             
-            # Check day of week
-            day_of_week = current_date.weekday()
+            # Skip if too soon
+            min_notice_cutoff = datetime.utcnow() + timedelta(hours=self.min_notice_hours)
+            if current_time < min_notice_cutoff:
+                current_time += timedelta(minutes=self.slot_duration_minutes)
+                continue
             
-            for window in self.availability_windows:
-                if not window.is_active:
-                    continue
-                if day_of_week not in window.days_of_week:
-                    continue
-                
-                # Parse start and end times
-                start_hour, start_min = map(int, window.start_time.split(":"))
-                end_hour, end_min = map(int, window.end_time.split(":"))
-                
-                slot_start = datetime.combine(current_date, datetime.min.time().replace(
-                    hour=start_hour, minute=start_min
-                ))
-                window_end = datetime.combine(current_date, datetime.min.time().replace(
-                    hour=end_hour, minute=end_min
-                ))
-                
-                # Generate slots within window
-                while slot_start + timedelta(minutes=self.slot_duration_minutes) <= window_end:
-                    slot_end = slot_start + timedelta(minutes=self.slot_duration_minutes)
-                    
-                    # Check if slot is in the past
-                    if slot_start < datetime.utcnow() + timedelta(hours=self.min_notice_hours):
-                        slot_start = slot_end + timedelta(minutes=self.buffer_between_slots_minutes)
-                        continue
-                    
-                    # Check if slot is booked
-                    slot_datetime_str = slot_start.isoformat()
-                    slot_type = TimeSlotType.AVAILABLE
-                    
-                    if slot_datetime_str in booked_times:
-                        slot_type = TimeSlotType.BOOKED
-                    
-                    slots.append(TimeSlot(
-                        start_datetime=slot_datetime_str,
-                        end_datetime=slot_end.isoformat(),
-                        duration_minutes=self.slot_duration_minutes,
-                        timezone=self.timezone,
-                        slot_type=slot_type
-                    ))
-                    
-                    slot_start = slot_end + timedelta(minutes=self.buffer_between_slots_minutes)
+            # Check if slot is already booked
+            slot_datetime_str = current_time.isoformat()
+            if slot_datetime_str in booked_times:
+                current_time += timedelta(minutes=self.slot_duration_minutes)
+                continue
             
-            current_date += timedelta(days=1)
+            # Calculate end time
+            slot_end = current_time + timedelta(minutes=self.slot_duration_minutes)
+            
+            # Determine time of day
+            slot_type = get_slot_type_from_hour(current_time.hour)
+            
+            # Create slot with CORRECT field names
+            slots.append(TimeSlot(
+                date=current_time.strftime("%Y-%m-%d"),
+                start_time=current_time.strftime("%H:%M"),
+                end_time=slot_end.strftime("%H:%M"),
+                datetime=slot_datetime_str,
+                timezone=self.timezone,
+                is_available=True,
+                slot_type=slot_type
+            ))
+            
+            # Move to next slot
+            current_time += timedelta(minutes=self.slot_duration_minutes)
         
         return slots
 
@@ -396,8 +410,8 @@ class SchedulingConfiguration(BaseModel):
 class GetAvailableSlotsRequest(BaseModel):
     """Request to get available slots."""
     scheduling_token: str
-    from_date: Optional[str] = None  # ISO date, defaults to today
-    to_date: Optional[str] = None    # ISO date, defaults to 14 days from now
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
     timezone: str = "Asia/Kolkata"
 
 
@@ -418,7 +432,7 @@ class BookSlotRequest(BaseModel):
     scheduling_token: str
     scheduled_datetime: str = Field(..., description="Selected slot (ISO format)")
     timezone: str = "Asia/Kolkata"
-    preferred_time: Optional[str] = None  # "morning" | "afternoon" | "evening"
+    preferred_time: Optional[str] = None
     special_requirements: Optional[str] = None
     candidate_notes: Optional[str] = None
 
@@ -474,11 +488,11 @@ __all__ = [
     # Enums
     "ScheduleStatus",
     "RescheduleReason",
-    "TimeSlotType",
     
     # Helper functions
     "generate_schedule_id",
     "get_current_timestamp",
+    "get_slot_type_from_hour",
     
     # Sub-models
     "TimeSlot",

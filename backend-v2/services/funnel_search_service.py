@@ -169,7 +169,7 @@ class FunnelSearchService:
         # ================================================================
         # STAGE 1: Parse JD into structured filters
         # ================================================================
-        logger.info("📋 Stage 1: Parsing JD into search filters...")
+        logger.info("Stage 1: Parsing JD into search filters...")
         
         filters = await self._parse_jd_to_filters(jd_data, user_filters)
         
@@ -193,7 +193,7 @@ class FunnelSearchService:
         # ================================================================
         # STAGE 2: Index-only MongoDB query (NO REGEX!)
         # ================================================================
-        logger.info("🔍 Stage 2: Index-only query (NO REGEX!)...")
+        logger.info("Stage 2: Index-only query (NO REGEX!)...")
         
         stage2_start = time.time()
         
@@ -210,12 +210,12 @@ class FunnelSearchService:
             "time_ms": int(stage2_time * 1000)
         })
         
-        logger.info(f"   ✅ Found {len(pre_filtered)} candidates in {stage2_time:.2f}s")
+        logger.info(f" Found {len(pre_filtered)} candidates in {stage2_time:.2f}s")
         
         # ================================================================
         # STAGE 3: Python filtering (location + title + skills)
         # ================================================================
-        logger.info("🧠 Stage 3: Python filtering (location, title, skills)...")
+        logger.info("Stage 3: Python filtering (location, title, skills)...")
         
         stage3_start = time.time()
         
@@ -248,12 +248,12 @@ class FunnelSearchService:
             "time_ms": int(stage3_time * 1000)
         })
         
-        logger.info(f"   ✅ Filtered to {len(skill_matched)} candidates in {stage3_time:.2f}s")
+        logger.info(f"Filtered to {len(skill_matched)} candidates in {stage3_time:.2f}s")
         
         # ================================================================
         # STAGE 4: Score and rank
         # ================================================================
-        logger.info("📊 Stage 4: Scoring and ranking...")
+        logger.info("Stage 4: Scoring and ranking...")
         
         scored_candidates = self._score_and_rank(skill_matched, filters, limit)
         

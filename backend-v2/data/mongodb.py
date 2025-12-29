@@ -90,14 +90,25 @@ class MongoDB:
             self.users_collection = self.main_db["users"]
             self.prompts_collection = self.main_db["prompts"]
             self.logs_collection = self.main_db["user_logs"]
-            self.sessions_collection = self.main_db["sessions"]
+            self.sessions_collection = self.main_db["sessions"]  # Keep for generic sessions depreciated
+            self.conversation_sessions_collection = self.main_db["conversation_sessions"]  # For Donna and manual import in conversation manager
             self.user_history_collection = self.main_db["user_history"]
             self.enriched_results_collection = self.main_db["enriched_results"]
+            
+            # Pipeline collections
+            self.pipelines_collection = self.main_db["recruitment_pipelines"]
+            self.schedules_collection = self.main_db["interview_schedules"]
+            self.scheduling_config_collection = self.main_db["scheduling_configurations"]
+            
+            
             
             logger.info(f"✅ Main DB: {settings.DATABASE_NAME}")
             
             # Create indexes (now async)
             indexes_ok = await self._ensure_indexes()
+            # Ensure pipeline indexes
+            await self._ensure_pipeline_indexes()
+
             if not indexes_ok:
                 logger.warning("⚠️ Some indexes are missing - search may be slow")
                 logger.warning("💡 Run: python scripts/create_indexes.py")
@@ -116,6 +127,23 @@ class MongoDB:
             await self.prompts_collection.create_index("session_id", unique=True)
             await self.prompts_collection.create_index("prompt_id", unique=True)
             await self.prompts_collection.create_index([("username", 1), ("created_at", -1)])
+                        # Pipelines collection
+            await self.pipelines_collection.create_index("pipeline_id", unique=True)
+            await self.pipelines_collection.create_index("username")
+            await self.pipelines_collection.create_index("conversation_session_id")
+            await self.pipelines_collection.create_index("search_session_id")
+            await self.pipelines_collection.create_index([("username", 1), ("created_at", -1)])
+            await self.pipelines_collection.create_index("candidates.candidate_id")
+            await self.pipelines_collection.create_index("candidates.outreach.scheduling_token")
+            
+            # Schedules collection
+            await self.schedules_collection.create_index("schedule_id", unique=True)
+            await self.schedules_collection.create_index("scheduling_token", unique=True)
+            await self.schedules_collection.create_index("pipeline_id")
+            await self.schedules_collection.create_index("candidate_id")
+            await self.schedules_collection.create_index([("status", 1), ("scheduled_datetime", 1)])
+            
+            logger.info("✅ Pipeline indexes created")
         except OperationFailure as e:
             logger.error(f"Could not create indexes: {e}")
             
@@ -163,6 +191,23 @@ class MongoDB:
             logger.error(f"❌ Error verifying indexes: {e}")
             return False
             
+            
+    async def _ensure_pipeline_indexes(self):
+        """Create indexes for pipeline collections."""
+        try:
+            # Pipelines
+            await self.pipelines_collection.create_index("pipeline_id", unique=True)
+            await self.pipelines_collection.create_index("username")
+            await self.pipelines_collection.create_index("conversation_session_id")
+            await self.pipelines_collection.create_index([("username", 1), ("created_at", -1)])
+            
+            # Schedules
+            await self.schedules_collection.create_index("schedule_id", unique=True)
+            await self.schedules_collection.create_index("pipeline_id")
+            
+            logger.info("✅ Pipeline indexes created")
+        except Exception as e:
+            logger.warning(f"Could not create pipeline indexes: {e}")
             
     
     # ========================================================================

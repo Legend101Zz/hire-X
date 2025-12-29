@@ -18,7 +18,6 @@ import SwipeableCandidateDeck from "@/components/conversation/SwipeableCandidate
 import WizardGuide, { shouldShowWizard } from "@/components/conversation/WizardGuide";
 import EnrichmentOverlay from "@/components/conversation/EnrichmentOverlay";
 import * as conversationApi from "@/utils/api/conversationApiV2";
-import type { EnrichmentProgress } from "@/utils/api/conversationApiV2";
 import type { IdealProfileCard, ConversationMessage } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -65,7 +64,7 @@ function ConversationWorkspace() {
 
     // Conversation state
     const [stage, setStage] = useState<string>("greeting");
-    // const [readyToSearch, setReadyToSearch] = useState(false);
+    const [, setReadyToSearch] = useState(false);
 
     // Profile State
     const [idealProfile, setIdealProfile] = useState<IdealProfileCard>({
@@ -110,57 +109,13 @@ function ConversationWorkspace() {
     });
     const [showFeedbackSummary, setShowFeedbackSummary] = useState(false);
     const [isProcessingFeedback, setIsProcessingFeedback] = useState(false);
-    const [enrichmentStatus, setEnrichmentStatus] = useState<Record<string, any>>({});
-    const [isEnrichingCandidate, setIsEnrichingCandidate] = useState<string | null>(null);
-
-    // State for enrichment
     const [isBatchEnriching, setIsBatchEnriching] = useState(false);
-    const [enrichmentProgress, setEnrichmentProgress] = useState<EnrichmentProgress>({
-        status: "not_started",
-        phase: "idle",
-        total: 0,
-        completed: 0,
-        failed: 0,
-        progress_percentage: 0,
-        current_candidate: "",
-        message: "",
-        candidates: {},
-    });
+    const [enrichmentProgress, setEnrichmentProgress] = useState<any>(null);
+
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
-
-    useEffect(() => {
-        if (!sessionId || !token) return;
-
-        const acceptedIds = feedbackData.accepted.map(a =>
-            a.candidate.profile_id || a.candidate._id
-        );
-
-        if (acceptedIds.length === 0) return;
-
-        const pollInterval = setInterval(async () => {
-            try {
-                const status = await conversationApi.getEnrichmentStatus(sessionId, token);
-                setEnrichmentStatus(status.candidates || {});
-
-                // Check if all completed
-                const allComplete = acceptedIds.every(id =>
-                    status.candidates?.[id]?.status === "completed" ||
-                    status.candidates?.[id]?.status === "failed"
-                );
-
-                if (allComplete) {
-                    clearInterval(pollInterval);
-                }
-            } catch (error) {
-                console.error("Error polling enrichment status:", error);
-            }
-        }, 3000); // Poll every 3 seconds
-
-        return () => clearInterval(pollInterval);
-    }, [feedbackData.accepted, sessionId, token]);
 
     // Check wizard on mount
     useEffect(() => {
@@ -535,8 +490,6 @@ function ConversationWorkspace() {
 
     // Candidate actions
     const handleAcceptCandidate = async (candidate: any) => {
-        const candidateId = candidate.candidate.profile_id || candidate.candidate._id;
-
         setFeedbackData((prev) => ({
             ...prev,
             accepted: [
@@ -554,32 +507,6 @@ function ConversationWorkspace() {
             timestamp: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, message]);
-
-        // Trigger background enrichment
-        if (sessionId && token) {
-            try {
-                setIsEnrichingCandidate(candidateId);
-                await conversationApi.enrichCandidate(
-                    sessionId,
-                    token,
-                    candidateId,
-                    candidate
-                );
-
-                // Add Donna message about enrichment
-                const donnaMessage: ConversationMessage = {
-                    role: "assistant",
-                    content: `Great choice! I'm gathering more details about ${candidate.candidate.first_name} in the background... 🔍`,
-                    timestamp: new Date().toISOString(),
-                };
-                setMessages((prev) => [...prev, donnaMessage]);
-
-            } catch (error) {
-                console.error("Error starting enrichment:", error);
-            } finally {
-                setIsEnrichingCandidate(null);
-            }
-        }
     };
 
     // Updated reject handler - sends feedback to LLM
@@ -607,7 +534,7 @@ function ConversationWorkspace() {
         if (sessionId && token && reason) {
             try {
                 setBotExpression("thinking");
-                setSpeechBubble("Analyzing your feedback... 🧠");
+                setSpeechBubble("Analyzing your feedback...");
                 setShowSpeech(true);
 
                 const response = await conversationApi.processRejectionFeedback(
@@ -666,14 +593,8 @@ function ConversationWorkspace() {
         setShowCandidateDeck(false);
         setShowFeedbackSummary(true);
 
-        // Check enrichment status for accepted candidates
-        const acceptedCount = feedbackData.accepted.length;
-        const enrichedCount = Object.values(enrichmentStatus).filter(
-            s => s.status === "completed"
-        ).length;
-
         handleDonnaSpeak(
-            `Great! You liked ${acceptedCount} candidates. ${enrichedCount > 0 ? `${enrichedCount} are already enriched!` : "Starting enrichment..."} 🎯`,
+            `Great! You liked ${feedbackData.accepted.length} candidates. Ready to analyze them?`,
             "excited"
         );
     };
@@ -761,59 +682,45 @@ function ConversationWorkspace() {
     const handleFinalizeSearch = async () => {
         if (!sessionId || !token) return;
 
-        // Validate we have accepted candidates
         if (feedbackData.accepted.length === 0) {
             handleDonnaSpeak("Please accept at least one candidate first!", "thinking");
             return;
         }
 
-        // Start the overlay
         setIsBatchEnriching(true);
         setBotPosition("chat");
         setBotExpression("thinking");
 
+        // Show simple progress message
+        setEnrichmentProgress({
+            status: "in_progress",
+            phase: "deep_analysis",
+            total: feedbackData.accepted.length,
+            completed: 0,
+            failed: 0,
+            progress_percentage: 50,
+            current_candidate: "Ranking candidates...",
+            message: "Analyzing candidates with AI...",
+            candidates: {},
+        });
+
         try {
-            // Trigger the batch enrichment
             const response = await conversationApi.enrichAcceptedCandidates(
                 sessionId,
                 token,
                 feedbackData.accepted.map((a) => ({ candidate: a.candidate }))
             );
 
-            console.log("✅ Enrichment started:", response);
+            console.log("✅ Ranking started:", response);
 
-            // Start polling for progress
-            const pollInterval = setInterval(async () => {
-                try {
-                    const status = await conversationApi.getEnrichmentStatus(sessionId, token);
+            // Wait 2 seconds for ranking to complete (it's fast)
+            await new Promise((resolve) => setTimeout(resolve, 2000));
 
-                    console.log("📊 Enrichment progress:", status);
-                    setEnrichmentProgress(status);
-
-                    // Check if complete
-                    if (status.status === "completed" || status.phase === "complete") {
-                        clearInterval(pollInterval);
-
-                        // Short delay to show 100%
-                        await new Promise((resolve) => setTimeout(resolve, 1500));
-
-                        // Navigate to results
-                        router.push(`/results/${sessionId}`);
-                    } else if (status.status === "failed" || status.status === "error") {
-                        clearInterval(pollInterval);
-                        setIsBatchEnriching(false);
-                        handleDonnaSpeak("Something went wrong. Please try again!", "thinking");
-                    }
-                } catch (error) {
-                    console.error("Polling error:", error);
-                }
-            }, 1000); // Poll every second for smooth UI
-
-            // Cleanup on unmount
-            return () => clearInterval(pollInterval);
+            // Navigate directly to results
+            router.push(`/results/${sessionId}`);
 
         } catch (error) {
-            console.error("Error starting enrichment:", error);
+            console.error("Error starting ranking:", error);
             setIsBatchEnriching(false);
             handleDonnaSpeak(
                 "Had trouble starting the analysis. Please try again!",
@@ -821,7 +728,6 @@ function ConversationWorkspace() {
             );
         }
     };
-
     // Render guards
     if (!wizardChecked || showWizard) {
         return (

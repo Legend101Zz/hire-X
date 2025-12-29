@@ -89,6 +89,9 @@ class CallEndReason(str, Enum):
     ERROR = "error"
     VOICEMAIL = "voicemail-detected"
     NO_ANSWER = "no-answer"
+    BUSY = "busy"
+    TECHNICAL_ERROR = "technical-error"
+    NETWORK_ERROR = "network-error"
 
 
 # ===================================================================
@@ -102,27 +105,28 @@ class VapiVoiceConfig(BaseModel):
     """
     provider: str = Field(default="cartesia", description="TTS provider")
     voice_id: str = Field(
-        default="f786b574-daa5-4673-aa0c-cbe3e8534c02",  # Katie - stable, realistic
+        default="cbaf8084-f009-4838-a096-07ee2e6612b1",  # Default Sonic voice
         description="Cartesia voice ID"
     )
     model: str = Field(default="sonic-3", description="Cartesia model")
     language: str = Field(default="en", description="Primary language")
     
     # Sonic 3 generation controls
-    speed: Optional[float] = Field(default=0.9, ge=0.5, le=2.0, description="Speech speed")
+    speed: Optional[float] = Field(default=1.0, ge=0.6, le=1.5, description="Speech speed (0.6-1.5)")
+    volume: Optional[float] = Field(default=0.9, ge=0.5, le=2.0, description="Speech volume (0.5-2.0)")
     emotion: Optional[List[str]] = Field(default=None, description="Emotion tags: ['positivity:high']")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "provider": "cartesia",
-                "voice_id": "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+                "voice_id": "cbaf8084-f009-4838-a096-07ee2e6612b1",
                 "model": "sonic-3",
                 "language": "en",
-                "speed": 0.9
+                "speed": 1.0,
+                "volume": 0.9
             }
         }
-
 
 class VapiTranscriberConfig(BaseModel):
     """
@@ -136,7 +140,7 @@ class VapiTranscriberConfig(BaseModel):
     # Advanced settings
     smart_format: bool = Field(default=True, description="Enable smart formatting")
     keywords: List[str] = Field(default_factory=list, description="Keywords to boost recognition")
-    endpointing: int = Field(default=300, ge=100, le=1000, description="Silence before response (ms)")
+    endpointing: int = Field(default=400, ge=100, le=1000, description="Silence before response (ms)")
     
     class Config:
         json_schema_extra = {
@@ -144,7 +148,7 @@ class VapiTranscriberConfig(BaseModel):
                 "provider": "deepgram",
                 "model": "nova-2",
                 "language": "multi",
-                "endpointing": 300
+                "endpointing": 400
             }
         }
 
@@ -155,9 +159,9 @@ class VapiModelConfig(BaseModel):
     Uses OpenRouter for model flexibility.
     """
     provider: str = Field(default="openrouter", description="LLM provider")
-    model: str = Field(default="anthropic/claude-sonnet-4-5", description="Model name")
+    model: str = Field(default="anthropic/claude-sonnet-4.5", description="Model name")
     temperature: float = Field(default=0.7, ge=0, le=1, description="Temperature")
-    max_tokens: int = Field(default=500, description="Max response tokens")
+    max_tokens: int = Field(default=80, description="Max response tokens (keep concise)")
     
     # System prompt (will be generated dynamically)
     system_prompt: Optional[str] = Field(None, description="System prompt for interview")
@@ -169,9 +173,9 @@ class VapiModelConfig(BaseModel):
         json_schema_extra = {
             "example": {
                 "provider": "openrouter",
-                "model": "anthropic/claude-sonnet-4-5",
+                "model": "anthropic/claude-sonnet-4.5",
                 "temperature": 0.7,
-                "max_tokens": 500
+                "max_tokens": 80
             }
         }
 
@@ -181,7 +185,7 @@ class VapiAssistantConfig(BaseModel):
     Complete Vapi assistant configuration.
     """
     name: str = Field(..., description="Assistant name")
-    first_message: str = Field(..., description="Opening message")
+    first_message: str = Field(..., description="Opening message with SSML")
     
     # Component configs
     voice: VapiVoiceConfig = Field(default_factory=VapiVoiceConfig)
@@ -189,8 +193,8 @@ class VapiAssistantConfig(BaseModel):
     model: VapiModelConfig = Field(default_factory=VapiModelConfig)
     
     # Call settings
-    silence_timeout_seconds: int = Field(default=30, description="Hang up after N seconds silence")
-    max_duration_seconds: int = Field(default=1800, description="Max call duration (30 min)")
+    silence_timeout_seconds: int = Field(default=20, description="Hang up after N seconds silence")
+    max_duration_seconds: int = Field(default=600, description="Max call duration (10 min)")
     end_call_message: Optional[str] = Field(None, description="Message before hanging up")
     
     # Webhook
@@ -207,7 +211,8 @@ class VapiAssistantConfig(BaseModel):
         json_schema_extra = {
             "example": {
                 "name": "Neura - NeuraLeap Interviewer",
-                "first_message": "Hello! This is Neura from NeuraLeap..."
+                "first_message": "Hello! This is Neura from NeuraLeap...",
+                "max_duration_seconds": 600
             }
         }
 
@@ -236,11 +241,14 @@ class InterviewCandidateContext(BaseModel):
     education: Optional[str] = Field(None, description="Highest education")
     linkedin_url: Optional[str] = Field(None, description="LinkedIn profile URL")
     
-    # From enrichment (optional)
+    # From enrichment (optional but important for personalization)
     enrichment_summary: Optional[str] = Field(None, description="Summary from deep dive")
     salary_estimate: Optional[Dict[str, Any]] = Field(None, description="Salary estimation")
     skill_validations: Optional[Dict[str, Any]] = Field(None, description="Skill validation results")
-    response_likelihood: Optional[float] = Field(None, description="Response likelihood score")
+    response_likelihood: Optional[float] = Field(None, description="Response likelihood score (0-100)")
+    
+    # Professional footprint (from enrichment)
+    professional_footprint: Optional[Dict[str, Any]] = Field(None, description="Professional presence data")
     
     # Interview-specific
     preferred_language: str = Field(default="en", description="Preferred interview language")
@@ -256,7 +264,9 @@ class InterviewCandidateContext(BaseModel):
                 "current_company": "Tech Corp India",
                 "experience_years": 6,
                 "skills": ["Python", "Django", "PostgreSQL", "AWS", "Docker"],
-                "location": "Bangalore, India"
+                "location": "Bangalore, India",
+                "enrichment_summary": "Strong backend engineer with microservices experience...",
+                "response_likelihood": 75
             }
         }
 
@@ -295,10 +305,10 @@ class InterviewJobContext(BaseModel):
         }
 
 
+
 # ===================================================================
 # INTERVIEW PLAN
 # ===================================================================
-
 class InterviewPlanQuestion(BaseModel):
     """
     A planned interview question with evaluation criteria.
@@ -314,7 +324,7 @@ class InterviewPlanQuestion(BaseModel):
     
     # Scoring
     weight: float = Field(default=1.0, ge=0.0, le=5.0, description="Question weight")
-    time_limit_seconds: int = Field(default=120, description="Expected response time")
+    time_limit_seconds: int = Field(default=90, description="Expected response time")
     
     # Adaptive
     follow_up_prompts: List[str] = Field(default_factory=list, description="Potential follow-ups")
@@ -324,6 +334,7 @@ class InterviewPlanQuestion(BaseModel):
 class InterviewPlan(BaseModel):
     """
     Complete interview plan generated based on candidate + job context.
+    Optimized for 5-10 minute interviews.
     """
     plan_id: str = Field(..., description="Unique plan ID")
     
@@ -333,7 +344,7 @@ class InterviewPlan(BaseModel):
     
     # Plan details
     interview_focus: str = Field(..., description="Main focus areas for this interview")
-    questions: List[InterviewPlanQuestion] = Field(..., description="Ordered questions")
+    questions: List[InterviewPlanQuestion] = Field(..., description="Ordered questions (max 5)")
     
     # Personality & tone
     interviewer_personality: str = Field(
@@ -361,10 +372,10 @@ class InterviewPlan(BaseModel):
         }
 
 
+
 # ===================================================================
 # INTERVIEW SESSION
 # ===================================================================
-
 class InterviewSession(BaseModel):
     """
     Complete interview session record.
@@ -394,7 +405,7 @@ class InterviewSession(BaseModel):
     call_duration_seconds: Optional[float] = Field(None, description="Call duration")
     call_end_reason: Optional[CallEndReason] = Field(None, description="Why call ended")
     
-    # Recording
+    # Recording (from Vapi)
     recording_url: Optional[str] = Field(None, description="Recording URL from Vapi")
     recording_local_path: Optional[str] = Field(None, description="Local recording path")
     stereo_recording_url: Optional[str] = Field(None, description="Stereo recording URL")
@@ -420,18 +431,16 @@ class InterviewSession(BaseModel):
             }
         }
 
-
 # ===================================================================
 # TRANSCRIPT & CLIPS
 # ===================================================================
-
 class TranscriptEntry(BaseModel):
     """
     Single entry in the conversation transcript.
     """
     role: str = Field(..., description="speaker: 'assistant' or 'user'")
     content: str = Field(..., description="What was said")
-    timestamp: float = Field(..., description="Timestamp in seconds from call start")
+    timestamp: Optional[float] = Field(None, description="Timestamp in seconds from call start")
     duration: Optional[float] = Field(None, description="Duration of this segment")
     
     # Analysis
@@ -449,9 +458,9 @@ class InterviewClip(BaseModel):
     session_id: str = Field(..., description="Parent session ID")
     
     # Timing
-    start_time_seconds: float = Field(..., description="Start time in recording")
-    end_time_seconds: float = Field(..., description="End time in recording")
-    duration_seconds: float = Field(..., description="Clip duration")
+    start_time_seconds: float = Field(default=0, description="Start time in recording")
+    end_time_seconds: float = Field(default=0, description="End time in recording")
+    duration_seconds: float = Field(default=0, description="Clip duration")
     
     # Content
     question_asked: str = Field(..., description="Question that prompted this response")
@@ -486,13 +495,13 @@ class ResponseAnalysis(BaseModel):
     skills_demonstrated: List[str] = Field(default_factory=list, description="Skills shown")
     
     # Quality scores (0-100)
-    relevance_score: float = Field(..., ge=0, le=100, description="How relevant to question")
-    depth_score: float = Field(..., ge=0, le=100, description="Depth of answer")
-    clarity_score: float = Field(..., ge=0, le=100, description="Communication clarity")
-    overall_score: float = Field(..., ge=0, le=100, description="Overall response score")
+    relevance_score: float = Field(default=50, ge=0, le=100, description="How relevant to question")
+    depth_score: float = Field(default=50, ge=0, le=100, description="Depth of answer")
+    clarity_score: float = Field(default=50, ge=0, le=100, description="Communication clarity")
+    overall_score: float = Field(default=50, ge=0, le=100, description="Overall response score")
     
     # Assessment
-    confidence_assessment: ConfidenceLevel = Field(..., description="Candidate's confidence")
+    confidence_assessment: ConfidenceLevel = Field(default=ConfidenceLevel.MEDIUM, description="Candidate's confidence")
     
     # Feedback
     strengths: List[str] = Field(default_factory=list, description="What was good")
@@ -500,7 +509,7 @@ class ResponseAnalysis(BaseModel):
     red_flags: List[str] = Field(default_factory=list, description="Concerning patterns")
     
     # Summary
-    brief_summary: str = Field(..., description="One-line summary")
+    brief_summary: str = Field(default="", description="One-line summary")
     detailed_notes: str = Field(default="", description="Detailed notes for recruiter")
 
 
@@ -509,14 +518,14 @@ class InterviewAssessment(BaseModel):
     Final comprehensive assessment after interview completion.
     """
     # Overall scores (0-100)
-    overall_score: float = Field(..., ge=0, le=100, description="Overall candidate score")
-    technical_score: float = Field(..., ge=0, le=100, description="Technical competency")
-    communication_score: float = Field(..., ge=0, le=100, description="Communication skills")
-    culture_fit_score: float = Field(..., ge=0, le=100, description="Culture fit assessment")
+    overall_score: float = Field(default=50, ge=0, le=100, description="Overall candidate score")
+    technical_score: float = Field(default=50, ge=0, le=100, description="Technical competency")
+    communication_score: float = Field(default=50, ge=0, le=100, description="Communication skills")
+    culture_fit_score: float = Field(default=50, ge=0, le=100, description="Culture fit assessment")
     
     # Recommendation
-    recommendation: str = Field(..., description="strong_hire | hire | maybe | no_hire")
-    recommendation_confidence: ConfidenceLevel = Field(..., description="Confidence level")
+    recommendation: str = Field(default="maybe", description="strong_hire | hire | maybe | no_hire")
+    recommendation_confidence: ConfidenceLevel = Field(default=ConfidenceLevel.MEDIUM, description="Confidence level")
     
     # Detailed breakdown
     skill_scores: Dict[str, float] = Field(default_factory=dict, description="Score per skill")
@@ -532,7 +541,7 @@ class InterviewAssessment(BaseModel):
     red_flag_clips: List[str] = Field(default_factory=list, description="Concerning clip IDs")
     
     # Summary for hiring manager
-    executive_summary: str = Field(..., description="2-3 sentence summary")
+    executive_summary: str = Field(default="", description="2-3 sentence summary")
     detailed_report: str = Field(default="", description="Full interview report")
     
     # Language insights
@@ -550,14 +559,13 @@ class InterviewAssessment(BaseModel):
 # ===================================================================
 # WEBHOOK EVENT MODELS
 # ===================================================================
-
 class VapiWebhookEvent(BaseModel):
     """
     Incoming webhook event from Vapi.
     """
     type: str = Field(..., description="Event type")
     call: Optional[Dict[str, Any]] = Field(None, description="Call object")
-    timestamp: Optional[str] = Field(None, description="Event timestamp")
+    timestamp: Optional[Union[str, int]] = Field(None, description="Event timestamp")
     
     # Event-specific data
     function_call: Optional[Dict[str, Any]] = Field(None, description="For function-call events")
@@ -569,7 +577,6 @@ class VapiWebhookEvent(BaseModel):
     # Status updates
     status: Optional[str] = Field(None, description="Call status")
     ended_reason: Optional[str] = Field(None, description="Why call ended")
-
 
 class VapiFunctionCallRequest(BaseModel):
     """
@@ -584,7 +591,6 @@ class VapiFunctionCallResponse(BaseModel):
     Response to a Vapi function call.
     """
     result: Any = Field(..., description="Function result")
-
 
 # ===================================================================
 # API REQUEST/RESPONSE MODELS

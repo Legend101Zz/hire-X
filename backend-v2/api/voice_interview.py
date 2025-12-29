@@ -12,6 +12,7 @@ Endpoints:
 
 """
 
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -30,7 +31,7 @@ from models.vapi_interview_models import (CreateInterviewRequest,
                                           VapiWebhookEvent)
 from services.vapi_interview_service import VapiInterviewService
 
-router = APIRouter(prefix="/voice-interview", tags=["Voice Interview V3"])
+router = APIRouter(prefix="/voice-interview", tags=["Voice Interview"])
 logger = get_logger(__name__)
 
 
@@ -158,30 +159,45 @@ async def vapi_webhook(request: Request, service: VapiInterviewService = Depends
     - transcript: Real-time transcript updates
     """
     try:
-        body = await request.json()
+        raw_body = await request.json()
+        
+        # Log for debugging
+        event_type = raw_body.get("message", {}).get("type", raw_body.get("type", "unknown"))
+        logger.info(f"📥 Vapi webhook: {event_type}")
+        logger.debug(f"   Body: {json.dumps(raw_body)[:500]}")
         
         # Parse event
+        message = raw_body.get("message", {})
         event = VapiWebhookEvent(
-            type=body.get("message", {}).get("type", body.get("type", "")),
-            call=body.get("message", {}).get("call", body.get("call")),
-            timestamp=body.get("timestamp"),
-            function_call=body.get("message", {}).get("functionCall"),
-            transcript=body.get("message", {}).get("transcript"),
-            recording_url=body.get("message", {}).get("recordingUrl"),
-            stereo_recording_url=body.get("message", {}).get("stereoRecordingUrl"),
-            status=body.get("message", {}).get("status"),
-            ended_reason=body.get("message", {}).get("endedReason")
+            type=message.get("type", raw_body.get("type", "unknown")),
+            call=message.get("call", raw_body.get("call")),
+            status=message.get("status"),
+            timestamp=message.get("timestamp")
         )
         
-        result = await service.handle_webhook(event, body)
+        # Handle event
+        result = await service.handle_webhook(event, raw_body)
         
-        return JSONResponse(content=result)
+        return result
         
     except Exception as e:
         logger.error(f"Webhook handling failed: {e}")
         # Return 200 to prevent Vapi retries
         return JSONResponse(content={"error": str(e)}, status_code=200)
 
+@router.post("/retry/{session_id}")
+async def retry_call(
+    session_id: str,
+    service: VapiInterviewService = Depends(get_vapi_interview_service)
+):
+    """Retry a failed call."""
+    try:
+        result = await service.retry_failed_call(session_id)
+        return result.model_dump()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to retry call")
 
 # ==========================================================================
 # CLIP ENDPOINTS

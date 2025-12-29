@@ -274,8 +274,8 @@ class IntelligentEnrichmentOrchestrator:
         # --- CENTRALIZED MODEL CONFIGURATION ---
         self.llm_config = {
             "search": "deepseek/deepseek-r1-distill-qwen-32b",           # $1/M (was $15/M)
-            "analysis": "anthropic/claude-sonnet-4.5",   # Complex JSON
-            "classification": "anthropic/claude-haiku-4.5",  # Simple tasks
+            "analysis": "moonshotai/kimi-k2-thinking",   # Complex JSON
+            "classification": "moonshotai/kimi-k2-thinking",  # Simple tasks
             "fast": "anthropic/claude-haiku-4.5",        # $0.25/M
             }
         # Validation
@@ -3923,7 +3923,7 @@ BE BRUTALLY HONEST: If this is a poor match, say so clearly. Don't waste HR's ti
     async def _call_llm(
         self,
         prompt: str,
-        model: str = "anthropic/claude-sonnet-4.5",
+        model: str = "moonshotai/kimi-k2-thinking",
         temperature: float = 0.3,
         max_tokens: int = 4000
     ) -> str:

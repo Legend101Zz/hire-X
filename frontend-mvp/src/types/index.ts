@@ -427,3 +427,20 @@ export interface WebIntelligence {
   risk_flags: string[];
   last_updated: string;
 }
+
+export interface PipelineSession {
+    session_id: string;
+    batch_id: string;
+    source: string;
+    job_title: string;
+    total_candidates: number;
+    status_counts: {
+        pending: number;
+        enriching: number;
+        enriched: number;
+        outreach_sent: number;
+        failed: number;
+    };
+    created_at: string;
+    last_updated: string;
+}

@@ -10,6 +10,7 @@ import type {
   SampleProfile,
   ConversationState,
   IdealProfileCard,
+  PipelineSession,
 } from "@/types";
 
 const API_BASE =
@@ -268,79 +269,6 @@ export const getSampleCandidates = async (
 };
 
 /**
- * Enrich a single candidate (background)
- */
-export const enrichCandidate = async (
-  sessionId: string,
-  token: string,
-  candidateId: string,
-  candidate: any
-): Promise<{
-  status: string;
-  candidate_id: string;
-  message: string;
-}> => {
-  const response = await apiCall(
-    `/conversation/${sessionId}/enrich-candidate`,
-    {
-      method: "POST",
-      body: JSON.stringify({ candidate_id: candidateId, candidate }),
-      token,
-    }
-  );
-
-  return handleApiResponse(response);
-};
-
-/**
- * Get enrichment progress
- */
-export interface EnrichmentProgress {
-  status:
-    | "not_started"
-    | "starting"
-    | "in_progress"
-    | "completed"
-    | "failed"
-    | "error";
-  phase: "idle" | "initializing" | "deep_analysis" | "complete";
-  total: number;
-  completed: number;
-  failed: number;
-  progress_percentage: number;
-  current_candidate: string;
-  message: string;
-  candidates: Record<
-    string,
-    {
-      name: string;
-      status: string;
-      error?: string;
-    }
-  >;
-  started_at?: string;
-  completed_at?: string;
-}
-
-export const getEnrichmentStatus = async (
-  sessionId: string,
-  token: string
-): Promise<EnrichmentProgress> => {
-  const response = await fetch(
-    `${API_BASE}/conversation/${sessionId}/enrichment-status`,
-    {
-      headers: getHeaders(token),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("Failed to get enrichment status");
-  }
-
-  return response.json();
-};
-
-/**
  * Process rejection feedback with LLM
  */
 export const processRejectionFeedback = async (
@@ -371,9 +299,6 @@ export const processRejectionFeedback = async (
   return handleApiResponse(response);
 };
 
-/**
- * Start deep analysis of accepted candidates
- */
 export const enrichAcceptedCandidates = async (
   sessionId: string,
   token: string,
@@ -395,7 +320,7 @@ export const enrichAcceptedCandidates = async (
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.detail || "Failed to start enrichment");
+    throw new Error(error.detail || "Failed to start ranking");
   }
 
   return response.json();
@@ -506,13 +431,61 @@ export const createPipelineFromSession = async (
   }
 ): Promise<{
   success: boolean;
-  pipeline_id: string;
-  shortlisted_count: number;
+  batch_id: string;
+  pipeline_ids: string[];
+  count: number;
   message: string;
 }> => {
   const response = await apiCall(`/conversation/${sessionId}/create-pipeline`, {
     method: "POST",
     body: JSON.stringify(data),
+    token,
+  });
+
+  return handleApiResponse(response);
+};
+
+export const selectCandidates = async (
+  sessionId: string,
+  candidateIds: string[],
+  selected: boolean,
+  token: string
+) => {
+  const response = await apiCall(
+    `/conversation/${sessionId}/select-candidates`,
+    {
+      method: "POST",
+      body: JSON.stringify({ candidate_ids: candidateIds, selected }),
+      token,
+    }
+  );
+
+  return handleApiResponse(response);
+};
+
+export const getSelectedCandidates = async (
+  sessionId: string,
+  token: string
+) => {
+  const response = await apiCall(`/conversation/${sessionId}/selected`, {
+    method: "GET",
+    token,
+  });
+  return handleApiResponse(response);
+};
+
+/**
+ * List all pipeline sessions
+ */
+export const getPipelineSessions = async (
+  token: string
+): Promise<{
+  success: boolean;
+  sessions: PipelineSession[];
+  total: number;
+}> => {
+  const response = await apiCall("/conversation/list/pipeline-sessions", {
+    method: "GET",
     token,
   });
 

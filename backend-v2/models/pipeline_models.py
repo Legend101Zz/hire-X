@@ -18,7 +18,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 # ===================================================================
 # ENUMS - Pipeline Stages & Statuses
@@ -113,11 +113,13 @@ class OutreachType(str, Enum):
 
 class ContactFetchSource(str, Enum):
     """Source of contact information."""
+class ContactFetchSource(str, Enum):
     HATCH_API = "hatch_api"
-    LINKEDIN_SCRAPE = "linkedin_scrape"
-    RESUME_EXTRACT = "resume_extract"
+    BRIGHTDATA_SCRAPE = "brightdata_scrape"
     MANUAL_INPUT = "manual_input"
-    EXISTING_DB = "existing_db"
+    LINKEDIN_SCRAPE = "linkedin_scrape"
+    RESUME_PARSE = "resume_parse"
+    UNKNOWN = "unknown"
 
 
 # ===================================================================
@@ -532,6 +534,28 @@ class EnrichmentSummary(BaseModel):
     
     # Errors
     enrichment_error: Optional[str] = None
+    
+    @field_validator('concerns', 'top_strengths', mode='before')
+    @classmethod
+    def normalize_list_items(cls, v):
+        """Fixes data where strings were saved as dicts (e.g. {'concern': '...'})"""
+        if not v:
+            return []
+        
+        normalized = []
+        for item in v:
+            if isinstance(item, dict):
+                # Extract text from common keys or just take the first value
+                if 'concern' in item:
+                    normalized.append(str(item['concern']))
+                elif 'strength' in item:
+                    normalized.append(str(item['strength']))
+                else:
+                    # Fallback: grab the first available value
+                    normalized.append(str(next(iter(item.values()), "")))
+            else:
+                normalized.append(str(item))
+        return normalized
 
 
 # ===================================================================
@@ -679,6 +703,32 @@ class PipelineCandidate(BaseModel):
             "description": ""
         })
     
+    # ADD THIS VALIDATOR BLOCK TEMPORARILY
+    @field_validator('outreach', mode='before')
+    @classmethod
+    def debug_outreach_validation(cls, v):
+        if v is None:
+            return v
+            
+        # If it's already a model, return it
+        if isinstance(v, OutreachRecord):
+            return v
+            
+        # If it's a dict (from Mongo), try to validate it manually to see the error
+        try:
+            OutreachRecord(**v)
+        except ValidationError as e:
+            print("------------ OUTREACH VALIDATION FAILED ------------")
+            print(f"Data causing error: {v}")
+            print("Specific Validation Errors:")
+            print(e.json())
+            print("----------------------------------------------------")
+            # We explicitly return None so the app doesn't crash, 
+            # but now you will see the error in your server logs.
+            return None
+            
+        return v    
+
     @property
     def display_name(self) -> str:
         """Get display name, falling back to various sources."""
@@ -890,7 +940,7 @@ class RecruitmentPipeline(BaseModel):
     
     # Source tracking
     source: PipelineSource = Field(default=PipelineSource.DONNA_SEARCH)
-    conversation_session_id: Optional[str] = None  # If from Donna
+    conversation_session_id: str  # Link back to Donna conversation
     search_session_id: Optional[str] = None  # Linked search results
     
     # Job context
@@ -913,6 +963,22 @@ class RecruitmentPipeline(BaseModel):
     created_at: str = Field(default_factory=get_current_timestamp)
     updated_at: str = Field(default_factory=get_current_timestamp)
     archived_at: Optional[str] = None
+    
+    def get_stage_label(self) -> str:
+        """Get friendly stage label."""
+        return STAGE_METADATA.get(self.candidate.stage, {}).get("label", self.candidate.stage.value)
+    
+    @property
+    def candidate(self) -> Optional[PipelineCandidate]:
+        """Get the single candidate (for single-candidate pipelines)."""
+        return self.candidates[0] if self.candidates else None
+    
+    @property
+    def display_name(self) -> str:
+        """Get display name for the pipeline."""
+        if self.name:
+            return self.name
+        return f"{self.job.job_title} Pipeline"
     
     # Methods
     def add_candidate(self, candidate: PipelineCandidate) -> PipelineCandidate:
@@ -949,6 +1015,7 @@ class RecruitmentPipeline(BaseModel):
     def recalculate_stats(self):
         """Recalculate pipeline statistics."""
         self.stats.recalculate(self.get_active_candidates())
+        
     
     @property
     def display_name(self) -> str:
@@ -959,7 +1026,7 @@ class RecruitmentPipeline(BaseModel):
 
 
 # ===================================================================
-# API REQUEST/RESPONSE MODELS
+# API REQUEST/RESPONSE MODELS 
 # ===================================================================
 
 class CreatePipelineFromSearchRequest(BaseModel):
@@ -1036,6 +1103,15 @@ class CandidateDetailResponse(BaseModel):
     stage_metadata: Dict[str, Any]
     job_context: JobContext
     timeline: List[Dict[str, Any]]  # Stage history + events
+    
+class AddCandidateToPipelineRequest(BaseModel):
+    linkedin_url: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    expected_salary: Optional[str] = None
+    notice_period: Optional[str] = None
+    notes: Optional[str] = None
 
 
 # ===================================================================
@@ -1087,4 +1163,5 @@ __all__ = [
     "AddCandidateNoteRequest",
     "PipelineDashboardResponse",
     "CandidateDetailResponse",
+    "AddCandidateToPipelineRequest"
 ]
