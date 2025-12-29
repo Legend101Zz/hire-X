@@ -33,6 +33,31 @@ module.exports = {
         HATCH_API_KEY:
           "U2FsdGVkX1_FkKFPqEPvJAIAoPR2GG16d2SrzUzYd_csurd-xQQE6gLQyBsXlQLNgxRa697052l6S9roDb4g6A",
 
+        //Vapi Configuration
+        VAPI_API_KEY: "315e1107-5551-4e01-85bb-f5def725c3a2",
+        VAPI_PHONE_NUMBER_ID: "704399ac-d17f-40ab-b6a2-fc5b1d0cef8c",
+
+        //Webhook URL (server's public URL for vapi)
+        WEBHOOK_BASE_URL: "https://neuraleap.shop",
+
+        // Cartesia (used via Vapi, but needed for direct calls)
+        CARTESIA_API_KEY: "sk_car_H432gY5mx9QA56jPJ1KHTT",
+
+        // Interview Storage
+        INTERVIEW_RECORDINGS_PATH: "./interview_recordings",
+        WEBHOOK_BASE_URL: "https://neuraleap.shop",
+
+        // Gmail SMTP Configuration
+        EMAIL_PROVIDER: "gmail",
+        SMTP_HOST: "smtp.gmail.com",
+        SMTP_PORT: "587",
+        SMTP_USERNAME: "comreton11@gmail.com",
+        SMTP_PASSWORD: "kmmo cywc thxk qrpd",
+        SMTP_FROM_EMAIL: "comreton11@gmail.com",
+        SMTP_FROM_NAME: "NeuraLeap Careers",
+        SMTP_USE_TLS: "true",
+        APP_BASE_URL: "https://app.neuraleap.shop",
+
         // MongoDB - Main Database
         MONGODB_URL:
           "mongodb://profiles_app:Neuraleap123@localhost:27017/neuraleap?authSource=profiles_production",
@@ -49,7 +74,7 @@ module.exports = {
         REDIS_DB: "0",
         REDIS_PASSWORD: "",
         ALLOWED_ORIGINS:
-          "https://neuraleap.shop,https://www.neuraleap.shop,http://localhost:3000",
+          "https://neuraleap.shop,https://www.neuraleap.shop,http://localhost:3000,https://app.neuraleap.shop",
 
         // Server Configuration
         HOST: "0.0.0.0",
