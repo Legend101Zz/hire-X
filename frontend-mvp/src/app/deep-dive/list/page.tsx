@@ -19,6 +19,7 @@ import {
     Sparkles,
     TrendingUp,
     AlertCircle,
+    X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -450,7 +451,7 @@ export default function DeepDivePage() {
                         transition={{ delay: 0.2 }}
                         className="mt-12 p-6 rounded-2xl bg-slate-800/30 border border-slate-700/50"
                     >
-                        <h3 className="text-lg font-semibold text-white mb-4">What you'll get</h3>
+                        <h3 className="text-lg font-semibold text-white mb-4">What you&apos;ll get</h3>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div className="flex items-start gap-3">
                                 <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center flex-shrink-0">
