@@ -26,7 +26,8 @@ import {
     UserCheck,
     FileText,
     Bot,
-    HelpCircle
+    HelpCircle,
+    Brain
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -394,6 +395,8 @@ export default function ResultsPage() {
                                 candidate={selectedCandidate}
                                 isShortlisted={shortlistedIds.has(selectedCandidate.candidate_id)}
                                 onToggleShortlist={(e: any) => toggleShortlist(e, selectedCandidate.candidate_id)}
+                                sessionData={sessionData}
+                                sessionId={sessionId}
                             />
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-10 text-center">
@@ -536,9 +539,34 @@ function CandidateRow({ candidate, isSelected, isShortlisted, onClick, onToggleS
     );
 }
 
-function CandidateDossier({ candidate, isShortlisted, onToggleShortlist }: any) {
+function CandidateDossier({ candidate, isShortlisted, onToggleShortlist, sessionData,
+    sessionId }: {
+        candidate: any;
+        isShortlisted: boolean;
+        onToggleShortlist: (e: any) => void;
+        sessionData: any;
+        sessionId: string;
+    }) {
+    const router = useRouter();
     const analysis = candidate.match_analysis || {};
     const score = analysis.overall_match_score || 0;
+
+    const handleDeepDive = () => {
+        // Get job description from session data
+        const jobDescription = sessionData?.ideal_profile?.detailed_requirements ||
+            sessionData?.job_description ||
+            "";
+
+        // Navigate to deep-dive with pre-filled data
+        const params = new URLSearchParams({
+            linkedin_url: candidate.linkedin_url,
+            jd: jobDescription,
+            candidate_name: candidate.name,
+            from_session: sessionId
+        });
+
+        router.push(`/deep-dive?${params.toString()}`);
+    };
 
     // Helper to render image or fallback
     const renderProfileImage = () => {
@@ -617,6 +645,45 @@ function CandidateDossier({ candidate, isShortlisted, onToggleShortlist }: any) 
                         </div>
 
                         <div className="flex flex-col items-end gap-4">
+                            {/* Match Score Indicator */}
+                            <div className="flex items-center gap-3 bg-black/40 rounded-lg px-4 py-2 border border-white/10">
+                                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Match Score</span>
+                                <div className={`text-2xl font-bold ${score >= 70 ? 'text-emerald-400' : score >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                    {score}%
+                                </div>
+                            </div>
+                            {/* DECISION HELPER CARD */}
+                            <motion.div
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.2 }}
+                                className="w-full max-w-sm bg-gradient-to-br from-violet-500/10 to-purple-500/10 border border-violet-500/20 rounded-xl p-4"
+                            >
+                                <div className="flex items-start gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center shrink-0">
+                                        <Brain className="w-4 h-4 text-violet-400" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <h4 className="text-xs font-semibold text-violet-300 mb-1">Not sure if this is the right fit?</h4>
+                                        <p className="text-[11px] text-violet-200/70 leading-relaxed mb-3">
+                                            Get a comprehensive AI analysis with skill validation, salary estimates, and hiring recommendations before making your decision.
+                                        </p>
+                                        <Button
+                                            size="sm"
+                                            onClick={handleDeepDive}
+                                            className="w-full h-9 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium shadow-lg transition-all group"
+                                        >
+                                            <Brain className="w-3.5 h-3.5 mr-2 group-hover:scale-110 transition-transform" />
+                                            Run Deep Dive Analysis
+                                            <ArrowRight className="w-3.5 h-3.5 ml-2 group-hover:translate-x-1 transition-transform" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            </motion.div>
+
+                            {/* Divider */}
+                            <div className="w-full h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
                             <Button
                                 size="lg"
                                 onClick={onToggleShortlist}
@@ -635,13 +702,7 @@ function CandidateDossier({ candidate, isShortlisted, onToggleShortlist }: any) 
                                 )}
                             </Button>
 
-                            {/* Match Score Indicator */}
-                            <div className="flex items-center gap-3 bg-black/40 rounded-lg px-4 py-2 border border-white/10">
-                                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Match Score</span>
-                                <div className={`text-2xl font-bold ${score >= 70 ? 'text-emerald-400' : score >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>
-                                    {score}%
-                                </div>
-                            </div>
+
                         </div>
                     </div>
                 </div>

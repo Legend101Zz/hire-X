@@ -336,3 +336,12 @@ class CreatePipelineRequest(BaseModel):
     """Request to create pipeline from session."""
     shortlisted_candidate_ids: List[str] = Field(..., min_length=1)
     pipeline_name: Optional[str] = None
+    
+class AddCandidateRequest(BaseModel):
+    linkedin_url: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    expected_salary: Optional[str] = None
+    notice_period: Optional[str] = None
+    notes: Optional[str] = None

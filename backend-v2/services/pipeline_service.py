@@ -58,7 +58,7 @@ from models.scheduling_models import (InterviewSchedule, ScheduleStatus,
 from models.vapi_interview_models import (CreateInterviewRequest,
                                           InterviewCandidateContext,
                                           InterviewJobContext)
-from services.email_outreach_service import EmailProvider
+from services.email_outreach_service import EmailOutreachService, EmailProvider
 from services.hatch_service import HatchService
 from services.intelligent_enrichment_orchestrator import \
     IntelligentEnrichmentOrchestrator
@@ -90,7 +90,7 @@ class PipelineService:
         jd_parser=None,
         enrichment_orchestrator: IntelligentEnrichmentOrchestrator=None,
         hatch_service: HatchService =None,
-        email_service:EmailProvider=None,
+        email_service:EmailOutreachService=None,
         vapi_service: VapiInterviewService=None,
         base_url: str = None
     ):
@@ -1388,6 +1388,7 @@ class PipelineService:
     ) -> Dict[str, Any]:
         """
         Book an interview slot for a candidate.
+        If a booking already exists, update it instead of creating a duplicate.
         """
         from datetime import timezone as dt_timezone
 
@@ -1421,18 +1422,14 @@ class PipelineService:
             return {
                 "success": False,
                 "error": "Phone number required for interview. Please provide your phone number.",
-                "requires_phone": True  # Signal to frontend
+                "requires_phone": True
             }
         
-        # ✅ FIX: Validate scheduled time is in future with proper timezone handling
+        # Validate scheduled time is in future with proper timezone handling
         try:
-            # Parse the scheduled datetime (handles +05:30, Z, etc.)
             scheduled_dt = datetime.fromisoformat(scheduled_datetime.replace('Z', '+00:00'))
-            
-            # Get current time as timezone-aware UTC
             now_utc = datetime.now(dt_timezone.utc)
             
-            # Compare timezone-aware datetimes
             if scheduled_dt <= now_utc:
                 return {
                     "success": False,
@@ -1444,29 +1441,85 @@ class PipelineService:
                 "error": f"Invalid datetime format: {e}"
             }
         
-        # Create interview schedule
-        schedule = InterviewSchedule(
-            pipeline_id=pipeline.pipeline_id,
-            candidate_id=candidate.candidate_id,
-            scheduling_token=scheduling_token,
-            candidate_name=candidate.display_name,
-            candidate_email=candidate.contact.email,
-            candidate_phone=candidate.contact.phone,
-            linkedin_url=candidate.linkedin_url,
-            job_title=pipeline.job.job_title,
-            company_name=pipeline.job.company_name,
-            scheduled_datetime=scheduled_datetime,
-            timezone=timezone,
-            duration_minutes=pipeline.job.interview_duration_minutes,
-            status=ScheduleStatus.CONFIRMED,
-            candidate_preferred_time=preferred_time,
-            candidate_special_requirements=special_requirements,
-            candidate_notes=candidate_notes,
-            confirmed_at=get_current_timestamp()
-        )
+        # ✅ NEW: Check if schedule already exists for this token
+        existing_schedule = await self.schedules_collection.find_one({
+            "scheduling_token": scheduling_token
+        })
         
-        # Save schedule
-        await self.schedules_collection.insert_one(schedule.model_dump())
+        if existing_schedule:
+            # ✅ UPDATE existing schedule
+            logger.info(f"📝 Updating existing schedule {existing_schedule['schedule_id']} for {candidate.display_name}")
+            
+            from models.scheduling_models import (InterviewSchedule,
+                                                  RescheduleReason,
+                                                  RescheduleRecord)
+            
+            schedule = InterviewSchedule(**existing_schedule)
+            
+            # If time changed, record it as a reschedule
+            if schedule.scheduled_datetime != scheduled_datetime:
+                reschedule_record = RescheduleRecord(
+                    original_datetime=schedule.scheduled_datetime,
+                    new_datetime=scheduled_datetime,
+                    reason=RescheduleReason.CANDIDATE_REQUEST,
+                    reason_details="Time updated during booking",
+                    initiated_by="candidate"
+                )
+                
+                if not schedule.original_scheduled_datetime:
+                    schedule.original_scheduled_datetime = schedule.scheduled_datetime
+                
+                schedule.reschedule_history.append(reschedule_record)
+                schedule.reschedule_count += 1
+                schedule.scheduled_datetime = scheduled_datetime
+            
+            # Update other fields
+            schedule.timezone = timezone
+            schedule.candidate_preferred_time = preferred_time
+            schedule.candidate_special_requirements = special_requirements
+            schedule.candidate_notes = candidate_notes
+            schedule.candidate_phone = candidate.contact.phone
+            schedule.status = ScheduleStatus.CONFIRMED
+            schedule.confirmed_at = get_current_timestamp()
+            schedule.updated_at = get_current_timestamp()
+            
+            # Save updated schedule
+            await self.schedules_collection.update_one(
+                {"schedule_id": schedule.schedule_id},
+                {"$set": schedule.model_dump()}
+            )
+            
+            schedule_id = schedule.schedule_id
+            logger.info(f"✅ Updated schedule {schedule_id} to {scheduled_datetime}")
+            
+        else:
+            # ✅ CREATE new schedule
+            logger.info(f"📅 Creating new schedule for {candidate.display_name}")
+            
+            schedule = InterviewSchedule(
+                pipeline_id=pipeline.pipeline_id,
+                candidate_id=candidate.candidate_id,
+                scheduling_token=scheduling_token,
+                candidate_name=candidate.display_name,
+                candidate_email=candidate.contact.email,
+                candidate_phone=candidate.contact.phone,
+                linkedin_url=candidate.linkedin_url,
+                job_title=pipeline.job.job_title,
+                company_name=pipeline.job.company_name,
+                scheduled_datetime=scheduled_datetime,
+                timezone=timezone,
+                duration_minutes=pipeline.job.interview_duration_minutes,
+                status=ScheduleStatus.CONFIRMED,
+                candidate_preferred_time=preferred_time,
+                candidate_special_requirements=special_requirements,
+                candidate_notes=candidate_notes,
+                confirmed_at=get_current_timestamp()
+            )
+            
+            # Save new schedule
+            await self.schedules_collection.insert_one(schedule.model_dump())
+            schedule_id = schedule.schedule_id
+            logger.info(f"✅ Created new schedule {schedule_id}")
         
         # Update candidate
         candidate.interview.scheduled_datetime = scheduled_datetime
@@ -1503,12 +1556,11 @@ class PipelineService:
         try:
             formatted_time = scheduled_dt.strftime("%A, %B %d at %I:%M %p")
         except:
-            # Fallback if formatting fails
             formatted_time = scheduled_datetime
         
         return {
             "success": True,
-            "schedule_id": schedule.schedule_id,
+            "schedule_id": schedule_id,
             "scheduled_datetime": scheduled_datetime,
             "formatted_time": formatted_time,
             "timezone": timezone,
@@ -1516,101 +1568,122 @@ class PipelineService:
             "message": f"Your interview is confirmed for {formatted_time}"
         }
 
-
     async def _get_available_slots(
         self,
         pipeline_id: str,
         days_ahead: int = 14,
         test_mode: bool = False
     ) -> List:
-        """Get available time slots for booking."""
+        """
+        Get available time slots for booking in IST timezone.
+        """
+        from datetime import timezone as dt_timezone
+
+        import pytz
+
         from models.scheduling_models import TimeSlot
+
+        IST = pytz.timezone('Asia/Kolkata')
 
         if test_mode:
             # TESTING: Generate slots for next 5 minutes
             logger.info("🧪 TEST MODE: Generating immediate test slots")
-            now = datetime.utcnow()
+            now_utc = datetime.now(dt_timezone.utc)
+            now_ist = now_utc.astimezone(IST)
             test_slots = []
             
-            for i in range(1, 6):  # 5 slots, 1-5 minutes from now
-                slot_time = now + timedelta(minutes=i)
-                slot_id = f"test-slot-{i}"
-                
-                # Format times properly
-                date_str = slot_time.strftime("%Y-%m-%d")
-                start_time_str = slot_time.strftime("%H:%M")
-                end_time_str = (slot_time + timedelta(minutes=30)).strftime("%H:%M")
-                datetime_str = slot_time.isoformat() + "Z"  # Add Z for UTC
-                
-                # Determine slot type based on hour - USE STRINGS DIRECTLY
-                hour = slot_time.hour
-                if hour < 12:
-                    slot_type = "morning"
-                elif hour < 17:
-                    slot_type = "afternoon"
-                else:
-                    slot_type = "evening"
+            for i in range(1, 6):
+                slot_time_ist = now_ist + timedelta(minutes=i)
                 
                 test_slots.append(TimeSlot(
-                    slot_id=slot_id,
-                    date=date_str,
-                    start_time=start_time_str,
-                    end_time=end_time_str,
-                    datetime=datetime_str,
+                    slot_id=f"test-slot-{i}",
+                    date=slot_time_ist.strftime("%Y-%m-%d"),
+                    start_time=slot_time_ist.strftime("%H:%M"),
+                    end_time=(slot_time_ist + timedelta(minutes=30)).strftime("%H:%M"),
+                    datetime=slot_time_ist.isoformat(),
                     timezone="Asia/Kolkata",
                     is_available=True,
-                    slot_type=slot_type  # Now using string
+                    slot_type=self._get_slot_type(slot_time_ist.hour)
                 ))
-            
-            logger.info(f"   Generated {len(test_slots)} test slots:")
-            for slot in test_slots:
-                logger.info(f"     - {slot.start_time} ({slot.datetime})")
             
             return test_slots
 
-        # Normal production mode
+        # PRODUCTION MODE: Generate slots in IST
         try:
-            config_doc = await self.scheduling_config_collection.find_one({
-                "pipeline_id": pipeline_id
-            })
-            
-            if config_doc:
-                from models.scheduling_models import SchedulingConfiguration
-                config = SchedulingConfiguration(**config_doc)
-            else:
-                # Use defaults
-                from models.scheduling_models import (AvailabilityWindow,
-                                                      SchedulingConfiguration)
-                config = SchedulingConfiguration(
-                    username="system",
-                    timezone="Asia/Kolkata"
-                )
-                config.availability_windows = [
-                    AvailabilityWindow(
-                        start_time="10:00",
-                        end_time="18:00",
-                        days_of_week=[0, 1, 2, 3, 4]
-                    )
-                ]
-            
-            from models.scheduling_models import (InterviewSchedule,
-                                                  ScheduleStatus)
-            
+            from models.scheduling_models import ScheduleStatus
+
+            # Get existing bookings
             existing = await self.schedules_collection.find({
                 "pipeline_id": pipeline_id,
-                "status": {"$nin": [ScheduleStatus.CANCELLED.value, ScheduleStatus.RESCHEDULED.value]}
+                "status": {"$nin": [
+                    ScheduleStatus.CANCELLED.value,
+                    ScheduleStatus.RESCHEDULED.value,
+                    ScheduleStatus.COMPLETED.value,
+                    ScheduleStatus.EXPIRED.value
+                ]}
             }).to_list(length=100)
             
-            existing_schedules = [InterviewSchedule(**s) for s in existing]
+            booked_times = {
+                doc.get("scheduled_datetime") 
+                for doc in existing 
+                if doc.get("scheduled_datetime")
+            }
             
-            from_date = datetime.utcnow() + timedelta(hours=config.min_notice_hours)
-            to_date = datetime.utcnow() + timedelta(days=days_ahead)
+            # Generate slots in IST timezone
+            slots = []
+            now_utc = datetime.now(dt_timezone.utc)
+            now_ist = now_utc.astimezone(IST)
             
-            return config.generate_available_slots(from_date, to_date, existing_schedules)
+            # Start at least 1 hour from now, rounded to next 30-min slot
+            start_time_ist = now_ist + timedelta(hours=1)
+            # Round to next 30-minute mark
+            minutes = (start_time_ist.minute // 30 + 1) * 30
+            if minutes == 60:
+                start_time_ist = start_time_ist.replace(hour=start_time_ist.hour + 1, minute=0, second=0, microsecond=0)
+            else:
+                start_time_ist = start_time_ist.replace(minute=minutes, second=0, microsecond=0)
+            
+            end_time_ist = now_ist + timedelta(days=days_ahead)
+            
+            current_time_ist = start_time_ist
+            
+            # Generate slots every 30 minutes
+            while current_time_ist < end_time_ist:
+                slot_datetime_str = current_time_ist.isoformat()
+                
+                # Skip if already booked
+                if slot_datetime_str not in booked_times:
+                    slot_end_ist = current_time_ist + timedelta(minutes=30)
+                    
+                    slots.append(TimeSlot(
+                        slot_id=f"slot-{current_time_ist.strftime('%Y%m%d%H%M')}",
+                        date=current_time_ist.strftime("%Y-%m-%d"),
+                        start_time=current_time_ist.strftime("%H:%M"),
+                        end_time=slot_end_ist.strftime("%H:%M"),
+                        datetime=slot_datetime_str,
+                        timezone="Asia/Kolkata",
+                        is_available=True,
+                        slot_type=self._get_slot_type(current_time_ist.hour)
+                    ))
+                
+                current_time_ist += timedelta(minutes=30)
+            
+            logger.info(f"✅ Generated {len(slots)} available slots in IST")
+            return slots
             
         except Exception as e:
             logger.error(f"Failed to generate slots: {e}", exc_info=True)
             return []
+
+    def _get_slot_type(self, hour: int) -> str:
+        """Determine slot type based on IST hour."""
+        if hour < 12:
+            return "morning"
+        elif hour < 17:
+            return "afternoon"
+        else:
+            return "evening"
+
     # =========================================================================
     # INTERVIEW TRIGGERING
     # =========================================================================
@@ -1862,7 +1935,6 @@ class PipelineService:
                 if doc:
                     # 3. Success
                     doc.pop("_id", None)
-                    print('test2',doc)
                     return RecruitmentPipeline(**doc)
                 
                 # 4. Not Found Logging
@@ -2133,6 +2205,116 @@ class PipelineService:
     # =========================================================================
     # CANDIDATE OPERATIONS
     # =========================================================================
+    
+    async def add_candidate_to_pipeline(
+    self,
+    pipeline_id: str,
+    linkedin_url: str,
+    username: str,
+    name: Optional[str] = None,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    manual_data: Optional[Dict] = None
+    ) -> Dict:
+        """Add a new candidate to an existing pipeline."""
+        
+        # Get pipeline
+        pipeline = await self.get_pipeline(pipeline_id)
+        if not pipeline or pipeline.username != username:
+            raise PermissionError("Access denied")
+        
+        # Generate candidate ID
+        candidate_id = f"manual-{uuid.uuid4().hex[:8]}"
+        
+        # Try to find profile in database
+        linkedin_id = linkedin_url.split("/in/")[-1].rstrip("/")
+        profile = await self.mongodb.profiles_collection.find_one({
+            "linkedin_url": {"$regex": linkedin_id, "$options": "i"}
+        })
+        
+        # Build candidate object matching PipelineCandidate structure
+        now = get_current_timestamp()
+        
+        new_candidate = PipelineCandidate(
+            candidate_id=candidate_id,
+            profile_id=str(profile["_id"]) if profile else None,
+            linkedin_url=linkedin_url,
+            linkedin_id=linkedin_id,
+            manual_input={
+                "linkedin_url": linkedin_url,
+                "expected_salary": manual_data.get("expected_salary") if manual_data else None,
+                "notice_period": manual_data.get("notice_period") if manual_data else None,
+                "source_notes": manual_data.get("notes") if manual_data else None,
+                "imported_at": now
+            },
+            name=name or (profile.get("full_name") if profile else "Unknown"),
+            first_name=name.split()[0] if name else (profile.get("first_name") if profile else None),
+            last_name=name.split()[-1] if name and len(name.split()) > 1 else (profile.get("last_name") if profile else None),
+            headline=profile.get("headline") if profile else None,
+            current_title=profile.get("title") if profile else None,
+            current_company=profile.get("current_company") if profile else None,
+            location=profile.get("location") if profile else None,
+            skills=profile.get("skills", [])[:10] if profile else [],
+            stage=CandidateStage.SOURCED,
+            stage_updated_at=now,
+            added_at=now,
+            updated_at=now
+        )
+        
+        # Add contact if provided
+        if email:
+            new_candidate.contact.email = email
+            new_candidate.contact.email_source = ContactFetchSource.MANUAL_INPUT
+            new_candidate.contact.email_fetched_at = now
+        if phone:
+            new_candidate.contact.phone = phone
+            new_candidate.contact.phone_source = ContactFetchSource.MANUAL_INPUT
+            new_candidate.contact.phone_fetched_at = now
+        
+        # Add to pipeline
+        pipeline.candidates.append(new_candidate)
+        pipeline.recalculate_stats()
+        await self._save_pipeline(pipeline)
+        
+        # Also update conversation_session
+        session_id = pipeline.conversation_session_id
+        if session_id:
+            candidate_doc = {
+                "candidate_id": candidate_id,
+                "linkedin_url": linkedin_url,
+                "name": new_candidate.name,
+                "headline": new_candidate.headline,
+                "location": new_candidate.location,
+                "skills": new_candidate.skills,
+                "profile_id": new_candidate.profile_id,
+                "match_score": None,
+                "enrichment_status": "pending",
+                "pipeline_id": pipeline_id,
+                "added_at": now,
+                "source": "manual_add"
+            }
+            
+            await self.mongodb.main_db["conversation_sessions"].update_one(
+                {"session_id": session_id},
+                {
+                    "$push": {
+                        "search_results": candidate_doc,
+                        "sample_candidates": candidate_doc
+                    },
+                    "$addToSet": {"selected_candidate_ids": candidate_id},
+                    "$inc": {"total_candidates": 1},
+                    "$set": {"updated_at": now}
+                }
+            )
+        
+        return {
+            "success": True,
+            "candidate_id": candidate_id,
+            "name": new_candidate.name,
+            "stage": "sourced",
+            "message": f"Added {new_candidate.name} to pipeline"
+        }
+    
     
     async def update_candidate_stage(
         self,
@@ -2803,179 +2985,65 @@ class PipelineService:
             logger.error(f"Failed to fetch interview details: {e}")
             return None
 
+
     async def generate_email_preview(
         self,
         candidate: PipelineCandidate,
         job: JobContext,
-        tone: str = "professional",
-        custom_subject: Optional[str] = None,
-        custom_greeting: Optional[str] = None,
-        custom_body: Optional[str] = None,
-        custom_closing: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Generate email preview with optional customizations."""
-        
-        first_name = candidate.display_name.split()[0]
-        
-        # Generate scheduling link
-        scheduling_token = candidate.contact.scheduling_token or f"sched-{candidate.candidate_id[:12]}"
-        scheduling_link = f"{self.webhook_base_url}/schedule/{scheduling_token}"
-        
-        # Default content based on tone
-        tones = {
-            "professional": {
-                "greeting": f"Hi {first_name},",
-                "closing": "Looking forward to hearing from you.",
-                "signature": "Best regards"
-            },
-            "friendly": {
-                "greeting": f"Hey {first_name}!",
-                "closing": "Would love to chat soon!",
-                "signature": "Cheers"
-            },
-            "casual": {
-                "greeting": f"Hi {first_name},",
-                "closing": "Let me know if you're interested!",
-                "signature": "Thanks"
-            }
-        }
-        
-        tone_defaults = tones.get(tone, tones["professional"])
-        
-        # Use custom content or generate with AI
-        if custom_body:
-            body = custom_body
-        else:
-            # Generate personalized body using LLM
-            body = await self._generate_email_body(candidate, job, tone)
-        
-        subject = custom_subject or await self._generate_email_subject(candidate, job)
-        greeting = custom_greeting or tone_defaults["greeting"]
-        closing = custom_closing or tone_defaults["closing"]
-        signature = tone_defaults["signature"]
-        
-        # Build full email
-        full_text = f"""{greeting}
-
-    {body}
-
-    {closing}
-
-    {signature},
-    The NeuraLeap Team
-
-    ---
-    Schedule your interview: {scheduling_link}
-    """
-
-        full_html = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <p style="color: #374151; font-size: 16px; line-height: 1.6;">{greeting}</p>
-        
-        <p style="color: #374151; font-size: 16px; line-height: 1.6; white-space: pre-line;">{body}</p>
-        
-        <p style="color: #374151; font-size: 16px; line-height: 1.6;">{closing}</p>
-        
-        <div style="margin-top: 24px;">
-            <a href="{scheduling_link}" style="display: inline-block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
-                Schedule Your Interview
-            </a>
-        </div>
-        
-        <p style="color: #6b7280; font-size: 14px; margin-top: 24px;">
-            {signature},<br>
-            The NeuraLeap Team
-        </p>
-    </div>
-    """
-
-        return {
-            "subject": subject,
-            "greeting": greeting,
-            "body": body,
-            "closing": closing,
-            "signature": signature,
-            "scheduling_link": scheduling_link,
-            "full_preview_text": full_text,
-            "full_preview_html": full_html,
-            "placeholders_used": [
-                f"{{first_name}} = {first_name}",
-                f"{{job_title}} = {job.job_title}",
-                f"{{company}} = {job.company_name or 'our client'}"
-            ],
-            "word_count": len(body.split()),
-            "estimated_read_time": "30 seconds"
-        }
-
-
-    async def _generate_email_subject(self, candidate: PipelineCandidate, job: JobContext) -> str:
-        """Generate personalized email subject."""
-        first_name = candidate.display_name.split()[0]
-        
-        # Use templates based on candidate data
-        if candidate.current_company:
-            return f"{first_name} - {job.job_title} opportunity"
-        else:
-            return f"Quick question about your experience, {first_name}"
-
-
-    async def _generate_email_body(
-        self,
-        candidate: PipelineCandidate,
-        job: JobContext,
-        tone: str
-    ) -> str:
-        """Generate personalized email body using LLM."""
-        
-        prompt = f"""Write a brief outreach email body for a recruiter reaching out to a candidate.
-
-    CANDIDATE:
-    - Name: {candidate.display_name}
-    - Current Role: {candidate.current_title}
-    - Company: {candidate.current_company}
-    - Experience: {candidate.experience_years} years
-    - Skills: {', '.join(candidate.skills[:5]) if candidate.skills else 'Not specified'}
-
-    JOB:
-    - Title: {job.job_title}
-    - Company: {job.company_name or 'a growing company'}
-    - Required Skills: {', '.join(job.required_skills[:5])}
-
-    TONE: {tone}
-
-    RULES:
-    1. Keep it under 100 words
-    2. Mention ONE specific thing from their background
-    3. Be genuine, not salesy
-    4. Do NOT include the greeting or closing (just the body)
-    5. Do NOT include the scheduling link (it will be added automatically)
-    6. End with a simple ask to chat
-
-    Write the email body only:"""
-
+        tone: str = "professional"
+    ) -> dict:
+        """
+        Generate email preview and store as draft.
+        This is the method called by GET /email-preview.
+        """
         try:
-            response = await self._call_llm(prompt, temperature=0.7, max_tokens=200)
-            return response.strip()
+            # Ensure outreach record exists
+            if not candidate.outreach:
+                from models.pipeline_models import (OutreachRecord,
+                                                    generate_scheduling_token)
+                candidate.outreach = OutreachRecord(
+                    scheduling_token=generate_scheduling_token()
+                )
+            
+            scheduling_token = candidate.outreach.scheduling_token
+            scheduling_link = f"https://neuraleap.shop/schedule/{scheduling_token}"
+            candidate.outreach.scheduling_link = scheduling_link
+            
+            # Generate and store draft using email service
+            email_content = await self.email_service.generate_and_store_draft(
+                    candidate=candidate,
+                    job=job,
+                    scheduling_link=scheduling_link,
+                    tone=tone
+                )
+            
+            return email_content
+            
         except Exception as e:
-            logger.error(f"Email generation failed: {e}")
-            # Fallback template
-            first_name = candidate.display_name.split()[0]
-            return f"""I came across your profile and was impressed by your background in {candidate.current_title or 'your field'}.
-
-    We're looking for someone with your experience for a {job.job_title} role at {job.company_name or 'our client'}. Based on your work at {candidate.current_company or 'your current company'}, I think you could be a great fit.
-
-    Would you be open to a quick 10-minute chat? I've included a link below where you can pick a time that works for you."""
-
-
-    async def send_custom_outreach_email(
+            logger.error(f"Error generating email preview: {e}", exc_info=True)
+            raise
+        
+    async def send_outreach_email(
         self,
         pipeline_id: str,
         username: str,
-        subject: str,
-        body: str
+        subject: Optional[str] = None,
+        body: Optional[str] = None,
+        use_draft: bool = True
     ) -> Dict[str, Any]:
-        """Send outreach email with custom subject and body."""
+        """
+        Send outreach email to candidate.
         
+        Args:
+            pipeline_id: Pipeline ID
+            username: User sending email
+            subject: Custom subject (if edited)
+            body: Custom body (if edited)
+            use_draft: Use stored draft if True, generate fresh if False
+        
+        Returns:
+            Dict with send result
+        """
         pipeline = await self.get_pipeline(pipeline_id)
         if not pipeline or pipeline.username != username:
             raise PermissionError("Access denied")
@@ -2983,40 +3051,85 @@ class PipelineService:
         candidate = pipeline.candidate
         
         if not candidate.contact.email:
-            raise ValueError("No email address for candidate")
+            raise ValueError("Candidate has no email address")
         
-        # Generate scheduling token if not exists
-        if not candidate.contact.scheduling_token:
-            candidate.contact.scheduling_token = f"sched-{candidate.candidate_id[:12]}"
+        # Get or generate email content
+        if use_draft and candidate.outreach and candidate.outreach.emails:
+            # Use stored draft
+            draft = candidate.outreach.emails[-1]  # Latest draft
+            email_subject = subject or draft.subject
+            email_body_plain = body or draft.body_plain
+            email_body_html = draft.body_html
+        else:
+            # Generate fresh email
+            scheduling_link = candidate.outreach.scheduling_link if candidate.outreach else None
+            if not scheduling_link:
+                raise ValueError("No scheduling link found")
+            
+            email_content = await self.email_service.generate_outreach_email(
+                candidate=candidate,
+                job=pipeline.job,
+                scheduling_link=scheduling_link,
+                tone="professional"
+            )
+            
+            email_subject = subject or email_content["subject"]
+            email_body_plain = body or email_content["body"]
+            email_body_html = email_content.get("body_html", "")
         
-        scheduling_link = f"{self.webhook_base_url}/schedule/{candidate.contact.scheduling_token}"
-        
-        # Send via email service
-        result = await self.email_service.send_outreach_email(
+        # Send email
+        result = await self.email_service.send_email(
             to_email=candidate.contact.email,
             to_name=candidate.display_name,
-            subject=subject,
-            body=body,
-            scheduling_link=scheduling_link,
-            pipeline_id=pipeline_id,
-            candidate_id=candidate.candidate_id
+            subject=email_subject,
+            body_html=email_body_html,
+            body_plain=email_body_plain
         )
         
         if result.get("success"):
-            # Update candidate outreach status
-            from models.pipeline_models import OutreachTracker
+            # Update outreach record
+            from models.pipeline_models import (OutreachEmailRecord,
+                                                OutreachStatus, OutreachType,
+                                                get_current_timestamp)
             
-            if not candidate.outreach:
-                candidate.outreach = OutreachTracker()
+            sent_email = OutreachEmailRecord(
+                email_type=OutreachType.INITIAL,
+                subject=email_subject,
+                body_plain=email_body_plain,
+                body_html=email_body_html,
+                status=OutreachStatus.SENT,
+                sent_at=get_current_timestamp(),
+                message_id=result.get("message_id")
+            )
             
-            candidate.outreach.initial_email_sent_at = get_current_timestamp()
-            candidate.outreach.scheduling_link = scheduling_link
-            candidate.update_stage(CandidateStage.OUTREACH_SENT, triggered_by="user")
+            # Clear drafts and add sent email
+            candidate.outreach.emails = [
+                e for e in candidate.outreach.emails if e.status != OutreachStatus.PENDING
+            ]
+            candidate.outreach.add_email(sent_email)
             
+            # Update candidate stage
+            candidate.update_stage(
+                CandidateStage.OUTREACH_SENT,
+                triggered_by="user",
+                notes=f"Email sent: {email_subject}"
+            )
+            
+            # Save pipeline
+            pipeline.update_candidate(candidate)
+            pipeline.stats.total_contacted += 1
+            pipeline.recalculate_stats()
             await self._save_pipeline(pipeline)
-        
-        return result
-
+            
+            logger.info(f"✅ Outreach email sent to {candidate.display_name}")
+            
+            return {
+                "success": True,
+                "message": f"Email sent to {candidate.display_name}",
+                "message_id": result.get("message_id")
+            }
+        else:
+            raise ValueError(f"Email send failed: {result.get('error')}")
 
     async def enrich_candidate_background(self, pipeline_id: str, username: str):
         """Background task for enrichment."""

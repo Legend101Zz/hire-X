@@ -355,7 +355,10 @@ const EnrichmentDeepDive = ({ data, candidateName }: { data: any; candidateName:
                     return (
                         <button
                             key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveTab(tab.id);
+                            }}
                             className={cn(
                                 "flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all",
                                 isActive
@@ -974,10 +977,62 @@ const EnrichmentDeepDive = ({ data, candidateName }: { data: any; candidateName:
                                 <Badge variant="outline" className="text-xs">
                                     {responseLikelihood.likelihood_label || "Unknown"}
                                 </Badge>
+
+                                {/* FIX: Properly handle recommended_approach object */}
                                 {responseLikelihood.recommended_approach && (
-                                    <p className="text-sm text-zinc-400 mt-3">
-                                        {responseLikelihood.recommended_approach.summary || responseLikelihood.recommended_approach}
-                                    </p>
+                                    <div className="mt-4 space-y-2">
+                                        {/* Show summary if it exists */}
+                                        {typeof responseLikelihood.recommended_approach === 'string' ? (
+                                            <p className="text-sm text-zinc-400">
+                                                {responseLikelihood.recommended_approach}
+                                            </p>
+                                        ) : (
+                                            <>
+                                                {responseLikelihood.recommended_approach.summary && (
+                                                    <p className="text-sm text-zinc-400">
+                                                        {responseLikelihood.recommended_approach.summary}
+                                                    </p>
+                                                )}
+
+                                                {/* Show reasoning if available */}
+                                                {responseLikelihood.recommended_approach.reasoning && (
+                                                    <p className="text-sm text-zinc-500 italic">
+                                                        {responseLikelihood.recommended_approach.reasoning}
+                                                    </p>
+                                                )}
+
+                                                {/* Show primary channel */}
+                                                {responseLikelihood.recommended_approach.primary_channel && (
+                                                    <div className="flex items-center gap-2 text-xs text-zinc-400 mt-2">
+                                                        <Mail className="w-3.5 h-3.5" />
+                                                        <span>
+                                                            Best approach: <span className="text-zinc-300 font-medium">
+                                                                {responseLikelihood.recommended_approach.primary_channel}
+                                                            </span>
+                                                        </span>
+                                                    </div>
+                                                )}
+
+                                                {/* Show personalization hooks if available */}
+                                                {responseLikelihood.recommended_approach.personalization_hooks &&
+                                                    responseLikelihood.recommended_approach.personalization_hooks.length > 0 && (
+                                                        <div className="mt-3 p-3 bg-violet-500/5 rounded-lg border border-violet-500/20">
+                                                            <p className="text-xs text-violet-300 font-medium mb-2">
+                                                                💡 Personalization Tips:
+                                                            </p>
+                                                            <ul className="space-y-1">
+                                                                {responseLikelihood.recommended_approach.personalization_hooks.slice(0, 3).map((hook: string, i: number) => (
+                                                                    <li key={i} className="text-xs text-zinc-400 flex items-start gap-2">
+                                                                        <span className="text-violet-400 mt-0.5">•</span>
+                                                                        <span>{hook}</span>
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        </div>
+                                                    )}
+                                            </>
+                                        )}
+                                    </div>
                                 )}
                             </div>
 
@@ -1054,6 +1109,12 @@ const GmailEmailComposer = ({
                 setBodyHtml(existingEmail.body_html || "");
                 setBodyPlain(existingEmail.body_plain || "");
                 setLoading(false);
+
+                // Check if email was already sent
+                if (existingEmail.sent_at || existingEmail.status === 'sent') {
+                    console.log("Email already sent, skipping preview generation");
+                    return; // Don't call loadPreview
+                }
             } else {
                 loadPreview();
             }
@@ -1063,14 +1124,23 @@ const GmailEmailComposer = ({
     const loadPreview = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/email-preview`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            // First call - gets or generates draft
+            const res = await fetch(
+                `${API_BASE}/pipeline/${pipelineId}/email-preview?tone=${tone}`,
+                {
+                    headers: { Authorization: `Bearer ${token}` }
+                }
+            );
             const data = await res.json();
             if (data.success && data.preview) {
                 setSubject(data.preview.subject || "");
                 setBodyHtml(data.preview.body_html || "");
                 setBodyPlain(data.preview.body_plain || data.preview.body || "");
+
+                // Show cache indicator if from cache
+                if (data.preview.from_cache) {
+                    console.log("📧 Using cached draft");
+                }
             }
         } catch (err) {
             console.error("Failed to load email preview:", err);
@@ -1079,17 +1149,17 @@ const GmailEmailComposer = ({
         }
     };
 
+
+    // Update regenerate to force new generation
     const regenerate = async () => {
         setRegenerating(true);
         try {
-            const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/email-preview`, {
-                method: "POST",
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ tone })
-            });
+            const res = await fetch(
+                `${API_BASE}/pipeline/${pipelineId}/email-preview?tone=${tone}&regenerate=true`,
+                {
+                    headers: { Authorization: `Bearer ${token}` }
+                }
+            );
             const data = await res.json();
             if (data.success && data.preview) {
                 setSubject(data.preview.subject || "");
@@ -1103,13 +1173,44 @@ const GmailEmailComposer = ({
         }
     };
 
+
     const handleSend = async () => {
         setSending(true);
         try {
-            await onSend(subject, bodyPlain);
-            onClose();
+            // Check if user edited anything
+            const hasEdits = mode === "edit";
+
+            const res = await fetch(`${API_BASE}/pipeline/${pipelineId}/send-email`, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    subject: hasEdits ? subject : null,  // Only send if edited
+                    body: hasEdits ? bodyPlain : null,   // Only send if edited
+                    use_draft: !hasEdits                 // Use draft if not edited
+                })
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+                console.log("✅ Email sent successfully!");
+
+                // IMPORTANT: Close composer first
+                onClose();
+
+                // Then trigger parent refresh via onSend callback
+                // This will reload the flow and update the UI
+                await onSend(subject, bodyPlain);
+            } else {
+                console.error("Failed to send:", data);
+                alert(data.message || "Failed to send email");
+            }
         } catch (err) {
             console.error("Failed to send:", err);
+            alert("Failed to send email. Please try again.");
         } finally {
             setSending(false);
         }
@@ -2304,7 +2405,11 @@ export default function PipelineFlowPage() {
         });
 
         if (!res.ok) throw new Error("Failed to send email");
-        loadFlow();
+        try {
+            await loadFlow(); // Refresh the entire flow to get updated state
+        } catch (err) {
+            console.error("Failed to refresh flow:", err);
+        }
     };
 
     const handleDecision = async (decision: string, reason?: string) => {

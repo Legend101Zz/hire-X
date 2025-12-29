@@ -53,10 +53,8 @@ def get_password_hash(password: str) -> str:
     with very long or Unicode-rich passwords.
     """
     try:
-        print('pass',password)
         # Step 1: Pre-hash password to a fixed 64-character hex string
         prehashed = hashlib.sha256(password.encode("utf-8")).hexdigest()
-        print('hashed',prehashed)
         # Step 2: Pass the short, fixed-length hash to bcrypt
         hashed = pwd_context.hash(prehashed)
 

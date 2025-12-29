@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, Loader2, Clock, Phone } from 'lucide-react';
+import { Check, Loader2, Phone, AlertCircle } from 'lucide-react';
 
 interface BookingFormProps {
     onSubmit: (notes?: string, requirements?: string, phone?: string) => void;
@@ -15,140 +15,166 @@ export function BookingForm({
     onSubmit,
     loading,
     duration,
-    requiresPhone = true  // Always ask for phone for interviews
+    requiresPhone = true
 }: BookingFormProps) {
     const [notes, setNotes] = useState('');
     const [requirements, setRequirements] = useState('');
-    const [phone, setPhone] = useState('');
+    const [phone, setPhone] = useState('+91 ');
     const [phoneError, setPhoneError] = useState('');
 
     const validatePhone = (value: string): boolean => {
-        // Basic phone validation - adjust regex based on your needs
-        const phoneRegex = /^[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}$/;
-        return phoneRegex.test(value.replace(/\s/g, ''));
+        const cleaned = value.replace(/\s/g, '');
+        const phoneRegex = /^\+91[6-9]\d{9}$/;
+        return phoneRegex.test(cleaned);
     };
 
     const handlePhoneChange = (value: string) => {
-        setPhone(value);
-        if (value && !validatePhone(value)) {
-            setPhoneError('Please enter a valid phone number');
-        } else {
+        if (!value.startsWith('+91')) {
+            value = '+91 ' + value.replace(/^\+?91?\s*/, '');
+        }
+
+        let cleaned = value.replace(/\s/g, '');
+        if (cleaned.startsWith('+91') && cleaned.length > 3) {
+            const digits = cleaned.substring(3);
+            if (digits.length <= 5) {
+                cleaned = '+91 ' + digits;
+            } else {
+                cleaned = '+91 ' + digits.substring(0, 5) + ' ' + digits.substring(5, 10);
+            }
+        }
+
+        setPhone(cleaned);
+
+        const cleanedForValidation = cleaned.replace(/\s/g, '');
+        if (cleanedForValidation.length === 13) {
+            if (!validatePhone(cleanedForValidation)) {
+                setPhoneError('Please enter a valid Indian mobile number');
+            } else {
+                setPhoneError('');
+            }
+        } else if (cleanedForValidation.length > 3) {
             setPhoneError('');
         }
     };
 
     const handleSubmit = () => {
-        if (requiresPhone && !phone) {
-            setPhoneError('Phone number is required for the interview');
+        if (requiresPhone && !phone.trim()) {
+            setPhoneError('Phone number is required');
             return;
         }
 
-        if (requiresPhone && !validatePhone(phone)) {
-            setPhoneError('Please enter a valid phone number');
+        const cleanedPhone = phone.replace(/\s/g, '');
+        if (requiresPhone && !validatePhone(cleanedPhone)) {
+            setPhoneError('Please enter a valid 10-digit mobile number');
             return;
         }
 
-        onSubmit(notes || undefined, requirements || undefined, phone || undefined);
+        onSubmit(notes || undefined, requirements || undefined, cleanedPhone || undefined);
     };
 
     return (
-        <div className="space-y-6">
-            {/* Phone Number (Required for Interview) */}
-            {requiresPhone && (
-                <div>
-                    <label className="block text-[13px] text-white/60 mb-2">
-                        Phone Number <span className="text-red-400">*</span>
-                    </label>
-                    <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                            <Phone className="w-4 h-4 text-white/40" />
+        <div className="space-y-5">
+            <div>
+                <h3 className="text-sm font-semibold text-white mb-4">Contact Information</h3>
+
+                {/* Phone Number */}
+                {requiresPhone && (
+                    <div>
+                        <label className="block text-[12px] text-white/60 font-medium mb-2">
+                            Mobile Number <span className="text-red-400">*</span>
+                        </label>
+                        <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                                <Phone className="w-4 h-4 text-white/40" />
+                            </div>
+                            <input
+                                type="tel"
+                                value={phone}
+                                onChange={(e) => handlePhoneChange(e.target.value)}
+                                placeholder="+91 98765 43210"
+                                className={`
+                                    w-full pl-10 pr-4 py-3 
+                                    bg-white/[0.03] border rounded-lg 
+                                    text-[13px] text-white placeholder-white/30 
+                                    focus:outline-none focus:ring-2 focus:ring-[#0b6aff]/50
+                                    transition-all
+                                    ${phoneError
+                                        ? 'border-red-500/50'
+                                        : 'border-white/[0.08] focus:border-[#0b6aff]/50'
+                                    }
+                                `}
+                            />
                         </div>
-                        <input
-                            type="tel"
-                            value={phone}
-                            onChange={(e) => handlePhoneChange(e.target.value)}
-                            placeholder="+91 98765 43210"
-                            className={`w-full pl-11 pr-4 py-3 bg-white/[0.04] border rounded-xl text-[14px] text-white placeholder-white/30 focus:outline-none focus:border-white/20 ${phoneError ? 'border-red-500/50' : 'border-white/[0.08]'
-                                }`}
-                        />
+                        {phoneError ? (
+                            <div className="mt-2 flex items-start gap-1.5 text-[11px] text-red-400">
+                                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                                <span>{phoneError}</span>
+                            </div>
+                        ) : (
+                            <p className="mt-2 text-[11px] text-white/40">
+                                We'll call this number at the scheduled time
+                            </p>
+                        )}
                     </div>
-                    {phoneError && (
-                        <p className="mt-1.5 text-[12px] text-red-400">{phoneError}</p>
-                    )}
-                    <p className="mt-1.5 text-[12px] text-white/40">
-                        We'll call you on this number at the scheduled time
-                    </p>
-                </div>
-            )}
-
-            {/* Additional Info */}
-            <div className="space-y-4">
-                <div>
-                    <label className="block text-[13px] text-white/60 mb-2">
-                        Special Requirements (optional)
-                    </label>
-                    <input
-                        type="text"
-                        value={requirements}
-                        onChange={(e) => setRequirements(e.target.value)}
-                        placeholder="e.g., Need screen reader support"
-                        className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white placeholder-white/30 focus:outline-none focus:border-white/20"
-                    />
-                </div>
-
-                <div>
-                    <label className="block text-[13px] text-white/60 mb-2">
-                        Additional Notes (optional)
-                    </label>
-                    <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        rows={3}
-                        placeholder="Anything you'd like us to know..."
-                        className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white placeholder-white/30 focus:outline-none focus:border-white/20 resize-none"
-                    />
-                </div>
+                )}
             </div>
 
-            {/* Interview Info */}
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
-                <div className="flex items-start gap-3">
-                    <div className="p-1.5 bg-blue-500/20 rounded-lg">
-                        <Clock className="w-4 h-4 text-blue-400" />
-                    </div>
+            {/* Additional Information */}
+            <div>
+                <h3 className="text-sm font-semibold text-white mb-4">Additional Information</h3>
+
+                <div className="space-y-4">
                     <div>
-                        <p className="text-[14px] text-blue-400 font-medium">Interview Details</p>
-                        <p className="text-[13px] text-white/60 mt-1">
-                            This is a {duration}-minute voice interview. You&apos;ll receive a call at your
-                            registered phone number at the scheduled time.
-                        </p>
+                        <label className="block text-[12px] text-white/60 font-medium mb-2">
+                            Special Requirements <span className="text-white/30">(optional)</span>
+                        </label>
+                        <input
+                            type="text"
+                            value={requirements}
+                            onChange={(e) => setRequirements(e.target.value)}
+                            placeholder="e.g., Preferred language, accessibility needs"
+                            className="w-full px-4 py-3 bg-white/[0.03] border border-white/[0.08] rounded-lg text-[13px] text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-[#0b6aff]/50 focus:border-[#0b6aff]/50 transition-all"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-[12px] text-white/60 font-medium mb-2">
+                            Notes <span className="text-white/30">(optional)</span>
+                        </label>
+                        <textarea
+                            value={notes}
+                            onChange={(e) => setNotes(e.target.value)}
+                            rows={3}
+                            placeholder="Any additional information you'd like to share..."
+                            className="w-full px-4 py-3 bg-white/[0.03] border border-white/[0.08] rounded-lg text-[13px] text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-[#0b6aff]/50 focus:border-[#0b6aff]/50 resize-none transition-all"
+                        />
                     </div>
                 </div>
             </div>
 
             {/* Confirm Button */}
             <motion.button
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
+                whileHover={{ scale: loading ? 1 : 1.01 }}
+                whileTap={{ scale: loading ? 1 : 0.99 }}
                 onClick={handleSubmit}
                 disabled={loading || (requiresPhone && (!phone || !!phoneError))}
-                className="w-full py-4 bg-white text-black text-[15px] font-semibold rounded-xl hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                className="w-full py-3.5 bg-[#0b6aff] text-white text-[14px] font-semibold rounded-lg hover:bg-[#0b6aff]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#0b6aff]/20"
             >
                 {loading ? (
                     <>
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        Booking...
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Confirming...
                     </>
                 ) : (
                     <>
-                        <Check className="w-5 h-5" />
+                        <Check className="w-4 h-4" />
                         Confirm Interview
                     </>
                 )}
             </motion.button>
 
-            <p className="text-center text-[12px] text-white/40">
-                By confirming, you agree to be available at the scheduled time
+            <p className="text-center text-[10px] text-white/30 leading-relaxed">
+                By confirming, you agree to be available at the scheduled time in IST
             </p>
         </div>
     );

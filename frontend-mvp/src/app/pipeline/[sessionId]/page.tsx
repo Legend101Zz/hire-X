@@ -239,21 +239,32 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
         {
             key: "sourced",
             label: "Added",
+            description: "Candidate added to pipeline",
             icon: PlusCircle,
-            completed: true, // Always completed
-            active: candidate.stage === "sourced"
+            completed: true,
+            active: candidate.stage === "sourced",
+            completedAt: candidate.stage_updated_at
         },
         {
             key: "enriched",
-            label: "Enriched",
+            label: "Analyzed",
+            description: candidate.is_enriched
+                ? `Profile reviewed • Match: ${candidate.match_label || 'Pending'}`
+                : "Waiting for profile analysis",
             icon: Zap,
             completed: candidate.is_enriched,
             active: candidate.stage === "enriching" || candidate.stage === "enriched",
-            error: candidate.stage === "enrichment_failed"
+            error: candidate.stage === "enrichment_failed",
+            errorMessage: candidate.enrichment_error
         },
         {
             key: "email",
-            label: "Email",
+            label: "Contact Info",
+            description: candidate.has_email
+                ? `Email found: ${candidate.email?.substring(0, 20)}...`
+                : candidate.needs_manual_email
+                    ? "Email needed - please provide"
+                    : "Searching for contact info",
             icon: Mail,
             completed: candidate.has_email,
             active: candidate.needs_manual_email,
@@ -263,6 +274,9 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
         {
             key: "outreach",
             label: "Contacted",
+            description: candidate.outreach_sent
+                ? "Outreach email sent successfully"
+                : "Ready to send outreach email",
             icon: Send,
             completed: candidate.outreach_sent,
             active: candidate.stage === "outreach_sent"
@@ -270,6 +284,9 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
         {
             key: "responded",
             label: "Responded",
+            description: candidate.outreach_clicked
+                ? "Candidate clicked and engaged"
+                : "Waiting for candidate response",
             icon: MessageSquare,
             completed: candidate.outreach_clicked || candidate.stage === "responded" || candidate.stage === "scheduling",
             active: candidate.stage === "responded" || candidate.stage === "scheduling"
@@ -277,6 +294,9 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
         {
             key: "scheduled",
             label: "Scheduled",
+            description: candidate.interview_scheduled
+                ? `Interview scheduled for ${new Date(candidate.interview_scheduled).toLocaleDateString()}`
+                : "Waiting to schedule interview",
             icon: Calendar,
             completed: !!candidate.interview_scheduled,
             active: candidate.stage === "scheduled"
@@ -284,6 +304,9 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
         {
             key: "interviewed",
             label: "Interviewed",
+            description: candidate.interview_completed
+                ? `Interview complete • Score: ${candidate.interview_score || 'Pending'}`
+                : "Interview pending",
             icon: PhoneCall,
             completed: candidate.interview_completed,
             active: candidate.stage === "interview_completed"
@@ -298,12 +321,12 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
 
                 return (
                     <TooltipProvider key={stage.key}>
-                        <Tooltip>
+                        <Tooltip delayDuration={200}>
                             <TooltipTrigger asChild>
                                 <div className="flex items-center">
                                     <motion.div
                                         className={cn(
-                                            "w-7 h-7 rounded-full flex items-center justify-center transition-all",
+                                            "w-7 h-7 rounded-full flex items-center justify-center transition-all cursor-help",
                                             stage.completed
                                                 ? "bg-green-500/20 text-green-400 border border-green-500/30"
                                                 : stage.error
@@ -312,7 +335,7 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
                                                         ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 animate-pulse"
                                                         : "bg-zinc-800 text-zinc-600 border border-zinc-700"
                                         )}
-                                        whileHover={{ scale: 1.1 }}
+                                        whileHover={{ scale: 1.15 }}
                                     >
                                         {stage.completed ? (
                                             <Check className="w-3.5 h-3.5" />
@@ -330,11 +353,28 @@ const CandidateStageTimeline = ({ candidate }: { candidate: CandidateStatus }) =
                                     )}
                                 </div>
                             </TooltipTrigger>
-                            <TooltipContent side="top" className="bg-zinc-900 border-zinc-700">
-                                <p className="font-medium">{stage.label}</p>
-                                {stage.needsAction && (
-                                    <p className="text-xs text-amber-400">Action needed!</p>
-                                )}
+                            <TooltipContent
+                                side="top"
+                                className="bg-zinc-900 border-zinc-700 max-w-xs"
+                            >
+                                <div className="space-y-1">
+                                    <p className="font-bold text-sm flex items-center gap-2">
+                                        {stage.completed && <Check className="w-3 h-3 text-green-400" />}
+                                        {stage.error && <AlertTriangle className="w-3 h-3 text-red-400" />}
+                                        {stage.label}
+                                    </p>
+                                    <p className="text-xs text-zinc-400">{stage.description}</p>
+                                    {stage.needsAction && (
+                                        <p className="text-xs text-amber-400 font-medium mt-1">
+                                            ⚠️ Action needed - click to provide
+                                        </p>
+                                    )}
+                                    {stage.errorMessage && (
+                                        <p className="text-xs text-red-400 mt-1">
+                                            Error: {stage.errorMessage}
+                                        </p>
+                                    )}
+                                </div>
                             </TooltipContent>
                         </Tooltip>
                     </TooltipProvider>
@@ -662,7 +702,9 @@ const CandidateRow = ({
     const isEnriched = candidate.is_enriched && candidate.has_email;
     const isFailed = !!candidate.enrichment_error;
     const needsEmail = candidate.needs_manual_email;
+    const needsReview = candidate.is_enriched && candidate.has_email && !candidate.outreach_sent;
     const isSent = candidate.outreach_sent;
+    const alreadyProcessed = isSent || candidate.outreach_opened || candidate.outreach_clicked;
 
     const getMatchColor = (score: number) => {
         if (score >= 85) return "text-emerald-400";
@@ -683,22 +725,77 @@ const CandidateRow = ({
                     ? "border-indigo-500/50 bg-indigo-500/5"
                     : needsEmail
                         ? "border-amber-500/30 bg-amber-500/5"
-                        : "border-zinc-800 bg-zinc-900/30"
+                        : needsReview
+                            ? "border-purple-500/30 bg-purple-500/5"
+                            : alreadyProcessed
+                                ? "border-green-500/20 bg-green-500/5"
+                                : "border-zinc-800 bg-zinc-900/30"
             )}
         >
+            {/* Already Contacted Banner */}
+            {alreadyProcessed && (
+                <div className="flex items-center gap-3 p-3 -mt-2 -mx-2 bg-green-500/10 border-b border-green-500/20 rounded-t-xl">
+                    <CheckCircle2 className="w-4 h-4 text-green-400" />
+                    <div className="flex-1">
+                        <p className="text-xs font-medium text-green-300">Already Contacted</p>
+                        <p className="text-[10px] text-green-400/70">
+                            {candidate.outreach_opened ? "Email opened" :
+                                candidate.outreach_clicked ? "Candidate engaged" :
+                                    "Outreach sent"}
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {/* Review Required Banner */}
+            {needsReview && !alreadyProcessed && (
+                <div className="flex items-center gap-3 p-3 -mt-2 -mx-2 bg-purple-500/10 border-b border-purple-500/20 rounded-t-xl">
+                    <Eye className="w-4 h-4 text-purple-400" />
+                    <div className="flex-1">
+                        <p className="text-xs font-medium text-purple-300">Ready for Review</p>
+                        <p className="text-[10px] text-purple-400/70">Click to review profile before sending outreach</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-purple-400" />
+                </div>
+            )}
+
             {/* Top Row: Checkbox, Avatar, Name, Match Score */}
             <div className="flex items-center gap-4">
-                {/* Checkbox */}
-                <div onClick={(e) => e.stopPropagation()}>
-                    <Checkbox
-                        checked={isSelected}
-                        onCheckedChange={onToggle}
-                        disabled={isProcessing}
-                        className="border-zinc-600 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600"
-                    />
-                </div>
+                {/* Checkbox - Disabled for already contacted, hidden for review-required */}
+                {!needsReview && !alreadyProcessed && (
+                    <div onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={onToggle}
+                            disabled={isProcessing}
+                            className="border-zinc-600 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600"
+                        />
+                    </div>
+                )}
 
-                {/* Avatar */}
+                {/* Show disabled checkbox with tooltip for already contacted */}
+                {alreadyProcessed && (
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div onClick={(e) => e.stopPropagation()}>
+                                    <Checkbox
+                                        checked={false}
+                                        disabled
+                                        className="border-zinc-700 opacity-50"
+                                    />
+                                </div>
+                            </TooltipTrigger>
+                            <TooltipContent className="bg-zinc-900 border-zinc-700">
+                                <p className="text-xs">Already contacted - cannot reselect</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                )}
+
+                {needsReview && <div className="w-5" />} {/* Spacer */}
+
+                {/* Rest of the component stays the same... */}
                 <div className="relative">
                     {candidate.profile_picture_url ? (
                         <img
@@ -712,14 +809,24 @@ const CandidateRow = ({
                         </div>
                     )}
                     {/* Status indicator */}
-                    {candidate.is_enriched && candidate.has_email && (
+                    {candidate.is_enriched && candidate.has_email && !needsReview && !alreadyProcessed && (
                         <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-zinc-900 flex items-center justify-center">
                             <Check className="w-2.5 h-2.5 text-white" />
+                        </div>
+                    )}
+                    {needsReview && (
+                        <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-purple-500 rounded-full border-2 border-zinc-900 flex items-center justify-center">
+                            <Eye className="w-2.5 h-2.5 text-white" />
                         </div>
                     )}
                     {needsEmail && (
                         <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-amber-500 rounded-full border-2 border-zinc-900 flex items-center justify-center">
                             <AlertTriangle className="w-2.5 h-2.5 text-white" />
+                        </div>
+                    )}
+                    {alreadyProcessed && (
+                        <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-zinc-900 flex items-center justify-center">
+                            <CheckCircle2 className="w-2.5 h-2.5 text-white" />
                         </div>
                     )}
                 </div>
@@ -734,7 +841,6 @@ const CandidateRow = ({
                             {candidate.name}
                         </span>
                         {candidate.linkedin_url && (
-
                             <a href={candidate.linkedin_url}
                                 target="_blank"
                                 rel="noopener noreferrer"
@@ -768,6 +874,20 @@ const CandidateRow = ({
 
                 {/* Quick Actions */}
                 <div className="flex items-center gap-2">
+                    {needsReview && !alreadyProcessed && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-purple-500/50 text-purple-400 hover:bg-purple-500/10"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onClick();
+                            }}
+                        >
+                            <Eye className="w-3.5 h-3.5 mr-1.5" />
+                            Review & Send
+                        </Button>
+                    )}
                     {needsEmail && (
                         <Button
                             size="sm"
@@ -809,24 +929,30 @@ const CandidateRow = ({
 
             {/* Bottom Row: Timeline + Status Pills */}
             <div className="flex items-center justify-between pl-12">
-                {/* Timeline */}
                 <CandidateStageTimeline candidate={candidate} />
 
-                {/* Status Pills */}
                 <div className="flex items-center gap-2">
                     {candidate.stage === "enriching" && (
                         <StatusPill
                             icon={Loader2}
-                            label="Enriching"
+                            label="Analyzing"
                             color="blue"
                             loading
+                        />
+                    )}
+                    {needsReview && !alreadyProcessed && (
+                        <StatusPill
+                            icon={Eye}
+                            label="Review"
+                            color="purple"
+                            active
                         />
                     )}
                     {isSent && (
                         <StatusPill
                             icon={Check}
                             label="Sent"
-                            color="purple"
+                            color="green"
                             active
                         />
                     )}
@@ -850,7 +976,7 @@ const CandidateRow = ({
                         <StatusPill
                             icon={Trophy}
                             label={`Score: ${candidate.interview_score || '-'}`}
-                            color="green"
+                            color="emerald"
                             active
                         />
                     )}
@@ -858,25 +984,22 @@ const CandidateRow = ({
             </div>
 
             {/* Manual Data (if present) */}
-            {
-                candidate.manual_data && (
-                    <div className="flex items-center gap-4 pl-12 text-xs text-zinc-500">
-                        {candidate.manual_data.expected_salary && (
-                            <span>💰 {candidate.manual_data.expected_salary}</span>
-                        )}
-                        {candidate.manual_data.notice_period && (
-                            <span>⏱️ {candidate.manual_data.notice_period}</span>
-                        )}
-                        {candidate.manual_data.notes && (
-                            <span className="truncate max-w-xs">📝 {candidate.manual_data.notes}</span>
-                        )}
-                    </div>
-                )
-            }
-        </motion.div >
+            {candidate.manual_data && (
+                <div className="flex items-center gap-4 pl-12 text-xs text-zinc-500">
+                    {candidate.manual_data.expected_salary && (
+                        <span>💰 {candidate.manual_data.expected_salary}</span>
+                    )}
+                    {candidate.manual_data.notice_period && (
+                        <span>⏱️ {candidate.manual_data.notice_period}</span>
+                    )}
+                    {candidate.manual_data.notes && (
+                        <span className="truncate max-w-xs">📝 {candidate.manual_data.notes}</span>
+                    )}
+                </div>
+            )}
+        </motion.div>
     );
 };
-
 // ============================================================================
 // STATUS PILL COMPONENT
 // ============================================================================
@@ -1043,6 +1166,213 @@ const StatRow = ({
     );
 };
 
+
+// ============================================================================
+// ADD CANDIDATE DIALOG
+// ============================================================================
+
+const AddCandidateDialog = ({
+    isOpen,
+    onClose,
+    onSubmit,
+    isSubmitting
+}: {
+    isOpen: boolean;
+    onClose: () => void;
+    onSubmit: (data: {
+        linkedin_url: string;
+        name?: string;
+        email?: string;
+        phone?: string;
+        expected_salary?: string;
+        notice_period?: string;
+        notes?: string;
+    }) => Promise<void>;
+    isSubmitting: boolean;
+}) => {
+    const [linkedinUrl, setLinkedinUrl] = useState("");
+    const [name, setName] = useState("");
+    const [email, setEmail] = useState("");
+    const [phone, setPhone] = useState("");
+    const [expectedSalary, setExpectedSalary] = useState("");
+    const [noticePeriod, setNoticePeriod] = useState("");
+    const [notes, setNotes] = useState("");
+
+    const handleSubmit = async () => {
+        if (!linkedinUrl) return;
+        await onSubmit({
+            linkedin_url: linkedinUrl,
+            name: name || undefined,
+            email: email || undefined,
+            phone: phone || undefined,
+            expected_salary: expectedSalary || undefined,
+            notice_period: noticePeriod || undefined,
+            notes: notes || undefined
+        });
+        // Reset form
+        setLinkedinUrl("");
+        setName("");
+        setEmail("");
+        setPhone("");
+        setExpectedSalary("");
+        setNoticePeriod("");
+        setNotes("");
+    };
+
+    const isValidLinkedIn = linkedinUrl.includes("linkedin.com/in/");
+
+    return (
+        <Dialog open={isOpen} onOpenChange={onClose}>
+            <DialogContent className="bg-zinc-900 border-zinc-700 text-white max-w-md">
+                <DialogHeader>
+                    <DialogTitle className="flex items-center gap-3">
+                        <PlusCircle className="w-5 h-5 text-indigo-400" />
+                        Add Candidate
+                    </DialogTitle>
+                    <DialogDescription className="text-zinc-400">
+                        Add a new candidate to this pipeline. They'll start in the "sourced" stage.
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-4 py-4">
+                    {/* LinkedIn URL - Required */}
+                    <div className="space-y-2">
+                        <Label htmlFor="linkedin" className="text-zinc-300">
+                            LinkedIn URL <span className="text-red-400">*</span>
+                        </Label>
+                        <Input
+                            id="linkedin"
+                            value={linkedinUrl}
+                            onChange={(e) => setLinkedinUrl(e.target.value)}
+                            placeholder="https://linkedin.com/in/username"
+                            className={cn(
+                                "bg-zinc-800 border-zinc-700 focus:border-indigo-500",
+                                linkedinUrl && !isValidLinkedIn && "border-red-500"
+                            )}
+                        />
+                        {linkedinUrl && !isValidLinkedIn && (
+                            <p className="text-xs text-red-400">Please enter a valid LinkedIn profile URL</p>
+                        )}
+                    </div>
+
+                    {/* Name - Optional */}
+                    <div className="space-y-2">
+                        <Label htmlFor="name" className="text-zinc-300">
+                            Name <span className="text-zinc-500">(optional - we'll try to find it)</span>
+                        </Label>
+                        <Input
+                            id="name"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder="John Doe"
+                            className="bg-zinc-800 border-zinc-700 focus:border-indigo-500"
+                        />
+                    </div>
+
+                    {/* Contact Info */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                            <Label htmlFor="add-email" className="text-zinc-300 text-xs">
+                                Email
+                            </Label>
+                            <Input
+                                id="add-email"
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                placeholder="email@company.com"
+                                className="bg-zinc-800 border-zinc-700 focus:border-indigo-500 text-sm"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="add-phone" className="text-zinc-300 text-xs">
+                                Phone
+                            </Label>
+                            <Input
+                                id="add-phone"
+                                type="tel"
+                                value={phone}
+                                onChange={(e) => setPhone(e.target.value)}
+                                placeholder="+91 98765 43210"
+                                className="bg-zinc-800 border-zinc-700 focus:border-indigo-500 text-sm"
+                            />
+                        </div>
+                    </div>
+
+                    {/* HR Info */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                            <Label htmlFor="salary" className="text-zinc-300 text-xs">
+                                Expected Salary
+                            </Label>
+                            <Input
+                                id="salary"
+                                value={expectedSalary}
+                                onChange={(e) => setExpectedSalary(e.target.value)}
+                                placeholder="25 LPA"
+                                className="bg-zinc-800 border-zinc-700 focus:border-indigo-500 text-sm"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="notice" className="text-zinc-300 text-xs">
+                                Notice Period
+                            </Label>
+                            <Input
+                                id="notice"
+                                value={noticePeriod}
+                                onChange={(e) => setNoticePeriod(e.target.value)}
+                                placeholder="30 days"
+                                className="bg-zinc-800 border-zinc-700 focus:border-indigo-500 text-sm"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Notes */}
+                    <div className="space-y-2">
+                        <Label htmlFor="notes" className="text-zinc-300 text-xs">
+                            Notes
+                        </Label>
+                        <Input
+                            id="notes"
+                            value={notes}
+                            onChange={(e) => setNotes(e.target.value)}
+                            placeholder="Referral from John, strong React skills..."
+                            className="bg-zinc-800 border-zinc-700 focus:border-indigo-500 text-sm"
+                        />
+                    </div>
+                </div>
+
+                <DialogFooter className="gap-3">
+                    <Button
+                        variant="outline"
+                        onClick={onClose}
+                        className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        onClick={handleSubmit}
+                        disabled={!linkedinUrl || !isValidLinkedIn || isSubmitting}
+                        className="bg-indigo-600 hover:bg-indigo-500"
+                    >
+                        {isSubmitting ? (
+                            <>
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                Adding...
+                            </>
+                        ) : (
+                            <>
+                                <PlusCircle className="w-4 h-4 mr-2" />
+                                Add Candidate
+                            </>
+                        )}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
 // ============================================================================
 // MAIN PAGE COMPONENT
 // ============================================================================
@@ -1076,6 +1406,58 @@ export default function PipelineSessionPage() {
     // Filters
     const [filterStage, setFilterStage] = useState<string>("all");
     const [searchQuery, setSearchQuery] = useState("");
+
+    const [showReviewCaution, setShowReviewCaution] = useState(false);
+    const [pendingOutreachAction, setPendingOutreachAction] = useState(false);
+
+    const [showAddCandidate, setShowAddCandidate] = useState(false);
+    const [isAddingCandidate, setIsAddingCandidate] = useState(false);
+
+    // Calculate candidates that need review
+    const needsReviewCandidates = useMemo(() => {
+        return candidates.filter(c =>
+            selectedIds.has(c.candidate_id) &&
+            c.is_enriched &&
+            c.has_email &&
+            !c.outreach_sent
+        );
+    }, [candidates, selectedIds]);
+
+
+    const handleAddCandidate = async (data: {
+        linkedin_url: string;
+        name?: string;
+        email?: string;
+        phone?: string;
+        expected_salary?: string;
+        notice_period?: string;
+        notes?: string;
+    }) => {
+        setIsAddingCandidate(true);
+        try {
+            const res = await fetch(`${API_BASE}/conversation/${sessionId}/add-candidate`, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(data)
+            });
+
+            const result = await res.json();
+
+            if (result.success) {
+                setShowAddCandidate(false);
+                loadBatchStatus(); // Refresh list
+            } else {
+                alert(result.detail || result.error || "Failed to add candidate");
+            }
+        } catch (e: any) {
+            alert(e.message || "Failed to add candidate");
+        } finally {
+            setIsAddingCandidate(false);
+        }
+    };
 
     // Check for action param (from pipeline list page)
     useEffect(() => {
@@ -1218,22 +1600,57 @@ export default function PipelineSessionPage() {
         const targets = candidates.filter(c => selectedIds.has(c.candidate_id));
         if (targets.length === 0) return;
 
+        // Filter out candidates who already received outreach
+        const alreadyContacted = targets.filter(c => c.outreach_sent);
+        const notYetContacted = targets.filter(c => !c.outreach_sent);
+
+        // If all selected are already contacted, show error and return
+        if (notYetContacted.length === 0) {
+            alert("All selected candidates have already been contacted. Please select candidates who haven't received emails yet.");
+            return;
+        }
+
+        // If some are already contacted, show warning
+        if (alreadyContacted.length > 0) {
+            const proceed = window.confirm(
+                `${alreadyContacted.length} candidate${alreadyContacted.length > 1 ? 's have' : ' has'} already been contacted and will be skipped.\n\nProceed with ${notYetContacted.length} remaining candidate${notYetContacted.length > 1 ? 's' : ''}?`
+            );
+            if (!proceed) return;
+        }
+
+        // Check if any remaining candidates need review
+        const needsReview = notYetContacted.filter(c =>
+            c.is_enriched && c.has_email && !c.outreach_sent
+        );
+
+        if (needsReview.length > 0 && !pendingOutreachAction) {
+            setShowReviewCaution(true);
+            return;
+        }
+
+        // Reset pending action flag
+        setPendingOutreachAction(false);
+
+        // Process ONLY the not-yet-contacted candidates
         setShowConsole(true);
         setIsProcessing(true);
         setProcessingLogs([]);
-        setProcessingProgress({ current: 0, total: targets.length });
+        setProcessingProgress({ current: 0, total: notYetContacted.length });
 
-        addLog(`Starting outreach for ${targets.length} candidate${targets.length > 1 ? 's' : ''}`, "info");
+        addLog(`Starting outreach for ${notYetContacted.length} candidate${notYetContacted.length > 1 ? 's' : ''}`, "info");
 
-        for (let i = 0; i < targets.length; i++) {
-            const target = targets[i];
+        if (alreadyContacted.length > 0) {
+            addLog(`⏭️ Skipping ${alreadyContacted.length} already contacted`, "info");
+        }
+
+        for (let i = 0; i < notYetContacted.length; i++) {
+            const target = notYetContacted[i];
             setCurrentProcessingCandidate(target.name);
-            setProcessingProgress({ current: i + 1, total: targets.length });
+            setProcessingProgress({ current: i + 1, total: notYetContacted.length });
 
             addLog(`Processing ${target.name}...`, "pending");
 
             try {
-                // Call the enrichment endpoint that returns status
                 const res = await fetch(`${API_BASE}/pipeline/${target.pipeline_id}/enrich-with-status`, {
                     method: "POST",
                     headers: {
@@ -1245,32 +1662,30 @@ export default function PipelineSessionPage() {
 
                 const result: EnrichmentResult = await res.json();
 
-                // Process result stages
                 for (const stage of result.stages_completed) {
                     switch (stage) {
                         case "email_found":
-                            addLog(`📧 Found email: ${result.email_status.email}`, "success", `Source: ${result.email_status.source}`);
+                            addLog(`📧 Email found: ${result.email_status.email}`, "success", `Source: ${result.email_status.source}`);
                             break;
                         case "email_fetch_failed":
-                            addLog(`⚠️ Email not found automatically`, "warning", result.email_status.errors.join("; "));
+                            addLog(`⚠️ Email not found`, "warning", result.email_status.errors.join("; "));
                             break;
                         case "enrichment_completed":
-                            addLog(`✨ Enrichment complete! Score: ${result.enrichment_status.match_score}%`, "success");
+                            addLog(`✨ Analysis complete! Match: ${result.enrichment_status.match_score}%`, "success");
                             break;
                         case "outreach_sent":
-                            addLog(`🚀 Outreach email sent!`, "success");
+                            addLog(`🚀 Email sent successfully!`, "success");
                             break;
                     }
                 }
 
-                // Final status
                 if (result.success) {
                     if (result.email_status.needs_manual) {
-                        addLog(`${target.name}: Enriched but needs email input`, "warning");
+                        addLog(`${target.name}: Needs email input`, "warning");
                     } else if (result.outreach_status.sent) {
                         addLog(`${target.name}: Complete! ✅`, "success");
                     } else {
-                        addLog(`${target.name}: Ready for outreach`, "success");
+                        addLog(`${target.name}: Ready`, "success");
                     }
                 } else {
                     addLog(`${target.name}: Failed - ${result.enrichment_status.error}`, "error");
@@ -1280,16 +1695,16 @@ export default function PipelineSessionPage() {
                 addLog(`${target.name}: Error - ${e.message}`, "error");
             }
 
-            // Small delay between candidates
             await new Promise(r => setTimeout(r, 500));
         }
 
-        addLog("All candidates processed!", "info");
+        addLog("All processed!", "info");
         setIsProcessing(false);
         setCurrentProcessingCandidate(null);
         setSelectedIds(new Set());
         loadBatchStatus();
     };
+
 
     // Provide manual email
     const handleProvideEmail = async (email: string, phone: string | null, autoOutreach: boolean) => {
@@ -1384,6 +1799,22 @@ export default function PipelineSessionPage() {
                                     {stats.needsEmail} need email
                                 </Button>
                             )}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10"
+                                onClick={() => setShowAddCandidate(true)}
+                            >
+                                <PlusCircle className="w-4 h-4 mr-2" />
+                                Add Candidate
+                            </Button>
+                            {/* Add Candidate Dialog */}
+                            <AddCandidateDialog
+                                isOpen={showAddCandidate}
+                                onClose={() => setShowAddCandidate(false)}
+                                onSubmit={handleAddCandidate}
+                                isSubmitting={isAddingCandidate}
+                            />
                             <Button
                                 variant="ghost"
                                 size="icon"
@@ -1585,7 +2016,109 @@ export default function PipelineSessionPage() {
                 onSubmit={handleProvideEmail}
                 isSubmitting={isSubmittingEmail}
             />
+
+            {/* Review Caution Dialog */}
+            <ReviewCautionDialog
+                isOpen={showReviewCaution}
+                onClose={() => {
+                    setShowReviewCaution(false);
+                    setPendingOutreachAction(false);
+                }}
+                onProceed={() => {
+                    setPendingOutreachAction(true);
+                    handleStartOutreach();
+                }}
+                needsReviewCount={needsReviewCandidates.length}
+            />
+
         </div>
     );
 }
 
+const ReviewCautionDialog = ({
+    isOpen,
+    onClose,
+    onProceed,
+    needsReviewCount
+}: {
+    isOpen: boolean;
+    onClose: () => void;
+    onProceed: () => void;
+    needsReviewCount: number;
+}) => {
+    return (
+        <Dialog open={isOpen} onOpenChange={onClose}>
+            <DialogContent className="bg-zinc-900 border-zinc-700 text-white">
+                <DialogHeader>
+                    <DialogTitle className="flex items-center gap-3">
+                        <AlertTriangle className="w-5 h-5 text-amber-400" />
+                        Some Candidates Need Review
+                    </DialogTitle>
+                    <DialogDescription className="text-zinc-400">
+                        {needsReviewCount} candidate{needsReviewCount > 1 ? 's' : ''} {needsReviewCount > 1 ? 'have' : 'has'} been analyzed but {needsReviewCount > 1 ? 'haven\'t' : 'hasn\'t'} been reviewed yet.
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="py-4 space-y-4">
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
+                        <div className="flex items-start gap-3">
+                            <Info className="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0" />
+                            <div className="text-sm text-amber-200">
+                                <p className="font-medium mb-2">What does this mean?</p>
+                                <ul className="space-y-1 text-xs text-amber-200/80">
+                                    <li>✓ We've analyzed their profile and found their contact info</li>
+                                    <li>✓ We've calculated their match score</li>
+                                    <li>⚠️ But you haven't reviewed them yet</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-4">
+                        <div className="flex items-start gap-3">
+                            <Sparkles className="w-5 h-5 text-indigo-400 mt-0.5 flex-shrink-0" />
+                            <div className="text-sm">
+                                <p className="font-medium text-indigo-200 mb-1">Recommended Action</p>
+                                <p className="text-xs text-indigo-200/80">
+                                    Click on each candidate to review their full profile, match analysis, and personalized email draft before sending.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <DialogFooter className="gap-3">
+                    <Button
+                        variant="outline"
+                        onClick={onClose}
+                        className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                    >
+                        <Eye className="w-4 h-4 mr-2" />
+                        Let Me Review
+                    </Button>
+                    <Button
+                        onClick={() => {
+                            onProceed();
+                            onClose();
+                        }}
+                        className="bg-indigo-600 hover:bg-indigo-500"
+                    >
+                        <Send className="w-4 h-4 mr-2" />
+                        Send Anyway
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
+const ReviewRequiredBadge = () => (
+    <motion.div
+        initial={{ scale: 0 }}
+        animate={{ scale: 1 }}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30"
+    >
+        <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+        <span className="text-xs font-medium text-amber-300">Review Required</span>
+    </motion.div>
+);

@@ -26,8 +26,10 @@ from pydantic import BaseModel, Field
 from core.dependencies import (get_current_username, get_email_service,
                                get_pipeline_service)
 from core.logging_config import get_logger
-from models.pipeline_models import (STAGE_METADATA, CandidateStage,
-                                    ContactFetchSource, JobContext,
+from models.pipeline_models import (STAGE_METADATA,
+                                    AddCandidateToPipelineRequest,
+                                    CandidateStage, ContactFetchSource,
+                                    JobContext, OutreachStatus,
                                     PipelineCandidate, PipelineSettings,
                                     RecruitmentPipeline)
 from models.scheduling_models import get_current_timestamp
@@ -154,6 +156,17 @@ class BulkActionRequest(BaseModel):
     candidate_ids: List[str] = Field(..., min_length=1)
     action: str = Field(..., description="Action: shortlist, remove, reject, favorite")
     reason: Optional[str] = Field(None, description="Reason (for reject)")
+
+class EmailPreviewRequest(BaseModel):
+    """Request for email regeneration with tone."""
+    tone: str = "professional"
+
+
+class SendOutreachRequest(BaseModel):
+    """Request to send outreach email."""
+    subject: Optional[str] = None  # If user edited subject
+    body: Optional[str] = None     # If user edited body
+    use_draft: bool = True         # Use stored draft or regenerate
 
 class EmailPreviewRequest(BaseModel):
     """Request to preview email before sending."""
@@ -1805,7 +1818,7 @@ async def get_candidate_journey(
                 "email_missing": not bool(candidate.contact.email),
                 "email_source": candidate.contact.email_source.value if candidate.contact.email_source else None
             }
-            print('test',candidate)
+
             # Add preview if email exists
             if candidate.outreach and candidate.outreach.emails:
                 initial_email = next((e for e in candidate.outreach.emails if e.email_type.value == "initial"), None)
@@ -1817,7 +1830,6 @@ async def get_candidate_journey(
             outreach_phase["data"] = preview_data
         
         journey["phases"].append(outreach_phase)
-        print('phase otreach',outreach_phase)
         # Phase 4: Scheduling
         scheduling_phase = {
             "id": "scheduling",
@@ -2005,12 +2017,20 @@ async def make_hiring_decision(
 @router.get("/{pipeline_id}/email-preview")
 async def get_email_preview(
     pipeline_id: str,
+    tone: str = Query("professional", description="Email tone"),
+    regenerate: bool = Query(False, description="Force regenerate (ignore cache)"),
     current_user: str = Depends(get_current_username),
     pipeline_service: PipelineService = Depends(get_pipeline_service)
 ):
     """
     Generate email preview for candidate.
-    Shows exactly what the email will look like before sending.
+    
+    This generates the email using AI, stores it as a draft in the database,
+    and returns it for preview. The draft is saved so we can send it later.
+    
+    Query Params:
+        tone: "professional" | "friendly" | "casual"
+        regenerate: Force regenerate even if draft exists
     """
     try:
         pipeline = await pipeline_service.get_pipeline(pipeline_id)
@@ -2028,12 +2048,41 @@ async def get_email_preview(
                 "message": "No email address found for this candidate"
             }
         
-        # Generate email content using AI
+        # Check for existing draft (unless regenerate=true)
+        if not regenerate and candidate.outreach and candidate.outreach.emails:
+            draft = next(
+                (e for e in candidate.outreach.emails if e.status == OutreachStatus.PENDING),
+                None
+            )
+            if draft:
+                logger.info(f"📧 Using cached draft for {candidate.display_name}")
+                return {
+                    "success": True,
+                    "preview": {
+                        "subject": draft.subject,
+                        "body_plain": draft.body_plain,
+                        "body_html": draft.body_html,
+                        "scheduling_link": candidate.outreach.scheduling_link,
+                        "from_cache": True
+                    },
+                    "candidate": {
+                        "name": candidate.display_name,
+                        "email": candidate.contact.email,
+                        "first_name": candidate.display_name.split()[0]
+                    },
+                    "can_edit": True
+                }
+        
+        # Generate new email with AI
         email_content = await pipeline_service.generate_email_preview(
             candidate=candidate,
             job=job,
-            tone="professional"
+            tone=tone
         )
+        
+        # Save pipeline with draft
+        pipeline.update_candidate(candidate)
+        await pipeline_service._save_pipeline(pipeline)
         
         return {
             "success": True,
@@ -2048,87 +2097,53 @@ async def get_email_preview(
                 "Keep the subject line short and personal",
                 "Mention something specific about their background",
                 "Keep the email under 150 words for best response rates",
-                "Always include your scheduling link"
+                "Make sure the scheduling link works"
             ]
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Email preview failed: {e}")
+        logger.error(f"Email preview failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/{pipeline_id}/email-preview")
-async def update_email_preview(
-    pipeline_id: str,
-    request: EmailPreviewRequest,
-    current_user: str = Depends(get_current_username),
-    pipeline_service: PipelineService = Depends(get_pipeline_service)
-):
-    """
-    Update email preview with custom content.
-    Regenerates the full email with user's changes.
-    """
-    try:
-        pipeline = await pipeline_service.get_pipeline(pipeline_id)
-        if not pipeline or pipeline.username != current_user:
-            raise HTTPException(status_code=403, detail="Access denied")
-        
-        candidate = pipeline.candidate
-        job = pipeline.job
-        
-        # Generate updated email with customizations
-        email_content = await pipeline_service.generate_email_preview(
-            candidate=candidate,
-            job=job,
-            tone=request.tone,
-            custom_subject=request.custom_subject,
-            custom_greeting=request.custom_greeting,
-            custom_body=request.custom_body,
-            custom_closing=request.custom_closing
-        )
-        
-        return {
-            "success": True,
-            "preview": email_content
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Email preview update failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/{pipeline_id}/send-email")
 async def send_outreach_email(
     pipeline_id: str,
-    subject: str = Body(...),
-    body: str = Body(...),
+    request: SendOutreachRequest,
     current_user: str = Depends(get_current_username),
     pipeline_service: PipelineService = Depends(get_pipeline_service)
 ):
     """
-    Send the outreach email with the final content.
+    Send the outreach email to the candidate.
+    
+    This uses the draft email stored in the database (from preview),
+    or the custom subject/body if the user edited it.
+    
+    Body:
+        subject: Optional custom subject (if edited)
+        body: Optional custom body (if edited)
+        use_draft: Use stored draft (default: true)
     """
     try:
-        result = await pipeline_service.send_custom_outreach_email(
+        result = await pipeline_service.send_outreach_email(
             pipeline_id=pipeline_id,
             username=current_user,
-            subject=subject,
-            body=body
+            subject=request.subject,
+            body=request.body,
+            use_draft=request.use_draft
         )
         
         return result
         
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Email send failed: {e}")
+        logger.error(f"Send email failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-
+    
 @router.post("/{pipeline_id}/start-flow")
 async def start_hiring_flow(
     pipeline_id: str,

@@ -67,9 +67,10 @@ MODEL_ANALYSIS = "anthropic/claude-sonnet-4.5"  # For post-interview analysis
 
 
 # Default Voice Configuration - Sonic 3 with natural settings
-DEFAULT_VOICE_ID = "cbaf8084-f009-4838-a096-07ee2e6612b1"
-DEFAULT_VOICE_SPEED = 1.0  # Normal speed
-DEFAULT_VOICE_VOLUME = 0.95  # Slightly softer for warmth
+# DEFAULT_VOICE_ID = "cbaf8084-f009-4838-a096-07ee2e6612b1" # English Id 
+DEFAULT_VOICE_ID = "faf0731e-dfb9-4cfc-8119-259a79b27e12" # Indian accent Riya
+DEFAULT_VOICE_SPEED = 0.88 # Slightly slower for consistency
+DEFAULT_VOICE_VOLUME = 0.80  # Lower volume to prevent loud starts
 
 # Voice emotion presets for different conversation moments
 EMOTION_PRESETS = {
@@ -83,11 +84,14 @@ EMOTION_PRESETS = {
 }
 
 # Interview Configuration - Short, focused interviews
-DEFAULT_MAX_QUESTIONS = 6  # Reduced for 5-10 min interviews
-DEFAULT_CALL_DURATION = 600  # 10 minutes max
+DEFAULT_MAX_QUESTIONS = 8  # Reduced for 5-10 min interviews
+DEFAULT_CALL_DURATION = 6720  # 12 minutes max
 MIN_CALL_DURATION = 180  # 3 minutes minimum for meaningful interview
-SILENCE_TIMEOUT = 15  # seconds - reduced to keep pace
-MAX_RESPONSE_TOKENS = 90  # Keep AI responses concise
+SILENCE_TIMEOUT = 12  # seconds - reduced to keep pace
+MAX_RESPONSE_TOKENS = 120  # Keep AI responses concise
+
+# Barge-in settings
+BARGE_IN_MIN_WORDS = 3  # Require 3+ words before interrupting AI
 
 # Call Status Constants
 TERMINAL_STATUSES = ["completed", "failed", "no_answer", "voicemail", "cancelled"]
@@ -105,6 +109,11 @@ class SSMLBuilder:
     Cartesia Sonic 3 supports: speed, volume, emotion, break, spell tags.
     """
     
+    @staticmethod
+    def normalize_start(text: str) -> str:
+        """Normalize volume at start to prevent loud openings."""
+        return f'<volume ratio="0.85">{text[:50]}</volume>{text[50:]}' if len(text) > 50 else f'<volume ratio="0.85">{text}</volume>'
+
     @staticmethod
     def add_emotion(text: str, emotion: str) -> str:
         """Wrap text with emotion tag."""
@@ -142,28 +151,53 @@ class SSMLBuilder:
     
     @staticmethod
     def build_greeting(name: str) -> str:
-        """
-        Build a natural, warm greeting.
-        NOT overly emotional - sounds like a real recruiter.
-        """
+        """First message - ONLY ask if it's them, wait for response."""
         return (
-            f"Hello, is this {name} this is Neura calling from NeuraLeap.? "
+            f'<volume ratio="0.85"><speed ratio="0.88">'
+            f"Hello, is this {name}?"
+            f'</speed></volume>'
+        )
+
+    @staticmethod  
+    def build_intro_after_confirmation(name: str, job_title: str) -> str:
+        """Second part - after they confirm identity."""
+        return (
+            f"Great. As mentioned in our email, I'm Neura, an AI Hiring Agent from NeuraLeap. "
+            f'<break time="0.4s" />'
+            f"I'll be conducting a brief interview with you today for the {job_title} position. "
+            f'<break time="0.3s" />'
+            f"Please don't feel any stress. This is just a casual conversation to understand your background better. "
+            f'<break time="0.3s" />'
+            f"The call should take about 8 to 10 minutes. Does that work for you?"
+        )
+    
+    @staticmethod
+    def build_role_intro(job: 'InterviewJobContext') -> str:
+        """Brief role explanation."""
+        company = job.company_name or "our client"
+        skills = ", ".join(job.required_skills[:3]) if job.required_skills else "relevant skills"
+        return (
+            f'<break time="0.5s" />'
+            f"Let me quickly tell you about the role. "
+            f"We're looking for a {job.job_title} at {company}. "
+            f"The key areas include {skills}. "
+            f'<break time="0.3s" />'
+            f"Does this sound like something you'd be interested in?"
         )
     
     @staticmethod
     def build_closing(name: str) -> str:
-        """
-        Build a natural closing message.
-        Professional but warm, not over-the-top.
-        """
+        """Professional closing with next steps."""
         return (
+            f'<break time="0.5s" />'
             f"That's all from my side, {name}. "
-            f"{SSMLBuilder.add_pause(0.3)}"
-            f"Thanks so much for your time today. "
-            f"Our team will reach out with next steps. "
-            f"Take care!"
+            f'<break time="0.3s" />'
+            f"Thank you so much for your time today. "
+            f"We're currently reviewing a few candidates for this role, "
+            f"and our team will reach out with next steps once we complete the process. "
+            f'<break time="0.3s" />'
+            f"Take care and have a great day!"
         )
-
     
     @staticmethod
     def build_acknowledgment(style: str = "positive") -> str:
@@ -206,7 +240,7 @@ class SSMLBuilder:
 
 
 # ============================================================================
-# INTERVIEW PROMPTS - CONCISE & NATURAL
+# INTERVIEW PROMPTS 
 # ============================================================================
 
 class InterviewPrompts:
@@ -220,155 +254,124 @@ class InterviewPrompts:
         candidate: InterviewCandidateContext,
         job: InterviewJobContext,
         plan: InterviewPlan,
-        verification_needed: Dict[str, bool]
+        verification_needed: Dict[str, bool],
+        role_specific_questions: List[str]
     ) -> str:
-        """Generate the main system prompt for the interviewer."""
-        
         first_name = candidate.name.split()[0]
-        
-        # Build rich candidate context from enrichment data
         candidate_context = InterviewPrompts._build_candidate_context(candidate)
-        verification_instructions = InterviewPrompts._build_verification_instructions(verification_needed)
         
-        return f"""You are Neura, an AI interviewer from NeuraLeap. You conduct warm, professional voice interviews.
+        return f"""You are Neura, an AI Hiring Agent from NeuraLeap conducting voice interviews.
 
-## YOUR IDENTITY
+## IDENTITY
 - Name: Neura
-- Role: Senior Technical Recruiter at NeuraLeap
-- Style: Warm, professional, genuinely curious
-- Voice: Natural, conversational, never robotic
+- Role: AI Hiring Agent at NeuraLeap
+- Tone: Warm, professional, calm, encouraging
+- NEVER sound robotic or overly excited
 
-## CRITICAL RULES - FOLLOW THESE EXACTLY
+## CRITICAL: VOICE CONSISTENCY
+- Maintain the SAME calm, professional tone throughout
+- Do NOT get excited or raise volume at any point
+- Use natural pauses instead of rushing
+- Speak at a steady, moderate pace always
 
-### RESPONSE LENGTH
-- MAXIMUM 30 words per response
-- ONE sentence or question at a time
-- NEVER ask multiple questions
-- Wait for the candidate to finish before responding
+## CRITICAL: HANDLING INTERRUPTIONS
+When the candidate speaks while you're talking:
+1. STOP immediately and LISTEN
+2. Acknowledge what they said: "I heard you mention..."
+3. Address their point before continuing your question
+4. Do NOT repeat what you were saying - move forward naturally
+5. If you missed something: "Sorry, I didn't catch that clearly. Could you repeat?"
 
-### NATURAL CONVERSATION
-- Use natural fillers: "I see", "That's interesting", "Got it"
-- Add brief acknowledgments before new questions
-- Use the candidate's first name occasionally (not every time)
-- React genuinely to their answers
-
-### PACING
-- Give the candidate TIME to think and respond
-- If they pause, wait at least 3 seconds before prompting
-- Never rush or interrupt
-- If they seem to be thinking, say "Take your time"
-
-## YOUR VOICE INSTRUMENT (CRITICAL)
-You have a special voice engine. To sound human, you MUST use these XML tags in your responses. Do not output markdown, only text with these tags:
-
-1. **EMOTION**: Wrap sentences to change tone.
-   - `<emotion value="curious">` -> Use for follow-up questions.
-   - `<emotion value="sympathetic">` -> Use if candidate mentions a struggle.
-   - `<emotion value="content">` -> Use for "Great!" or "Excellent!".
-   - `<emotion value="content">` -> Default professional tone.
-
-2. **PAUSES**: Use breaks to simulate thinking or listening.
-   - `<break time="0.5s" />` -> Brief thought.
-   - `<break time="1.0s" />` -> Emphasis before a hard question.
-
-3. **SPEED**:
-   - `<speed ratio="1.2">` -> Use for quick side comments or standard disclaimers.
-
-## EXAMPLES OF EXPECTED OUTPUT
-User: "I was laid off recently."
-Neura: "<emotion value="sympathetic">I am so sorry to hear that.</emotion> <break time="0.5s" /> <emotion value="curious">How has your search been going since then?</emotion>"
-
-User: "I managed a team of 50."
-Neura: "<emotion value="content">That is impressive!</emotion> <break time="0.3s" /> <emotion value="content">What was your biggest challenge with a team that size?</emotion>"
+Example:
+- You: "Could you tell me about your experience with—"
+- Candidate: [interrupts] "Oh yes, I worked on that at my last company"
+- You: "Great, you worked on that at your last company. Tell me more about that project."
 
 ## RESPONSE RULES
-- Keep responses under 30 words.
-- ALWAYS use at least one <emotion> tag per turn.
-- Use <break> instead of commas for better pacing.
+- Maximum 25 words per response
+- ONE question at a time only
+- Wait fully for candidate to finish
+- Use 3-second pause if they're thinking
+- Natural acknowledgments: "I see", "Got it", "That's helpful"
+
+## VOICE TAGS (USE THESE)
+- `<break time="0.5s" />` - Natural pauses
+- `<speed ratio="0.88">` - Slower for clarity  
+- `<emotion value="content">` - Calm, neutral (USE THIS ALWAYS)
+- NEVER use: enthusiastic, excited, curious with high energy
+- Keep acknowledgments simple: "I see", "Got it", "Okay" - no "That's interesting!"
+
+## CRITICAL: TONE
+- Sound like a calm, professional recruiter - NOT an excited salesperson
+- Acknowledgments should be LOW ENERGY: "Got it", "I see", "Okay, thanks"
+- NEVER say "That's interesting!" or "Excellent!" or "Great!" with enthusiasm
+- Questions should sound curious but CALM, not excited
+- If impressed, say it matter-of-factly: "That's solid experience" not "Wow, that's amazing!"
 
 ## CANDIDATE CONTEXT
 {candidate_context}
 
-## JOB REQUIREMENTS
+## JOB DETAILS
 - Position: {job.job_title}
 - Company: {job.company_name or 'our client'}
 - Key Skills: {', '.join(job.required_skills[:5])}
-- Experience: {job.experience_required or 'Relevant experience'}
 
-## INTERVIEW FOCUS
-{plan.interview_focus}
+## INTERVIEW FLOW (Follow this order)
 
-{verification_instructions}
+### Phase 1: Identity Confirmation
+- First message is just: "Hello, is this {first_name}?"
+- WAIT for them to confirm ("yes", "speaking", etc.)
+- After confirmation, say: "{SSMLBuilder.build_intro_after_confirmation(first_name, job.job_title)}"
 
-## TIME MANAGEMENT
-- Interview should be 5-10 minutes total
-- You have {len(plan.questions)} questions
-- Keep moving but don't rush
-- Skip redundant questions if already answered
+### Phase 2: About Them (2-3 min)
+- "Tell me a bit about yourself and what you're currently working on."
+- "What made you interested in exploring new opportunities?"
+- Listen actively, acknowledge their points
 
-## INTERVIEW FLOW (5-8 minutes total)
+### Phase 3: Role-Specific Questions (3-4 min)
+Ask these intelligent questions for the {job.job_title} role:
+{chr(10).join(f"- {q}" for q in role_specific_questions)}
 
-1. **Opening** (30 sec)
-   - Confirm they can hear you
-   - Brief intro: "I'm calling about the {job.job_title} role"
+Use follow-ups like:
+- "Could you give me a specific example?"
+- "What was the outcome of that?"
+- "How did you handle that challenge?"
 
-2. **Quick Background** (1-2 min)
-   - Current role and what they're working on
-   - Why they're looking for a change
+### Phase 4: Verification (1 min)
+- "What's your current notice period?"
+- "What are your salary expectations for this role?"
+- "When would you be available to start if selected?"
 
-3. **Skill Verification** (2-3 min)
-   - 1-2 questions about relevant experience
-   - Ask for specific examples if needed
+### Phase 5: Their Questions (1 min)
+- "Do you have any questions about the role or the company?"
+- Answer briefly (under 20 words), honestly
 
-4. **Logistics** (1 min)
-   - Notice period
-   - Salary expectations (if not known)
-   - Availability for next round
-
-5. **Close** (30 sec)
-   - Ask if they have questions
-   - Thank them
-   - Call `end_interview` tool
-   
-## HANDLING DIFFERENT SCENARIOS
-
-### If candidate is nervous:
-"Take your time - no rush at all."
-
-### If answer is vague:
-Ask ONE specific follow-up, like: "Could you give me a specific example?"
-
-### If answer is excellent:
-Brief acknowledgment: "That's a great example - thank you."
-
-### If candidate asks a question:
-Answer briefly (under 20 words), then continue.
-
-### If connection issues:
-"Sorry - I think we had a brief connection issue. Could you repeat that?"
-
-### If candidate seems rushed:
-"I understand if you're busy - we can keep this brief. Just a few quick questions."
-
-## LANGUAGE HANDLING
-- Interview primarily in English
-- If candidate uses Hindi/Hinglish, respond naturally
-- Example: "Bahut accha - please continue in whichever language you're comfortable."
+### Phase 6: Closing
+- Thank them genuinely
+- Mention you're reviewing other candidates
+- Say team will reach out with next steps
+- Call `end_interview` tool
 
 ## WHAT NOT TO DO
-- NEVER say "question 1", "question 2"
-- NEVER reveal you're reading from a script
-- NEVER give long monologues
-- NEVER ask more than ONE question at a time
-- NEVER repeat what the candidate said word-for-word
-- NEVER use corporate jargon unnecessarily
+- Don't say "question 1", "next question" etc.
+- Don't sound scripted or robotic
+- Don't get louder when excited
+- Don't repeat candidate's words back verbatim
+- Don't ask multiple questions at once
+- Don't interrupt them - always let them finish
+- Don't ignore what they said if they interrupted you
 
 ## LANGUAGE
-- English primarily
-- If they use Hindi: "No problem, continue in whatever's comfortable
+- Primarily English
+- If they use Hindi/Hinglish: "No problem, feel free to continue in whatever language you're comfortable with."
 
-Remember: Sound human. Keep it brief. Move the conversation forward."""
+Remember: Calm, consistent tone. Listen actively. Move naturally through the conversation."""
 
+    @staticmethod
+    def get_first_message(candidate: InterviewCandidateContext) -> str:
+        first_name = candidate.name.split()[0]
+        return SSMLBuilder.build_greeting(first_name)
+    
     @staticmethod
     def _build_candidate_context(candidate: InterviewCandidateContext) -> str:
         """Build rich candidate context from available data."""
@@ -549,6 +552,11 @@ class VapiInterviewService:
         logger.info(f"  Job: {request.job.job_title}")
         logger.info(f"  Experience: {request.candidate.experience_years} years")
         
+        # Generate role-specific intelligent questions
+        role_questions = await self._generate_role_specific_questions(
+            request.job,
+            request.candidate
+        )
         # 1. Determine what verification data we need
         verification_needed = self._determine_verification_needs(request.candidate)
         logger.info(f"  Verification needed: {verification_needed}")
@@ -557,7 +565,7 @@ class VapiInterviewService:
         plan = await self._generate_interview_plan(
             request.candidate,
             request.job,
-            request.custom_questions,
+            request.custom_questions or role_questions,
             verification_needed
         )
         
@@ -588,7 +596,7 @@ class VapiInterviewService:
                 temperature=0.6,
                 max_tokens=MAX_RESPONSE_TOKENS,  # Keep responses concise
                 system_prompt=InterviewPrompts.get_system_prompt(
-                    request.candidate, request.job, plan, verification_needed
+                    request.candidate, request.job, plan, verification_needed,role_questions
                 ),
                 # tools=self._get_interview_tools()
                 tools=[]
@@ -819,7 +827,7 @@ class VapiInterviewService:
                 "model": config.transcriber.model,
                 "language": config.transcriber.language,
                 "smartFormat": config.transcriber.smart_format,
-                "endpointing": config.transcriber.endpointing
+                "endpointing": 400,  # Slightly longer to let candidate finish
             },
             "model": {
                 "provider": config.model.provider,
@@ -833,7 +841,12 @@ class VapiInterviewService:
             "voice": {
                 "provider": config.voice.provider,
                 "voiceId": config.voice.voice_id,
-                "model": config.voice.model
+                "model": config.voice.model,
+                "generationConfig": 
+                {
+                    "speed": 0.95,   # Consistent, slightly slower
+                    "volume": 0.75,  # Prevent loud starts
+                 }
             },
             "silenceTimeoutSeconds": config.silence_timeout_seconds,
             "maxDurationSeconds": config.max_duration_seconds,
@@ -1177,6 +1190,51 @@ class VapiInterviewService:
             f"Alright {first_name}, - that's all from my side. - "
             f"Do you have any quick questions for me about the role or team?"
         )
+    
+    async def _generate_role_specific_questions(
+        self,
+        job: InterviewJobContext,
+        candidate: InterviewCandidateContext
+    ) -> List[str]:
+        """Generate intelligent questions specific to the role."""
+        
+        prompt = f"""Generate 3 highly specific interview questions for a {job.job_title} role.
+
+    ROLE: {job.job_title}
+    REQUIRED SKILLS: {', '.join(job.required_skills[:6])}
+    CANDIDATE EXPERIENCE: {candidate.experience_years} years as {candidate.current_title}
+
+    Rules:
+    1. Questions must reveal TRUE competence, not just knowledge
+    2. Ask for specific numbers, examples, or situations
+    3. Avoid generic questions like "tell me about your experience"
+    4. Make questions role-specific and measurable
+
+    Examples of GOOD role-specific questions:
+    - For HR/Recruiter: "What's the highest CTC offer you've successfully closed, and how did you negotiate it?"
+    - For Sales: "What was your largest deal size and how long was your typical sales cycle?"
+    - For Engineer: "Describe the most complex system you've designed. What was the scale?"
+    - For Manager: "How many people have you managed directly, and how did you handle underperformers?"
+    - For Marketing: "What's the best ROI you've achieved on a campaign, and what made it successful?"
+
+    Return ONLY a JSON array of 3 questions:
+    ["question1", "question2", "question3"]"""
+
+        try:
+            response = await self._call_llm(prompt, temperature=0.7, max_tokens=400)
+            json_match = re.search(r'\[[\s\S]*?\]', response)
+            if json_match:
+                questions = json.loads(json_match.group())
+                return questions[:3]
+        except Exception as e:
+            logger.error(f"Role question generation failed: {e}")
+        
+        # Fallback generic but still specific questions
+        return [
+            f"What's the biggest achievement in your career as a {candidate.current_title}?",
+            f"Tell me about a challenging situation in your work and how you resolved it.",
+            f"What specific skills make you a strong fit for this {job.job_title} role?"
+        ]
     
     def _build_interview_focus(
         self,

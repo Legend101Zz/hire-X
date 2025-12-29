@@ -1026,7 +1026,7 @@ class RecruitmentPipeline(BaseModel):
 
 
 # ===================================================================
-# API REQUEST/RESPONSE MODELS
+# API REQUEST/RESPONSE MODELS 
 # ===================================================================
 
 class CreatePipelineFromSearchRequest(BaseModel):
@@ -1103,6 +1103,15 @@ class CandidateDetailResponse(BaseModel):
     stage_metadata: Dict[str, Any]
     job_context: JobContext
     timeline: List[Dict[str, Any]]  # Stage history + events
+    
+class AddCandidateToPipelineRequest(BaseModel):
+    linkedin_url: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    expected_salary: Optional[str] = None
+    notice_period: Optional[str] = None
+    notes: Optional[str] = None
 
 
 # ===================================================================
@@ -1154,4 +1163,5 @@ __all__ = [
     "AddCandidateNoteRequest",
     "PipelineDashboardResponse",
     "CandidateDetailResponse",
+    "AddCandidateToPipelineRequest"
 ]

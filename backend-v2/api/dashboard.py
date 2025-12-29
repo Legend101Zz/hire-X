@@ -3,7 +3,7 @@ Dashboard API - Enhanced for HR-Friendly UX
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -68,9 +68,6 @@ class DashboardResponse(BaseModel):
     recent_deep_dives: List[DeepDiveSummary]
     user: dict
     
-
-
-
 class PipelineStageStats(BaseModel):
     """Stats for each stage of the hiring journey"""
     sourced: int = 0          # Found
@@ -177,6 +174,44 @@ class EnhancedDashboardResponse(BaseModel):
     user: dict
     donna_tip: Optional[dict] = None  # Smart tip from Donna
 
+class InterviewScheduleView(BaseModel):
+    """Interview schedule for dashboard view"""
+    schedule_id: str
+    pipeline_id: str
+    candidate_id: str
+    candidate_name: str
+    candidate_email: Optional[str] = None
+    candidate_phone: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    job_title: str
+    company_name: Optional[str] = None
+    scheduled_datetime: datetime
+    timezone: str = "Asia/Kolkata"
+    duration_minutes: int = 30
+    status: str  # scheduled, confirmed, in_progress, completed, cancelled, no_show
+    interview_session_id: Optional[str] = None
+    interview_completed: bool = False
+    completion_status: Optional[str] = None
+    booked_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+    call_initiated_at: Optional[datetime] = None
+    call_ended_at: Optional[datetime] = None
+    actual_duration_seconds: Optional[int] = None
+    candidate_notes: Optional[str] = None
+    # Computed fields
+    time_until: str = ""
+    is_today: bool = False
+    is_past: bool = False
+    can_start: bool = False
+
+
+class InterviewsResponse(BaseModel):
+    """Response for interviews endpoint"""
+    upcoming: List[InterviewScheduleView]
+    today: List[InterviewScheduleView]
+    completed: List[InterviewScheduleView]
+    cancelled: List[InterviewScheduleView]
+    stats: dict
 
 # ================================================================
 # ENHANCED ENDPOINTS
@@ -317,9 +352,202 @@ async def get_candidates_quick_view(
     )
 
 
+@router.get("/interviews")
+async def get_all_interviews(
+    status_filter: Optional[str] = Query(None),  # upcoming, today, completed, cancelled, all
+    days_back: int = Query(30, ge=1, le=90),
+    days_ahead: int = Query(14, ge=1, le=60),
+    username: str = Depends(get_current_username),
+    mongodb: MongoDB = Depends(get_mongodb)
+):
+    """
+    Get all interviews for the user with filtering options.
+    Returns categorized interviews: upcoming, today, completed, cancelled.
+    """
+    try:
+        schedules_collection = mongodb.main_db.interview_schedules
+        pipelines_collection = mongodb.main_db.recruitment_pipelines
+        
+        now = datetime.utcnow()
+        today_start = datetime(now.year, now.month, now.day)
+        today_end = today_start + timedelta(days=1)
+        past_limit = now - timedelta(days=days_back)
+        future_limit = now + timedelta(days=days_ahead)
+        
+        # Get user's pipeline IDs first
+        user_pipelines = await pipelines_collection.find(
+            {"username": username, "is_active": True},
+            {"pipeline_id": 1}
+        ).to_list(length=1000)
+        
+        pipeline_ids = [p["pipeline_id"] for p in user_pipelines]
+        
+        if not pipeline_ids:
+            return InterviewsResponse(
+                upcoming=[],
+                today=[],
+                completed=[],
+                cancelled=[],
+                stats={
+                    "total_scheduled": 0,
+                    "total_completed": 0,
+                    "total_cancelled": 0,
+                    "total_no_show": 0,
+                    "completion_rate": 0
+                }
+            )
+        
+        # Query all relevant schedules
+        query = {
+            "pipeline_id": {"$in": pipeline_ids}
+        }
+        
+        schedules = await schedules_collection.find(query).sort("scheduled_datetime", -1).to_list(length=500)
+        
+        # Categorize interviews
+        upcoming = []
+        today = []
+        completed = []
+        cancelled = []
+        
+        for schedule in schedules:
+            scheduled_dt = schedule.get("scheduled_datetime")
+            if isinstance(scheduled_dt, str):
+                try:
+                    scheduled_dt = datetime.fromisoformat(scheduled_dt.replace("Z", "+00:00"))
+                    if scheduled_dt.tzinfo:
+                        scheduled_dt = scheduled_dt.replace(tzinfo=None)
+                except:
+                    scheduled_dt = now
+            
+            is_today = today_start <= scheduled_dt < today_end if scheduled_dt else False
+            is_past = scheduled_dt < now if scheduled_dt else False
+            is_upcoming = scheduled_dt >= now if scheduled_dt else False
+            
+            # Can start if it's within 15 minutes of scheduled time
+            can_start = False
+            if scheduled_dt:
+                time_diff = (scheduled_dt - now).total_seconds()
+                can_start = -900 <= time_diff <= 3600  # 15 min before to 1 hour after
+            
+            interview_view = InterviewScheduleView(
+                schedule_id=schedule.get("schedule_id", ""),
+                pipeline_id=schedule.get("pipeline_id", ""),
+                candidate_id=schedule.get("candidate_id", ""),
+                candidate_name=schedule.get("candidate_name", "Unknown"),
+                candidate_email=schedule.get("candidate_email"),
+                candidate_phone=schedule.get("candidate_phone"),
+                linkedin_url=schedule.get("linkedin_url"),
+                job_title=schedule.get("job_title", ""),
+                company_name=schedule.get("company_name"),
+                scheduled_datetime=scheduled_dt or now,
+                timezone=schedule.get("timezone", "Asia/Kolkata"),
+                duration_minutes=schedule.get("duration_minutes", 30),
+                status=schedule.get("status", "scheduled"),
+                interview_session_id=schedule.get("interview_session_id"),
+                interview_completed=schedule.get("interview_completed", False),
+                completion_status=schedule.get("completion_status"),
+                booked_at=schedule.get("booked_at"),
+                confirmed_at=schedule.get("confirmed_at"),
+                call_initiated_at=schedule.get("call_initiated_at"),
+                call_ended_at=schedule.get("call_ended_at"),
+                actual_duration_seconds=schedule.get("actual_duration_seconds"),
+                candidate_notes=schedule.get("candidate_notes"),
+                time_until=_format_time_until(scheduled_dt) if scheduled_dt else "Unknown",
+                is_today=is_today,
+                is_past=is_past,
+                can_start=can_start
+            )
+            
+            status = schedule.get("status", "scheduled")
+            
+            if status in ["cancelled", "no_show"]:
+                cancelled.append(interview_view)
+            elif schedule.get("interview_completed", False) or status == "completed":
+                completed.append(interview_view)
+            elif is_today and is_upcoming:
+                today.append(interview_view)
+            elif is_upcoming:
+                upcoming.append(interview_view)
+            elif is_past and not schedule.get("interview_completed", False):
+                # Past but not marked complete - might be no-show or needs attention
+                completed.append(interview_view)
+        
+        # Sort appropriately
+        upcoming.sort(key=lambda x: x.scheduled_datetime)
+        today.sort(key=lambda x: x.scheduled_datetime)
+        completed.sort(key=lambda x: x.scheduled_datetime, reverse=True)
+        cancelled.sort(key=lambda x: x.scheduled_datetime, reverse=True)
+        
+        # Calculate stats
+        total_scheduled = len(upcoming) + len(today) + len(completed) + len(cancelled)
+        total_completed = len([i for i in completed if i.interview_completed])
+        total_cancelled = len([i for i in cancelled if i.status == "cancelled"])
+        total_no_show = len([i for i in cancelled if i.status == "no_show"])
+        
+        completion_rate = (total_completed / (total_scheduled - total_cancelled)) * 100 if (total_scheduled - total_cancelled) > 0 else 0
+        
+        return {
+            "upcoming": upcoming,
+            "today": today,
+            "completed": completed,
+            "cancelled": cancelled,
+            "stats": {
+                "total_scheduled": total_scheduled,
+                "total_completed": total_completed,
+                "total_cancelled": total_cancelled,
+                "total_no_show": total_no_show,
+                "completion_rate": round(completion_rate, 1),
+                "upcoming_count": len(upcoming),
+                "today_count": len(today)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting interviews: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 # ================================================================
 # HELPER FUNCTIONS - Pipeline Stats
 # ================================================================
+
+def _format_time_until(dt: datetime) -> str:
+    """Format time until interview"""
+    if not dt:
+        return "Unknown"
+    
+    now = datetime.utcnow()
+    if dt.tzinfo:
+        dt = dt.replace(tzinfo=None)
+    
+    diff = dt - now
+    total_seconds = diff.total_seconds()
+    
+    if total_seconds < 0:
+        # Past
+        abs_seconds = abs(total_seconds)
+        if abs_seconds < 3600:
+            mins = int(abs_seconds / 60)
+            return f"{mins}m ago"
+        elif abs_seconds < 86400:
+            hours = int(abs_seconds / 3600)
+            return f"{hours}h ago"
+        else:
+            days = int(abs_seconds / 86400)
+            return f"{days}d ago"
+    else:
+        # Future
+        if total_seconds < 3600:
+            mins = int(total_seconds / 60)
+            return f"in {mins}m"
+        elif total_seconds < 86400:
+            hours = int(total_seconds / 3600)
+            return f"in {hours}h"
+        else:
+            days = int(total_seconds / 86400)
+            return f"in {days}d"
 
 async def _get_pipeline_stats(username: str, mongodb: MongoDB) -> PipelineStageStats:
     """Aggregate stats across all pipelines for a user"""
@@ -419,7 +647,7 @@ async def _get_inbox_items(
             
             for doc in responses:
                 candidate = doc.get("candidates", {})
-                outreach = candidate.get("outreach", {})
+                outreach = candidate.get("outreach", {}) or {}
                 response_time = outreach.get("response_received_at")
                 
                 items.append(InboxItem(
@@ -599,7 +827,7 @@ async def _get_recent_candidates(
         candidates = []
         for doc in results:
             candidate = doc.get("candidates", {})
-            outreach = candidate.get("outreach", {})
+            outreach = candidate.get("outreach", {}) or {}
             
             # Determine stage label (user-friendly)
             stage_labels = {

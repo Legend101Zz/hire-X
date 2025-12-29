@@ -72,7 +72,7 @@ premailer
 
 #Scheduling
 apscheduler
-
+pytz
 # --------------------------------------------
 # Development & Testing (optional)
 # --------------------------------------------

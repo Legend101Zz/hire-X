@@ -19,7 +19,8 @@ from core.dependencies import (get_conversation_manager, get_current_username,
                                get_pipeline_service)
 from core.logging_config import get_logger
 from data.mongodb import MongoDB
-from models.conversation_models import (ConversationFinalizeRequest,
+from models.conversation_models import (AddCandidateRequest,
+                                        ConversationFinalizeRequest,
                                         ConversationFinalizeResponse,
                                         ConversationMessageRequest,
                                         ConversationMessageResponse,
@@ -30,7 +31,10 @@ from models.conversation_models import (ConversationFinalizeRequest,
                                         GenerateJDResponse,
                                         ManualImportRequest, RefineJDRequest,
                                         RefineJDResponse, RefineSearchRequest)
-from models.pipeline_models import CandidateStage, ContactFetchSource
+from models.pipeline_models import (CandidateStage, ContactFetchSource,
+                                    JobContext, PipelineCandidate,
+                                    PipelineSettings, PipelineStats,
+                                    RecruitmentPipeline)
 from models.scheduling_models import get_current_timestamp
 from services.conversation_manager import ConversationManager
 from services.jd_generator import JDGeneratorService
@@ -1107,7 +1111,6 @@ async def create_manual_import(
         )
         
         session_id = result["session_id"]
-        print('result',result,ideal_profile)
         # Background scrape if enabled
         if request.auto_scrape:
             logger.info(f"Waiting for candidate lookup for session {result['session_id']}...")
@@ -1324,6 +1327,228 @@ async def get_selected_candidates(
         logger.error(f"Get selected failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
+    
+@router.post("/{session_id}/add-candidate")
+async def add_candidate_to_session(
+    session_id: str,
+    request: AddCandidateRequest,
+    current_user: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager),
+    pipeline_service: PipelineService = Depends(get_pipeline_service),
+    mongodb: MongoDB = Depends(get_mongodb)
+):
+    """Add a single candidate directly to an existing session/pipeline."""
+    try:
+        session = await conversation_manager.get_session(session_id)
+        if not session or session.get("username") != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Generate candidate ID
+        candidate_id = f"manual-{uuid.uuid4().hex[:8]}"
+        
+        # Try to find profile in database by LinkedIn URL
+        linkedin_id = request.linkedin_url.split("/in/")[-1].rstrip("/")
+        profile = await mongodb.profiles_collection.find_one({
+            "linkedin_url": {"$regex": linkedin_id, "$options": "i"}
+        })
+        
+        now = datetime.utcnow().isoformat()
+        
+        # Build candidate document for session
+        candidate_doc = {
+            "candidate_id": candidate_id,
+            "linkedin_url": request.linkedin_url,
+            "name": request.name or (profile.get("full_name") if profile else "Unknown"),
+            "headline": profile.get("headline") if profile else None,
+            "current_company": profile.get("current_company") if profile else None,
+            "location": profile.get("location") if profile else None,
+            "skills": profile.get("skills", [])[:10] if profile else [],
+            "profile_id": str(profile["_id"]) if profile else None,
+            "match_score": None,
+            "match_label": None,
+            "source": "manual_add",
+            "added_at": now,
+            "enrichment_status": "pending",
+            "manual_data": {
+                "expected_salary": request.expected_salary,
+                "notice_period": request.notice_period,
+                "notes": request.notes,
+            }
+        }
+        
+        # Add contact if provided
+        if request.email or request.phone:
+            candidate_doc["contact"] = {
+                "email": request.email,
+                "phone": request.phone
+            }
+        
+        # Create pipeline directly using existing method with candidate_ids
+        # First, temporarily add candidate to session so create_pipelines_from_search can find it
+        job_data = session.get("ideal_profile", {})
+        
+        # Create pipeline using the service's internal method
+        pipeline_id = f"pipe-{uuid.uuid4().hex[:12]}"
+        
+        from models.pipeline_models import (CandidateStage, ContactFetchSource,
+                                            JobContext, PipelineCandidate,
+                                            PipelineSettings, PipelineStats,
+                                            RecruitmentPipeline)
+
+        # Build pipeline candidate
+        pipeline_candidate = PipelineCandidate(
+            candidate_id=candidate_id,
+            profile_id=candidate_doc.get("profile_id"),
+            linkedin_url=request.linkedin_url,
+            linkedin_id=linkedin_id,
+            name=candidate_doc["name"],
+            first_name=candidate_doc["name"].split()[0] if candidate_doc["name"] else None,
+            last_name=candidate_doc["name"].split()[-1] if candidate_doc["name"] and len(candidate_doc["name"].split()) > 1 else None,
+            headline=candidate_doc.get("headline"),
+            location=candidate_doc.get("location"),
+            skills=candidate_doc.get("skills", []),
+            stage=CandidateStage.SOURCED,
+            stage_updated_at=now,
+            added_at=now,
+            updated_at=now
+        )
+        
+        # Add contact if provided
+        if request.email:
+            pipeline_candidate.contact.email = request.email
+            pipeline_candidate.contact.email_source = ContactFetchSource.MANUAL_INPUT
+            pipeline_candidate.contact.email_fetched_at = now
+        if request.phone:
+            pipeline_candidate.contact.phone = request.phone
+            pipeline_candidate.contact.phone_source = ContactFetchSource.MANUAL_INPUT
+            pipeline_candidate.contact.phone_fetched_at = now
+        
+        # Build job context
+        job_context = JobContext(
+            job_title=job_data.get("role_title", "Position"),
+            required_skills=job_data.get("required_skills", job_data.get("must_have_skills", [])),
+            nice_to_have_skills=job_data.get("preferred_skills", job_data.get("nice_to_have_skills", [])),
+            experience_required=job_data.get("experience_years", ""),
+        )
+        
+        # Create pipeline
+        pipeline = RecruitmentPipeline(
+            pipeline_id=pipeline_id,
+            username=current_user,
+            conversation_session_id=session_id,
+            search_session_id=session_id,
+            source="manual_import",
+            job=job_context,
+            candidates=[pipeline_candidate],
+            settings=PipelineSettings(),
+            stats=PipelineStats(total_sourced=1),
+        )
+        
+        # Save pipeline
+        await mongodb.pipelines_collection.insert_one(pipeline.model_dump())
+        
+        # Update candidate doc with pipeline_id
+        candidate_doc["pipeline_id"] = pipeline_id
+        
+        # Update session
+        await mongodb.main_db["conversation_sessions"].update_one(
+            {"session_id": session_id},
+            {
+                "$push": {
+                    "search_results": candidate_doc,
+                    "sample_candidates": candidate_doc
+                },
+                "$addToSet": {
+                    "selected_candidate_ids": candidate_id,
+                    "pipeline_ids": pipeline_id
+                },
+                "$inc": {"total_candidates": 1},
+                "$set": {"updated_at": now}
+            }
+        )
+        
+        return {
+            "success": True,
+            "candidate_id": candidate_id,
+            "pipeline_id": pipeline_id,
+            "message": f"Added {candidate_doc['name']} to pipeline"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Add candidate failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{session_id}/job-description")
+async def get_session_job_description(
+    session_id: str,
+    current_user: str = Depends(get_current_username),
+    conversation_manager: ConversationManager = Depends(get_conversation_manager)
+):
+    """
+    Get job description text from a session for Deep Dive analysis.
+    
+    Returns the full JD text and ideal profile data.
+    """
+    try:
+        session = await conversation_manager.get_session(session_id)
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Optional: Check if user owns this session (if you want to enforce privacy)
+        # if session.get("username") != current_user:
+        #     raise HTTPException(status_code=403, detail="Access denied")
+        
+        jd_text = session.get("jd_text", "")
+        ideal_profile = session.get("ideal_profile", {})
+        
+        # Fallback: Generate JD text from ideal_profile if jd_text is empty
+        if not jd_text and ideal_profile:
+            jd_text = _generate_jd_from_profile(ideal_profile)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "jd_text": jd_text,
+            "ideal_profile": ideal_profile,
+            "role_title": ideal_profile.get("role_title", "")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get JD for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _generate_jd_from_profile(ideal_profile: Dict) -> str:
+    """Generate a basic JD text from ideal profile structure."""
+    
+    role_title = ideal_profile.get("role_title", "Position")
+    required_skills = ideal_profile.get("required_skills", [])
+    responsibilities = ideal_profile.get("responsibilities", "")
+    qualifications = ideal_profile.get("qualifications", "")
+    seniority = ideal_profile.get("seniority", "")
+    experience = ideal_profile.get("experience_years", "")
+    
+    jd_parts = [f"Role: {role_title}"]
+    
+    if seniority or experience:
+        jd_parts.append(f"\nLevel: {seniority} ({experience} years)")
+    
+    if required_skills:
+        jd_parts.append(f"\nRequired Skills:\n" + "\n".join(f"- {skill}" for skill in required_skills))
+    
+    if responsibilities:
+        jd_parts.append(f"\nResponsibilities:\n{responsibilities}")
+    
+    if qualifications:
+        jd_parts.append(f"\nQualifications:\n{qualifications}")
+    
+    return "\n".join(jd_parts)
     
 @router.get("/list/pipeline-sessions")
 async def list_pipeline_sessions(

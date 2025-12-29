@@ -175,6 +175,51 @@ export interface InboxResponse {
   unread_count: number;
 }
 
+export interface InterviewScheduleView {
+  schedule_id: string;
+  pipeline_id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_email?: string;
+  candidate_phone?: string;
+  linkedin_url?: string;
+  job_title: string;
+  company_name?: string;
+  scheduled_datetime: string;
+  timezone: string;
+  duration_minutes: number;
+  status: string;
+  interview_session_id?: string;
+  interview_completed: boolean;
+  completion_status?: string;
+  booked_at?: string;
+  confirmed_at?: string;
+  call_initiated_at?: string;
+  call_ended_at?: string;
+  actual_duration_seconds?: number;
+  candidate_notes?: string;
+  time_until: string;
+  is_today: boolean;
+  is_past: boolean;
+  can_start: boolean;
+}
+
+export interface InterviewsResponse {
+  upcoming: InterviewScheduleView[];
+  today: InterviewScheduleView[];
+  completed: InterviewScheduleView[];
+  cancelled: InterviewScheduleView[];
+  stats: {
+    total_scheduled: number;
+    total_completed: number;
+    total_cancelled: number;
+    total_no_show: number;
+    completion_rate: number;
+    upcoming_count: number;
+    today_count: number;
+  };
+}
+
 // ===============================================================
 // API FUNCTIONS
 // ===============================================================
@@ -325,5 +370,24 @@ export const deleteSearch = async (
     headers: getHeaders(token),
   });
   if (!response.ok) throw new Error("Failed to delete search");
+  return response.json();
+};
+
+export const getAllInterviews = async (
+  token: string,
+  statusFilter?: string,
+  daysBack: number = 30,
+  daysAhead: number = 14
+): Promise<InterviewsResponse> => {
+  const params = new URLSearchParams({
+    days_back: String(daysBack),
+    days_ahead: String(daysAhead),
+  });
+  if (statusFilter) params.append("status_filter", statusFilter);
+
+  const response = await fetch(`${API_BASE}/dashboard/interviews?${params}`, {
+    headers: getHeaders(token),
+  });
+  if (!response.ok) throw new Error("Failed to get interviews");
   return response.json();
 };

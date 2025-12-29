@@ -904,7 +904,7 @@ class AIEmailGenerator:
     
     def __init__(self, openrouter_api_key: str = None):
         self.openrouter_key = openrouter_api_key
-        self.model = "anthropic/claude-haiku-4.5"  # Fast and cheap
+        self.model = "anthropic/claude-sonnet-4.5"  # Fast and cheap
         
         if not self.openrouter_key:
             logger.warning("⚠️ OpenRouter API key not configured - using templates only")
@@ -913,54 +913,143 @@ class AIEmailGenerator:
         self,
         candidate: PipelineCandidate,
         job: JobContext,
-        scheduling_link: str
+        scheduling_link: str,
+        tone: str = "professional"
     ) -> Dict[str, str]:
         """
-        Generate a personalized outreach email.
+        Generate a highly personalized outreach email using full enrichment data.
+        
+        Args:
+            candidate: Full candidate object with enrichment data
+            job: Job context
+            scheduling_link: Scheduling URL
+            tone: "professional" | "friendly" | "casual"
         
         Returns:
-            Dict with 'subject', 'body', 'opening_line', 'fit_reasons'
+            Dict with 'subject', 'body', 'opening_line', 'fit_reasons', 'confidence'
         """
         if not self.openrouter_key:
-            return self._get_fallback_content(candidate, job, scheduling_link)
+            return self._get_fallback_content(candidate, job, scheduling_link, tone)
         
-        # Build context for AI
-        candidate_info = self._build_candidate_context(candidate)
-        job_info = self._build_job_context(job)
+        # Extract rich enrichment data
+        enrichment = candidate.enrichment.full_enrichment_data or {}
+        candidate_data = enrichment.get('candidate', {})
+        match_analysis = enrichment.get('match_analysis', {})
+        skill_validation = enrichment.get('skill_validation', {})
+        response_likelihood = enrichment.get('response_likelihood', {})
+        professional_footprint = enrichment.get('professional_footprint', {})
         
-        prompt = f"""Write a warm, professional outreach email to a potential job candidate.
+        # Build comprehensive context
+        candidate_profile = self._build_rich_candidate_profile(
+            candidate=candidate,
+            candidate_data=candidate_data,
+            professional_footprint=professional_footprint,
+            skill_validation=skill_validation
+        )
+        
+        job_details = self._build_rich_job_details(job)
+        
+        # Extract personalization hooks
+        personalization_hooks = response_likelihood.get('recommended_approach', {}).get('personalization_hooks', [])
+        
+        # Match insights
+        match_score = match_analysis.get('overall_match_score', candidate.enrichment.match_score or 0)
+        strengths = match_analysis.get('strengths', candidate.enrichment.top_strengths or [])[:3]
+        
+        # Tone-specific instructions
+        tone_guidelines = self._get_tone_guidelines(tone)
+        
+        # Build AI prompt with full context
+        prompt = f"""You are a top-tier tech recruiter writing a highly personalized outreach email.
+
+CANDIDATE PROFILE:
+{candidate_profile}
+
+PERSONALIZATION OPPORTUNITIES (USE THESE!):
+{chr(10).join(f"• {hook}" for hook in personalization_hooks[:5]) if personalization_hooks else "• Strong technical background and career trajectory"}
+
+WHY THIS IS A GREAT MATCH:
+- Match Score: {match_score}/100
+- Key Strengths: {', '.join(strengths) if strengths else 'Technical skills align well with requirements'}
+- Fit Level: {"Excellent" if match_score >= 80 else "Strong" if match_score >= 60 else "Good"}
+
+JOB OPPORTUNITY:
+{job_details}
+
+TONE & STYLE:
+{tone_guidelines}
+
+EMAIL PSYCHOLOGY PRINCIPLES:
+1. SOCIAL PROOF: Reference their GitHub contributions, hackathon wins, certifications, or company achievements
+2. RECIPROCITY: Acknowledge their accomplishments genuinely before asking for time
+3. SPECIFICITY: Mention exact projects, repos, or achievements (not generic praise)
+4. CURIOSITY GAP: Tease interesting role aspects without revealing everything
+5. LOW BARRIER: Make scheduling feel effortless and low-commitment
+
+STRICT STRUCTURE (FOLLOW THIS):
+1. HOOK (1 sentence): Attention-grabbing opener referencing specific achievement
+   Good: "I came across your e-commerce project on GitHub - the React architecture is really clean!"
+   Bad: "I came across your profile and was impressed by your background"
+
+2. CONTEXT (2-3 sentences): Why you're reaching out + why they're specifically a fit
+   - Connect their actual experience to the role requirements
+   - Show you've done homework (mention specific skills, projects, or achievements)
+   
+3. VALUE PROP (1-2 sentences): What's in it for them beyond "opportunity"
+   - Focus on growth, interesting problems, or career advancement
+   - Avoid generic "great company culture" claims
+   
+4. SOFT CTA (1 sentence): Low-pressure invitation
+   - "Would you be open to a quick 15-min chat?"
+   - NOT "Apply now" or "Send your resume"
 
 CRITICAL RULES:
-1. Sound like a FRIENDLY HR person, NOT like AI
-2. Keep it SHORT - MAXIMUM 120 words for the body
-3. Be SPECIFIC about why they're a fit (use their actual experience)
-4. Use SIMPLE, conversational language
-5. NO buzzwords like "synergy", "leverage", "exciting opportunity"
-6. NO generic phrases like "I came across your profile"
-7. ONE clear call to action
-8. Be warm but professional
+✅ DO:
+- Use SPECIFIC details from their profile (project names, companies, achievements)
+- Reference at least ONE concrete thing (GitHub repo, hackathon, certification, blog post)
+- Keep body to 80-120 words MAXIMUM (shorter = higher response rates)
+- Sound like a human colleague, not a recruiter robot
+- Use simple, conversational language
+- Make it feel like a 1:1 message, not a mass email
 
-CANDIDATE:
-{candidate_info}
+❌ DON'T:
+- Use buzzwords: "synergy", "leverage", "rockstar", "ninja", "fast-paced environment"
+- Generic openers: "I hope this email finds you well"
+- Vague praise: "impressive background", "great experience"
+- Corporate jargon or formal language (unless tone is professional)
+- Mention salary, benefits, or compensation
+- Create false urgency or pressure
+- Use emojis in subject line
 
-JOB:
-{job_info}
+SUBJECT LINE FORMULAS (Pick based on tone):
+Professional: "Quick question about [specific skill/project]"
+Friendly: "[Their achievement] caught my attention"
+Casual: "Loved your [specific project/work]"
+
+BAD SUBJECTS TO AVOID:
+❌ "Exciting Career Opportunity!"
+❌ "We're Hiring - Great Role!"
+❌ "Amazing Opportunity at [Company]"
 
 SCHEDULING LINK: {scheduling_link}
+(Include naturally in closing, not as a big button)
 
-Generate a JSON response:
+OUTPUT FORMAT (STRICT JSON):
 {{
-    "subject": "Short, intriguing subject line (max 50 chars, no emojis)",
-    "opening_line": "Personalized opening that shows you know them (1 sentence)",
-    "fit_reasons": ["Specific reason 1", "Specific reason 2"],
-    "body": "Main email body (max 120 words, conversational)",
-    "closing_line": "Natural sign-off (1 sentence)"
+    "subject": "Your compelling subject here (max 50 chars, no emojis)",
+    "opening_line": "Personalized hook that shows you know them",
+    "fit_reasons": ["Specific reason 1 with details", "Specific reason 2 with details"],
+    "body": "Complete email body (80-120 words, starts with opening_line, includes context, value prop, and CTA)",
+    "closing_line": "Natural sign-off (1 sentence)",
+    "confidence": 0.88,
+    "personalization_used": ["specific thing you referenced from their profile"]
 }}
 
-EXAMPLE GOOD SUBJECT: "Quick question about your backend work"
-EXAMPLE BAD SUBJECT: "Exciting Career Opportunity at Amazing Company!"
+IMPORTANT: The 'body' should be the COMPLETE email content (opening + context + value + CTA), ready to send.
+Do NOT include "Hi [name]," or signature - those are added automatically.
+Start directly with your opening line.
 
-Remember: Write like you're texting a colleague, not writing a formal letter."""
+Generate the perfect {tone} outreach email now:"""
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
@@ -968,19 +1057,20 @@ Remember: Write like you're texting a colleague, not writing a formal letter."""
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {self.openrouter_key}",
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://neuraleap.shop"
                     },
                     json={
                         "model": self.model,
                         "messages": [
                             {
                                 "role": "system",
-                                "content": "You write excellent recruitment emails that sound human and warm. Always respond with valid JSON."
+                                "content": "You are an expert recruiter who writes personalized, human-sounding outreach emails that get responses. You always respond with valid JSON and use specific details from candidates' profiles to show genuine interest."
                             },
                             {"role": "user", "content": prompt}
                         ],
-                        "temperature": 0.8,
-                        "max_tokens": 500
+                        "temperature": 0.7,  # Balanced creativity
+                        "max_tokens": 600
                     }
                 )
                 
@@ -989,19 +1079,305 @@ Remember: Write like you're texting a colleague, not writing a formal letter."""
                     content = result["choices"][0]["message"]["content"]
                     
                     # Parse JSON from response
+                    # Sometimes AI wraps in ```json, so clean it
+                    content = content.strip()
+                    if content.startswith("```json"):
+                        content = content[7:]
+                    if content.startswith("```"):
+                        content = content[3:]
+                    if content.endswith("```"):
+                        content = content[:-3]
+                    content = content.strip()
+                    
                     json_match = re.search(r'\{[\s\S]*\}', content)
                     if json_match:
                         email_data = json.loads(json_match.group())
-                        logger.info(f"✅ AI generated email for {candidate.display_name}")
-                        return email_data
+                        
+                        # Validate required fields
+                        if email_data.get('subject') and email_data.get('body'):
+                            logger.info(f"✅ AI generated {tone} email for {candidate.display_name} (confidence: {email_data.get('confidence', 0.75)})")
+                            return email_data
                 
                 logger.warning("AI email generation failed, using fallback")
                 
         except Exception as e:
-            logger.error(f"AI email generation error: {e}")
+            logger.error(f"AI email generation error: {e}", exc_info=True)
         
-        return self._get_fallback_content(candidate, job, scheduling_link)
+        return self._get_fallback_content(candidate, job, scheduling_link, tone)
     
+    def _build_rich_candidate_profile(
+        self,
+        candidate: PipelineCandidate,
+        candidate_data: dict,
+        professional_footprint: dict,
+        skill_validation: dict
+    ) -> str:
+        """Build comprehensive candidate profile using all enrichment data."""
+        
+        profile_parts = []
+        
+        # Basic Info
+        profile_parts.append(f"Name: {candidate.name}")
+        
+        if candidate.current_title:
+            profile_parts.append(f"Current Role: {candidate.current_title}")
+        elif candidate.headline:
+            profile_parts.append(f"Status: {candidate.headline}")
+        
+        if candidate.current_company:
+            profile_parts.append(f"Company: {candidate.current_company}")
+        
+        profile_parts.append(f"Location: {candidate.location or 'Not specified'}")
+        
+        # Experience
+        if candidate.experience_years:
+            profile_parts.append(f"Experience: {candidate.experience_years} years")
+        
+        exp_summary = candidate_data.get('experience_summary', {})
+        if exp_summary:
+            profile_parts.append(f"Professional Roles: {exp_summary.get('professional_roles', 0)}")
+            profile_parts.append(f"Internships: {exp_summary.get('internships', 0)}")
+        
+        # Validated Skills (from enrichment)
+        validated_skills = skill_validation.get('validated_skills', [])[:7]
+        if validated_skills:
+            profile_parts.append(f"✓ Verified Skills: {', '.join(validated_skills)}")
+        elif candidate.skills:
+            profile_parts.append(f"Skills: {', '.join(candidate.skills[:7])}")
+        
+        # Education
+        education = candidate_data.get('education', [])
+        if education:
+            edu = education[0]
+            school = edu.get('school', '')
+            degree = edu.get('degree', '')
+            if school or degree:
+                profile_parts.append(f"Education: {degree} from {school}".strip())
+        
+        # Professional Footprint Highlights
+        verified_profiles = professional_footprint.get('verified_profiles', [])
+        evidence_found = professional_footprint.get('evidence_found', [])
+        news_mentions = professional_footprint.get('news_mentions', [])
+        
+        # GitHub
+        github = next((p for p in verified_profiles if p.get('platform') == 'GitHub'), None)
+        if github:
+            key_data = github.get('key_data', {})
+            repos = key_data.get('repos', 0)
+            followers = key_data.get('followers', 0)
+            languages = key_data.get('top_languages', [])
+            profile_parts.append(f"GitHub: {repos} repos, {followers} followers, languages: {', '.join(languages[:3])}")
+        
+        # Achievements/Evidence
+        if evidence_found:
+            profile_parts.append("\nNotable Achievements:")
+            for evidence in evidence_found[:3]:
+                desc = evidence.get('description', '')
+                evidence_type = evidence.get('evidence_type', '')
+                if desc:
+                    profile_parts.append(f"  • {desc} ({evidence_type})")
+        
+        # News/Recognition
+        if news_mentions:
+            profile_parts.append("\nPublic Recognition:")
+            for mention in news_mentions[:2]:
+                title = mention.get('title', '')
+                if title:
+                    profile_parts.append(f"  • {title}")
+        
+        # About/Bio (if available and meaningful)
+        about = candidate_data.get('about', '')
+        if about and len(about) > 50:
+            # Extract first meaningful sentence or 200 chars
+            bio_preview = about[:250].strip()
+            if len(about) > 250:
+                bio_preview += "..."
+            profile_parts.append(f"\nBio: {bio_preview}")
+        
+        # Digital Presence Score
+        footprint_score = professional_footprint.get('overall_footprint_assessment', {}).get('digital_presence_score', 0)
+        if footprint_score:
+            profile_parts.append(f"\nDigital Presence: {footprint_score}/100 ({professional_footprint.get('overall_footprint_assessment', {}).get('presence_level', 'Unknown')})")
+        
+        return '\n'.join(profile_parts)
+    
+    def _build_rich_job_details(self, job: JobContext) -> str:
+        """Build compelling job details."""
+        
+        details = []
+        details.append(f"Position: {job.job_title}")
+        details.append(f"Company: {job.company_name or 'A fast-growing tech company'}")
+        
+        if job.department:
+            details.append(f"Department: {job.department}")
+        
+        if job.required_skills:
+            details.append(f"Key Technologies: {', '.join(job.required_skills[:7])}")
+        
+        if job.nice_to_have_skills:
+            details.append(f"Nice-to-Have: {', '.join(job.nice_to_have_skills[:5])}")
+        
+        if job.experience_required:
+            details.append(f"Experience Level: {job.experience_required}")
+        
+        # Work setup
+        location_text = ', '.join(job.location_requirements) if job.location_requirements else job.remote_policy.capitalize()
+        details.append(f"Work Setup: {location_text}")
+        
+        # REMOVED: Industry preferences (field doesn't exist in JobContext model)
+        # if job.industry_preferences:
+        #     details.append(f"Industry Focus: {', '.join(job.industry_preferences[:3])}")
+        
+        # JD highlights (if available)
+        if job.jd_text and len(job.jd_text) > 100:
+            # Extract first meaningful paragraph
+            paragraphs = [p.strip() for p in job.jd_text.split('\n\n') if len(p.strip()) > 50]
+            if paragraphs:
+                details.append(f"\nRole Highlights: {paragraphs[0][:300]}")
+        
+        # Evaluation criteria (shows what matters)
+        if job.key_evaluation_criteria:
+            details.append(f"\nWhat We Value: {', '.join(job.key_evaluation_criteria[:4])}")
+        
+        return '\n'.join(details)
+
+    def _get_tone_guidelines(self, tone: str) -> str:
+        """Get detailed tone guidelines for AI."""
+        
+        guidelines = {
+            "professional": """
+TONE: Corporate Professional
+- Use polished, formal language with proper grammar
+- Address candidate respectfully and professionally
+- Focus on career growth, professional development, and opportunity
+- Think: Senior recruiter at Google, Microsoft, or Goldman Sachs
+- Vocabulary: "I noticed", "would like to discuss", "opportunity to explore", "delighted to connect"
+- Structure: Formal but warm, clear and direct
+- Sign-off will be added automatically
+""",
+            
+            "friendly": """
+TONE: Warm & Approachable Professional
+- Conversational but professional - like talking to a respected colleague
+- Show genuine enthusiasm about their work and achievements
+- Balance professionalism with personality and authenticity
+- Think: Friendly team lead or colleague making an introduction
+- Vocabulary: "I came across", "really impressed by", "would love to chat", "thought you'd be great"
+- Structure: Relaxed but respectful, engaging and personal
+- Sign-off will be added automatically
+""",
+            
+            "casual": """
+TONE: Relaxed & Authentic
+- Write like texting a friend (but a professional friend)
+- Short sentences, simple words, natural flow
+- Be real, human, and down-to-earth - avoid corporate speak entirely
+- Think: Startup founder or tech lead reaching out directly
+- Vocabulary: "Saw your", "loved your", "thought you'd be perfect", "up for a chat?"
+- Structure: Punchy and direct, like a message not a letter
+- Sign-off will be added automatically
+"""
+        }
+        
+        return guidelines.get(tone, guidelines["professional"])
+    
+    def _get_fallback_content(
+        self,
+        candidate: PipelineCandidate,
+        job: JobContext,
+        scheduling_link: str,
+        tone: str = "professional"
+    ) -> Dict[str, str]:
+        """Enhanced fallback templates using enrichment data."""
+        
+        first_name = candidate.first_name or candidate.name.split()[0] if candidate.name else "there"
+        
+        # Try to extract specific achievement from enrichment
+        enrichment = candidate.enrichment.full_enrichment_data or {}
+        evidence = enrichment.get('professional_footprint', {}).get('evidence_found', [])
+        news = enrichment.get('professional_footprint', {}).get('news_mentions', [])
+        github = next(
+            (p for p in enrichment.get('professional_footprint', {}).get('verified_profiles', []) 
+             if p.get('platform') == 'GitHub'),
+            None
+        )
+        
+        achievement = None
+        if news:
+            achievement = news[0].get('title', '')
+        elif evidence:
+            achievement = evidence[0].get('description', '')
+        elif github:
+            repos = github.get('key_data', {}).get('repos', 0)
+            if repos > 5:
+                achievement = f"{repos} GitHub repositories"
+        
+        # Get verified skills
+        skills = enrichment.get('skill_validation', {}).get('validated_skills', candidate.skills)[:2]
+        skills_text = ' and '.join(skills) if skills else 'your technical background'
+        
+        # Get current status
+        status = candidate.current_title or candidate.headline or "your professional background"
+        company_text = f" at {candidate.current_company}" if candidate.current_company else ""
+        
+        templates = {
+            "professional": {
+                "subject": f"{job.job_title} opportunity",
+                "body": f"""{"I came across " + achievement + " and was" if achievement else "I was"} impressed by your expertise in {skills_text}.
+
+We're seeking a {job.job_title} at {job.company_name or 'our organization'}, and your background{company_text} aligns well with our requirements.
+
+I would appreciate the opportunity to discuss this role with you at your convenience. Would you be open to a brief conversation?""",
+                "opening_line": f"{"I noticed " + achievement if achievement else "Your work in " + skills_text + " caught my attention"}",
+                "fit_reasons": [
+                    f"Your experience with {skills_text}",
+                    f"Your background{company_text}"
+                ],
+                "closing_line": "Looking forward to the possibility of speaking with you.",
+                "confidence": 0.6
+            },
+            
+            "friendly": {
+                "subject": f"Great fit for {job.job_title}",
+                "body": f"""{"I saw " + achievement + " - really impressive work!" if achievement else "Your background in " + skills_text + " caught my attention!"}
+
+We're hiring a {job.job_title}{" at " + job.company_name if job.company_name else ""} and I think you'd be a great fit. The role involves working with {skills_text} and building some really interesting things.
+
+Would you be up for a quick 15-min chat to learn more? No pressure at all!""",
+                "opening_line": f"{"I saw " + achievement + " - impressive!" if achievement else "Your " + skills_text + " work really stood out to me"}",
+                "fit_reasons": [
+                    f"Your {skills_text} experience",
+                    f"Your work{company_text} shows great potential"
+                ],
+                "closing_line": "Would love to connect if you're interested!",
+                "confidence": 0.65
+            },
+            
+            "casual": {
+                "subject": f"Quick question about {job.job_title}",
+                "body": f"""{"Saw " + achievement + " and" if achievement else "Your"} {skills_text} work is exactly what we need for our {job.job_title} role.
+
+We're {"building something cool at " + job.company_name if job.company_name else "a growing team"} and think you'd be perfect for it{company_text and " given your experience" + company_text or ""}.
+
+Up for a quick call this week?""",
+                "opening_line": f"{"Saw " + achievement if achievement else "Your " + skills_text + " work is spot on"}",
+                "fit_reasons": [
+                    f"{skills_text} - exactly what we need",
+                    f"Your background{company_text} is a great match"
+                ],
+                "closing_line": "Let me know if you're interested!",
+                "confidence": 0.65
+            }
+        }
+        
+        template = templates.get(tone, templates["professional"])
+        
+        return {
+            **template,
+            "personalization_used": ["template-based", achievement or skills_text]
+        }
+
+
     def _build_candidate_context(self, candidate: PipelineCandidate) -> str:
         """Build candidate context string for prompt."""
         parts = [f"Name: {candidate.display_name}"]
@@ -1162,18 +1538,21 @@ class EmailOutreachService:
         self,
         candidate: PipelineCandidate,
         job: JobContext,
-        scheduling_link: str
+        scheduling_link: str,
+        tone: str = "professional"
     ) -> Dict[str, str]:
         """
-        Generate a personalized outreach email.
+        Generate a personalized outreach email (doesn't store, just generates).
         
-        Uses AI to generate content, then renders with template.
+        Returns:
+            Dict with 'subject', 'body', 'body_html'
         """
         # Generate AI content
         ai_content = await self.ai_generator.generate_outreach_email(
             candidate=candidate,
             job=job,
-            scheduling_link=scheduling_link
+            scheduling_link=scheduling_link,
+            tone=tone
         )
         
         # Build template context
@@ -1194,25 +1573,29 @@ class EmailOutreachService:
         }
         
         # Render template
-        body_html, body_plain = self.template_engine.render(
+        body_html, body_plain_template = self.template_engine.render(
             "outreach_initial.html",
             context
         )
         
         # Use AI-generated body if available
         if ai_content.get("body"):
-            # Replace template body with AI body
             body_plain = self._build_plain_email(
                 first_name=first_name,
                 body=ai_content["body"],
                 scheduling_link=scheduling_link,
                 closing=ai_content.get("closing_line", "")
             )
-        
+        else:
+            body_plain = body_plain_template
+            
         return {
             "subject": context["subject"],
             "body": body_plain,
-            "body_html": body_html
+            "body_html": body_html,
+            "scheduling_link": scheduling_link,
+            "tone": tone,
+            "ai_confidence": ai_content.get("confidence", 0.75)
         }
     
     def _build_plain_email(
@@ -1276,6 +1659,58 @@ If you're not interested, no worries - just ignore this email."""
             **result,
             "email_content": email_content
         }
+    
+    async def generate_and_store_draft(
+        self,
+        candidate: PipelineCandidate,
+        job: JobContext,
+        scheduling_link: str,
+        tone: str = "professional"
+    ) -> Dict[str, str]:
+        """
+        Generate email draft and store in candidate's outreach record.
+        This is called by the preview endpoint.
+        
+        Returns:
+            Dict with subject, body_html, body_plain, scheduling_link
+        """
+        # Generate AI content
+        email_content = await self.generate_outreach_email(
+            candidate=candidate,
+            job=job,
+            scheduling_link=scheduling_link,
+            tone=tone
+        )
+        
+        # Create or update outreach record
+        if not candidate.outreach:
+            from models.pipeline_models import (OutreachRecord,
+                                                generate_scheduling_token)
+            candidate.outreach = OutreachRecord(
+                scheduling_token=generate_scheduling_token(),
+                scheduling_link=scheduling_link
+            )
+        
+        # Store as draft email (clear any existing draft)
+        draft_emails = [e for e in candidate.outreach.emails if e.status != OutreachStatus.PENDING]
+        
+        # Create new draft
+        from models.pipeline_models import OutreachEmailRecord, OutreachType
+        draft = OutreachEmailRecord(
+            email_type=OutreachType.INITIAL,
+            subject=email_content["subject"],
+            body_plain=email_content["body"],
+            body_html=email_content.get("body_html", ""),
+            status=OutreachStatus.PENDING  # PENDING = draft
+        )
+        
+        # Replace drafts
+        candidate.outreach.emails = draft_emails + [draft]
+        
+        logger.info(f"📧 Generated and stored draft email for {candidate.display_name}")
+        
+        return email_content
+    
     
     # =========================================================================
     # REMINDER EMAILS
