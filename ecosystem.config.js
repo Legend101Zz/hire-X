@@ -1,4 +1,5 @@
 module.exports = {
+  // To run all the project using PM2
   apps: [
     {
       name: "neuraleap-backend",
@@ -20,28 +21,28 @@ module.exports = {
 
         // JWT & Security
         JWT_SECRET_KEY:
-          "5035de59e0a6124ae6055c18d5d32044142c5f66758588a275ea24bf8d75de73",
+          "",
 
         // AI Configuration
         OPENROUTER_API_KEY:
-          "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",
+          "",
         AI_MODEL_NAME: "anthropic/claude-sonnet-4.5",
 
         // External APIs
         BRIGHTDATA_API_TOKEN:
-          "10df4c06094433d9ca565f3042b0b5a89f250bdb5b8800f846f79a29b302a88d",
+         "",
         HATCH_API_KEY:
-          "U2FsdGVkX1_FkKFPqEPvJAIAoPR2GG16d2SrzUzYd_csurd-xQQE6gLQyBsXlQLNgxRa697052l6S9roDb4g6A",
+          "",
 
         //Vapi Configuration
-        VAPI_API_KEY: "315e1107-5551-4e01-85bb-f5def725c3a2",
-        VAPI_PHONE_NUMBER_ID: "704399ac-d17f-40ab-b6a2-fc5b1d0cef8c",
+        VAPI_API_KEY: "",
+        VAPI_PHONE_NUMBER_ID: "",
 
         //Webhook URL (server's public URL for vapi)
         WEBHOOK_BASE_URL: "https://neuraleap.shop",
 
         // Cartesia (used via Vapi, but needed for direct calls)
-        CARTESIA_API_KEY: "sk_car_H432gY5mx9QA56jPJ1KHTT",
+        CARTESIA_API_KEY: "",
 
         // Interview Storage
         INTERVIEW_RECORDINGS_PATH: "./interview_recordings",
@@ -51,10 +52,10 @@ module.exports = {
         EMAIL_PROVIDER: "gmail",
         SMTP_HOST: "smtp.gmail.com",
         SMTP_PORT: "587",
-        SMTP_USERNAME: "comreton11@gmail.com",
-        SMTP_PASSWORD: "kmmo cywc thxk qrpd",
-        SMTP_FROM_EMAIL: "comreton11@gmail.com",
-        SMTP_FROM_NAME: "NeuraLeap Careers",
+        SMTP_USERNAME: "",
+        SMTP_PASSWORD: "",
+        SMTP_FROM_EMAIL: "",
+        SMTP_FROM_NAME: "",
         SMTP_USE_TLS: "true",
         APP_BASE_URL: "https://app.neuraleap.shop",
 
