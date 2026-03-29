@@ -1,390 +1,412 @@
-# Neuraleap API - README
+<div align="center">
 
-## Project Overview
+# 🧠 Hire-X
 
-Neuraleap is a full-stack application with a FastAPI backend and Next.js frontend that provides JWT-authenticated API endpoints with WebSocket support, session management, and AI-powered hiring prompt analysis.
+### AI-Powered End-to-End Recruitment Automation Platform
 
-## Project Structure
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org)
+[![MongoDB](https://img.shields.io/badge/MongoDB-6.0-47A248?style=for-the-badge&logo=mongodb&logoColor=white)](https://mongodb.com)
+[![Redis](https://img.shields.io/badge/Redis-7.0-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
+[![Claude AI](https://img.shields.io/badge/Claude-Anthropic-FF6B35?style=for-the-badge)](https://anthropic.com)
 
+**From job description to hired candidate — fully automated.**
+
+[Live Demo](https://dev.damnuiwdbbvte.amplifyapp.com) · [Architecture](#architecture) · [Setup Guide](#setup) · [How It Works](#how-it-works)
+
+</div>
+
+---
+
+##  The Problem It Solves
+
+Recruiters don't struggle to *find* candidates. They struggle to *connect* with them.
+
+Traditional ATS tools dump a list of names and leave the rest to a recruiter's inbox. Hire-X automates the entire funnel — from intelligent candidate discovery across **56+ million LinkedIn profiles**, to AI-powered background analysis, personalized outreach, and fully autonomous AI-conducted telephonic interviews — delivering a ranked shortlist with rich insights directly to the HR team.
+
+> Built for the Indian recruitment market. Designed to replace $500/month tools like LinkedIn Recruiter, Juicebox, and Weekday — at a fraction of the cost.
+
+---
+
+##  What Makes This Different
+
+| Feature | Traditional ATS | Hire-X Hire |
+|---|---|---|
+| Candidate Search | Keyword filter | AI intent parsing + semantic ranking |
+| Outreach | Manual, generic emails | Personalized, context-aware campaigns |
+| Background Check | Manual Google search | Automated OSINT pipeline |
+| Interview Scheduling | Calendar ping-pong | Auto-scheduled on candidate availability |
+| First-Round Interview | Human phone screen | Vapi + Cartesia AI voice agent |
+| Post-Interview Insight | "How'd the call go?" | Structured report with sentiment, confidence & fit score |
+
+---
+
+##  Architecture
 ```
-neuraleap/
-├── backend-mvp/          # FastAPI backend
-│   ├── main.py          # Main entry point
-│   ├── api.py           # API routes and endpoints
-│   ├── auth.py          # JWT authentication
-│   ├── models.py        # Pydantic models
-│   ├── workflow.py      # Business logic
-│   ├── redis_manager.py # Redis session management
-│   ├── ai_model.py      # AI model integration
-│   ├── websocket_manager.py
+
+┌─────────────────────────────────────────────────────────────────┐
+│                         HR Dashboard                             │
+│                 (Next.js 15 + shadcn/ui + Framer Motion)        │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │  REST + WebSocket
+┌──────────────────────────────▼──────────────────────────────────┐
+│                      FastAPI Backend                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │ Auth Layer   │  │  AI Engine   │  │  Workflow Orchestrator│  │
+│  │ JWT + bcrypt │  │ Claude Sonnet│  │  (Campaign Pipeline)  │  │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
+└──────┬───────────────────┬──────────────────────┬───────────────┘
+       │                   │                      │
+┌──────▼──────┐  ┌─────────▼──────────┐  ┌───────▼──────────────┐
+│   MongoDB   │  │   Redis (Cache +   │  │  External Services   │
+│  56M+       │  │   Session + Queue) │  │  ┌────────────────┐  │
+│  Profiles   │  └────────────────────┘  │  │ BrightData API │  │
+│  Collection │                          │  │ (LinkedIn Data)│  │
+└─────────────┘                          │  ├────────────────┤  │
+                                         │  │  Vapi Voice AI │  │
+                                         │  ├────────────────┤  │
+                                         │  │Cartesia Sonic  │  │
+                                         │  │  (TTS Voice)   │  │
+                                         │  ├────────────────┤  │
+                                         │  │ SendGrid/SMTP  │  │
+                                         │  │  (Email Agent) │  │
+                                         │  └────────────────┘  │
+                                         └──────────────────────┘
+```
+
+---
+
+## 🔄 How It Works — The Full Pipeline
+
+### Phase 1 · Intelligent Candidate Discovery
+```
+HR types: "Find me a senior backend engineer with Go + Kubernetes, 
+           fintech background, Bangalore, open to remote"
+                              │
+                              ▼
+              ┌───────────────────────────┐
+              │   Donna (AI Assistant)    │  ← Conversational query
+              │   Claude Sonnet parses    │    builder — no forms
+              │   intent, location, skills│
+              └──────────────┬────────────┘
+                             │
+                             ▼
+              ┌───────────────────────────┐
+              │   Index-First Search      │  ← MongoDB compound
+              │   56M+ LinkedIn profiles  │    indexes, not regex
+              │   Sub-5 second results    │
+              └──────────────┬────────────┘
+                             │
+                             ▼
+              ┌───────────────────────────┐
+              │   AI Ranking Engine       │  ← Skills validation,
+              │   Scores + plain-English  │    experience weight,
+              │   explanations per cand.  │    response likelihood
+              └───────────────────────────┘
+```
+
+> **Dataset Note:** The LinkedIn profile dataset (56M+ records) is not included in this repo — it requires a paid BrightData subscription. See [Data Setup](#data-setup) below to plug in your own BrightData API key and seed the MongoDB `profiles` collection.
+
+---
+
+### Phase 2 · Hiring Campaign Pipeline
+
+Once an HR selects candidates to pursue, the campaign pipeline fires automatically:
+```
+HR clicks "Start Campaign" on shortlisted candidates
+                              │
+          ┌───────────────────┴───────────────────┐
+          │                                       │
+          ▼                                       ▼
+┌──────────────────────┐             ┌────────────────────────┐
+│  Background Analysis │             │   Contact Discovery    │
+│                      │             │                        │
+│ • GitHub activity    │             │ • Phone number lookup  │
+│ • StackOverflow rep  │             │ • Work email inference │
+│ • Patent/paper search│             │ • WhatsApp availability│
+│ • Salary progression │             │ • Social presence      │
+│ • Skill verification │             └───────────┬────────────┘
+└──────────┬───────────┘                         │
+           │                                     │
+           └─────────────────┬───────────────────┘
+                             │
+                             ▼
+              ┌───────────────────────────┐
+              │  Candidate Report Card    │
+              │  (Auto-generated PDF)     │
+              │  • Role fit analysis      │
+              │  • Engagement probability │
+              │  • Red/green flags        │
+              │  • Recommended opener     │
+              └──────────────┬────────────┘
+                             │
+                             ▼
+              ┌───────────────────────────┐
+              │  Personalized Outreach    │
+              │  AI drafts email/message  │
+              │  referencing their work,  │
+              │  recent activity, context │
+              └──────────────┬────────────┘
+                             │
+                             ▼
+              ┌───────────────────────────┐
+              │  Interview Scheduler      │
+              │  Sends calendar invite    │
+              │  Confirms time slot       │
+              └──────────────┬────────────┘
+```
+
+---
+
+### Phase 3 · AI-Conducted Telephonic Interview
+```
+At scheduled time:
+                              │
+                              ▼
+              ┌───────────────────────────┐
+              │   Vapi Voice Agent        │
+              │   + Cartesia Sonic TTS    │
+              │                           │
+              │  Conducts a structured    │
+              │  phone interview:         │
+              │  • Role-specific Qs       │
+              │  • Follow-up probing      │
+              │  • Culture fit assessment │
+              │  • Compensation gauge     │
+              └──────────────┬────────────┘
+                             │
+                             ▼
+              ┌───────────────────────────┐
+              │   Post-Interview Report   │
+              │   (Delivered to HR)       │
+              │                           │
+              │  • Full transcript        │
+              │  • Confidence score       │
+              │  • Communication quality  │
+              │  • Technical accuracy     │
+              │  • Hire / Pass / Hold     │
+              │    recommendation         │
+              └───────────────────────────┘
+```
+
+---
+
+## 🗂️ Project Structure
+```
+hire-X/
+├── backend-mvp/               # FastAPI backend (production)
+│   ├── main.py                # App entry point
+│   ├── api.py                 # All route handlers
+│   ├── auth.py                # JWT + bcrypt auth
+│   ├── models.py              # Pydantic data models
+│   ├── workflow.py            # Core business logic
+│   ├── ai_model.py            # Claude AI integration
+│   ├── redis_manager.py       # Cache + session layer
+│   ├── websocket_manager.py   # Real-time pipeline updates
 │   └── requirements.txt
-├── frontend-mvp/        # Next.js frontend
+│
+├── backend-v2/                # v2 with enrichment + voice pipeline
+│
+├── frontend-mvp/              # Next.js 15 frontend
 │   ├── app/
-│   ├── package.json
-│   └── README.md
-└── run_server.py        # Server launcher script
+│   │   ├── dashboard/         # HR main workspace
+│   │   ├── campaigns/         # Pipeline view
+│   │   ├── candidates/        # Profile explorer
+│   │   └── reports/           # Interview insights
+│   └── package.json
+│
+├── .github/workflows/         # CI/CD (dev → main auto-PR)
+├── ecosystem.config.js        # PM2 process config
+└── backend.service            # systemd service file
 ```
 
 ---
 
-## Backend Setup Guide
+## ⚙️ Setup
 
 ### Prerequisites
 
-- **Python 3.8+**
-- **Redis** (running on localhost:6379)
-- **MongoDB** (running on localhost:27017)
+- Python 3.10+
+- Node.js 18+
+- MongoDB 6.0+
+- Redis 7.0+
+- A [BrightData](https://brightdata.com) account (for LinkedIn data)
+- Anthropic API key
+- Vapi API key
+- Cartesia API key
 
-### 1. Install Dependencies
-
+### 1. Clone & Install
 ```bash
+git clone https://github.com/Legend101Zz/hire-X.git
+cd hire-X
+
+# Backend
 cd backend-mvp
 pip install -r requirements.txt
-```
 
-**Key Dependencies:**
-
-- fastapi==0.104.1
-- uvicorn[standard]==0.24.0
-- redis==5.0.1
-- pymongo==4.15.1
-- python-jose[cryptography]==3.3.0
-- passlib[bcrypt]==1.7.4
-- websockets==12.0
-
-### 2. Configure Environment Variables
-
-Create a `.env` file in the `backend-mvp` directory:
-
-```bash
-# JWT Configuration
-JWT_SECRET_KEY=your-very-secure-secret-key-change-this-in-production
-
-# MongoDB Configuration
-MONGODB_URL=mongodb://localhost:27017/
-DATABASE_NAME=mydatabase
-```
-
-### 3. Start Required Services
-
-**Start Redis:**
-
-```bash
-# On macOS with Homebrew
-brew services start redis
-
-# On Ubuntu/Debian
-sudo systemctl start redis
-
-# Or run directly
-redis-server
-```
-
-**Start MongoDB:**
-
-```bash
-# On macOS with Homebrew
-brew services start mongodb-community
-
-# On Ubuntu/Debian
-sudo systemctl start mongod
-
-# Or run directly
-mongod --dbpath /path/to/data
-```
-
-### 4. Create Test User
-
-```bash
-cd backend-mvp
-python create_test_user.py
-```
-
-This creates a user with:
-
-- Username: `testuser`
-- Password: `testpassword123`
-- Email: `test@example.com`
-
-### 5. Start the Backend Server
-
-**Option 1: From project root**
-
-```bash
-python run_server.py
-```
-
-**Option 2: From backend directory**
-
-```bash
-cd backend-mvp
-python main.py
-```
-
-**Option 3: Using uvicorn directly**
-
-```bash
-cd backend-mvp
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-The API will be available at: **http://localhost:8000**
-
-### Backend Endpoints
-
-- `POST /login` - Authenticate and get JWT token
-- `POST /parse-prompt` - Parse hiring prompts (protected)
-- `GET /session/{session_id}/status` - Get session status
-- `GET /health` - Health check
-- `WS /session/{session_id}` - WebSocket connection for real-time updates
-
----
-
-## Frontend Setup Guide
-
-### Prerequisites
-
-- **Node.js 18+**
-- **npm, yarn, pnpm, or bun**
-
-### 1. Install Dependencies
-
-```bash
-cd frontend-mvp
+# Frontend
+cd ../frontend-mvp
 npm install
-# or
-yarn install
-# or
-pnpm install
 ```
 
-**Key Dependencies:**
+### 2. Environment Variables
 
-- next 15.5.3
-- react 19.1.0
-- next-auth 4.24.11
-- prisma 6.16.2
+Create `backend-mvp/.env`:
+```env
+# Auth
+JWT_SECRET_KEY=your-very-secure-secret-key
 
-### 2. Start Development Server
+# Database
+MONGODB_URL=mongodb://localhost:27017/
+DATABASE_NAME=Hire-X
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# Redis
+REDIS_URL=redis://localhost:6379
+
+# AI
+ANTHROPIC_API_KEY=sk-ant-...
+OPENROUTER_API_KEY=...
+
+# Data (LinkedIn profiles)
+BRIGHTDATA_API_KEY=...
+BRIGHTDATA_DATASET_ID=...
+
+# Voice Interview
+VAPI_API_KEY=...
+CARTESIA_API_KEY=...
+
+# Outreach
+SENDGRID_API_KEY=...
 ```
 
-The frontend will be available at: **http://localhost:3000**
+### 3. Data Setup
 
-### 3. Build for Production
-
+> The 56M+ LinkedIn profile dataset is **not included** in this repository. To populate your own:
 ```bash
-npm run build
-npm start
+# Option A: Use BrightData LinkedIn Dataset API
+python backend-mvp/scripts/seed_from_brightdata.py \
+  --api-key YOUR_BRIGHTDATA_KEY \
+  --dataset-id YOUR_DATASET_ID \
+  --limit 100000   # start with 100K for dev
+
+# Option B: Import your own CSV/JSON dataset
+python backend-mvp/scripts/import_profiles.py \
+  --file /path/to/profiles.json
+```
+
+The script will create the `profiles` collection and build the required compound indexes automatically.
+
+### 4. Start Services
+```bash
+# Terminal 1 — Redis
+redis-server
+
+# Terminal 2 — MongoDB
+mongod --dbpath ./data/db
+
+# Terminal 3 — Backend
+cd backend-mvp && python main.py
+# API: http://localhost:8000
+# Docs: http://localhost:8000/docs
+
+# Terminal 4 — Frontend
+cd frontend-mvp && npm run dev
+# App: http://localhost:3000
+```
+
+Or use PM2 for production:
+```bash
+pm2 start ecosystem.config.js
 ```
 
 ---
 
-## Testing
+## 🔑 Key API Endpoints
 
-### Test Backend API
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/login` | Authenticate, receive JWT |
+| `POST` | `/parse-prompt` | Convert natural language query to search params |
+| `POST` | `/search` | Search + rank candidates from profile DB |
+| `POST` | `/campaign/start` | Trigger full hiring pipeline for selected candidates |
+| `GET` | `/campaign/{id}/status` | Real-time pipeline status |
+| `GET` | `/candidate/{id}/report` | Full background analysis report |
+| `GET` | `/interview/{id}/insights` | Post-interview AI summary |
+| `WS` | `/session/{session_id}` | WebSocket for live updates |
 
+---
+
+##  Tech Stack
+
+**Backend**
+- [FastAPI](https://fastapi.tiangolo.com) — async Python API framework
+- [MongoDB](https://mongodb.com) — profile storage (56M+ documents)
+- [Redis](https://redis.io) — caching, session management, job queues
+- [Claude Sonnet](https://anthropic.com) — query parsing, candidate analysis, report generation
+- [Claude Haiku](https://anthropic.com) — high-volume, cost-efficient tasks
+
+**Frontend**
+- [Next.js 15](https://nextjs.org) + TypeScript
+- [shadcn/ui](https://ui.shadcn.com) — component library
+- [Framer Motion](https://framer.com/motion) — animations
+- [TailwindCSS](https://tailwindcss.com)
+
+**AI & Data**
+- [Vapi](https://vapi.ai) — AI voice call orchestration
+- [Cartesia Sonic](https://cartesia.ai) — ultra-low-latency TTS for interviews
+- [BrightData](https://brightdata.com) — LinkedIn profile dataset
+- [OpenRouter](https://openrouter.ai) — model routing fallback
+
+**Infrastructure**
+- Hostinger KVM VPS + Nginx reverse proxy
+- PM2 process management
+- GitHub Actions CI/CD (auto-PR from `dev` → `main` on `ready-for-prod` label)
+
+---
+
+##  Performance
+
+| Metric | Value |
+|--------|-------|
+| Profile database size | 56M+ LinkedIn records |
+| Search latency (p95) | < 5 seconds |
+| Concurrent sessions | Redis-backed, horizontally scalable |
+| AI model cold start | < 800ms (cached prompts) |
+| Voice interview latency | < 400ms (Cartesia Sonic) |
+
+---
+
+## 🗺️Roadmap
+
+- [x] Phase 1 — AI-powered candidate search & ranking
+- [x] Phase 2 — Background analysis & personalized outreach
+- [x] Phase 3 — Vapi + Cartesia AI telephonic interviews
+
+---
+
+## 🤝 Contributing
+
+PRs are welcome. Please branch from `dev`, not `main`.
 ```bash
-cd backend-mvp
-
-# Run full test suite (includes WebSocket)
-python test_api.py
-
-# Run synchronous tests only (no WebSocket)
-python test_api.py --sync
-```
-
-### Test Authentication
-
-```bash
-# Test login endpoint
-python test_login_api.py
-
-# Or with curl
-curl -X POST "http://localhost:8000/login" \
-     -H "Content-Type: application/json" \
-     -d '{"username": "testuser", "password": "testpassword123"}'
-```
-
-### Test Protected Endpoints
-
-```bash
-# First, get a token
-TOKEN=$(curl -X POST "http://localhost:8000/login" \
-     -H "Content-Type: application/json" \
-     -d '{"username": "testuser", "password": "testpassword123"}' | jq -r '.access_token')
-
-# Then use it to access protected endpoints
-curl -X GET "http://localhost:8000/protected-endpoint" \
-     -H "Authorization: Bearer $TOKEN"
+git checkout dev && git pull
+git checkout -b feature/your-feature
+# ... make changes ...
+gh pr create --base dev
 ```
 
 ---
 
-## MongoDB Collections
+## 📄 License
 
-### `users` Collection
-
-Stores user accounts:
-
-```json
-{
-  "username": "testuser",
-  "email": "test@example.com",
-  "hashed_password": "$2b$12$...",
-  "created_at": "2024-01-01T00:00:00.000Z",
-  "last_login": "2024-01-01T12:00:00.000Z"
-}
-```
-
-### `incident-logs` Collection
-
-Logs security incidents:
-
-```json
-{
-  "username": "testuser",
-  "ip_address": "127.0.0.1",
-  "user_agent": "Mozilla/5.0...",
-  "incident_type": "failed_login",
-  "timestamp": "2024-01-01T12:00:00.000Z"
-}
-```
-
-### `profiles` Collection
-
-Stores user profiles for hiring workflow
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## Security Features
+<div align="center">
 
-- **JWT Authentication** with configurable expiration
-- **Password Hashing** using bcrypt
-- **Incident Logging** for failed login attempts
-- **CORS Configuration** for frontend access
-- **WebSocket Authentication** with JWT tokens
+Built with ☕ and too many late nights by [Mrigesh Thakur](https://github.com/Legend101Zz)
 
----
+*Turning "we're hiring" into "you're hired" — automatically.*
 
-## Troubleshooting
-
-### Common Issues
-
-**1. Redis Connection Error**
-
-```
-❌ Failed to connect to Redis
-```
-
-**Solution:** Ensure Redis is running on localhost:6379
-
-```bash
-redis-cli ping  # Should return PONG
-```
-
-**2. MongoDB Connection Error**
-**Solution:** Ensure MongoDB is running on localhost:27017
-
-```bash
-mongosh  # Should connect successfully
-```
-
-**3. Port Already in Use**
-**Solution:** Kill the process using port 8000 or 3000
-
-```bash
-# Find and kill process on port 8000
-lsof -ti:8000 | xargs kill -9
-
-# Or change the port
-uvicorn main:app --port 8001
-```
-
-**4. Module Import Errors**
-**Solution:** Ensure all dependencies are installed
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## Production Considerations
-
-1. **Change JWT Secret** - Use a strong, randomly generated key
-2. **Enable HTTPS** - Always use HTTPS in production
-3. **Rate Limiting** - Implement rate limiting for API endpoints
-4. **Database Security** - Secure MongoDB with authentication
-5. **Environment Variables** - Never commit secrets to version control
-6. **Monitoring** - Set up logging and monitoring for incidents
-7. **Token Expiration** - Configure appropriate token expiration times
-
----
-
-## Development Workflow
-
-1. Start Redis and MongoDB
-2. Start backend server: `python run_server.py`
-3. In a new terminal, start frontend: `cd frontend-mvp && npm run dev`
-4. Access the application at http://localhost:3000
-5. API documentation at http://localhost:8000/docs
-
----
-
-# Branch Strategy
-
-## Branches
-
-- **`dev`** - Development branch (default)
-- **`main`** - Production branch
-
-## Workflow
-
-1. Create feature branch from `dev`
-2. Open PR to `dev`
-3. After merge, add label `ready-for-prod`
-4. Auto-PR created from `dev` to `main`
-5. Review and merge to deploy to production
-
-## Why is main "ahead" of dev?
-
-When we deploy, GitHub creates a merge commit on `main` that doesn't exist on `dev`.
-
-**This is intentional.** These merge commits serve as deployment markers.
-
-To verify code is identical:
-```bash
-git diff dev main # No output = identical code
-```
-
-## Quick Reference
-
-```bash
-# Start new feature
-
-git checkout dev
-git pull
-git checkout -b feature/my-feature
-
-# After PR merged to dev, deploy to production
-
-gh pr edit <PR_NUMBER> --add-label "ready-for-prod"
-# That's it! Auto-PR will be created.
-```
-
-## Additional Resources
-
-- **Backend Documentation:** See `backend-mvp/AUTH_SETUP.md`
-- **JWT Implementation:** See `backend-mvp/JWT_IMPLEMENTATION_SUMMARY.md`
-- **API Testing:** Use `backend-mvp/test_api.py`
-
-For more information, check the individual README files in each directory.
+</div>
