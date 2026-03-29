@@ -3,7 +3,7 @@ Email Models
 ============
 Pydantic models for email templates and outreach.
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 
@@ -378,7 +378,7 @@ def get_default_templates() -> List[EmailTemplate]:
         EmailPlaceholder(
             key="scheduling_link",
             description="Link to schedule interview",
-            example="https://neuraleap.shop/schedule/abc123",
+            example="https://Hire-X.shop/schedule/abc123",
             required=True
         ),
     ]
@@ -403,7 +403,7 @@ Would you be open to a quick chat? No pressure - just wanted to see if there mig
 Here's a link to pick a time that works: {scheduling_link}
 
 Best,
-The NeuraLeap Team""",
+The Hire-X Team""",
             body_html_template="""<!DOCTYPE html>
 <html>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -417,7 +417,7 @@ The NeuraLeap Team""",
 
 <p><a href="{scheduling_link}" style="display: inline-block; padding: 12px 24px; background: #6366f1; color: white; text-decoration: none; border-radius: 8px; font-weight: 500;">Schedule a Chat →</a></p>
 
-<p>Best,<br>The NeuraLeap Team</p>
+<p>Best,<br>The Hire-X Team</p>
 </body>
 </html>""",
             placeholders=common_placeholders,
@@ -444,7 +444,7 @@ Here's the link again: {scheduling_link}
 Either way, hope you're doing well!
 
 Best,
-The NeuraLeap Team""",
+The Hire-X Team""",
             body_html_template="""<!DOCTYPE html>
 <html>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -458,7 +458,7 @@ The NeuraLeap Team""",
 
 <p>Either way, hope you're doing well!</p>
 
-<p>Best,<br>The NeuraLeap Team</p>
+<p>Best,<br>The Hire-X Team</p>
 </body>
 </html>""",
             placeholders=common_placeholders,
@@ -492,7 +492,7 @@ If you need to reschedule, just reply to this email.
 Looking forward to speaking with you!
 
 Best,
-The NeuraLeap Team""",
+The Hire-X Team""",
             body_html_template="""<!DOCTYPE html>
 <html>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -519,7 +519,7 @@ The NeuraLeap Team""",
 
 <p>Looking forward to speaking with you!</p>
 
-<p>Best,<br>The NeuraLeap Team</p>
+<p>Best,<br>The Hire-X Team</p>
 </body>
 </html>""",
             placeholders=common_placeholders + [
@@ -553,7 +553,7 @@ Make sure you're in a quiet place with good phone reception. You'll receive a ca
 See you soon!
 
 Best,
-The NeuraLeap Team""",
+The Hire-X Team""",
             body_html_template="""<!DOCTYPE html>
 <html>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -569,7 +569,7 @@ The NeuraLeap Team""",
 
 <p>See you soon!</p>
 
-<p>Best,<br>The NeuraLeap Team</p>
+<p>Best,<br>The Hire-X Team</p>
 </body>
 </html>""",
             placeholders=common_placeholders + [

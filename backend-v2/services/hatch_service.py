@@ -245,7 +245,7 @@ class HatchService:
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                     "Connection": "close",
-                    "User-Agent": "Neuraleap/1.0"
+                    "User-Agent": "Hire-X/1.0"
                 }
                 
                 # Prefer LinkedIn URL

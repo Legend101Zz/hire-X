@@ -1442,7 +1442,7 @@ const GmailEmailComposer = ({
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center justify-between">
-                                                        <span className="font-semibold text-zinc-900">NeuraLeap</span>
+                                                        <span className="font-semibold text-zinc-900">Hire-X</span>
                                                         <span className="text-xs text-zinc-400">Just now</span>
                                                     </div>
                                                     <p className="text-xs text-zinc-500">to {firstName}</p>
@@ -2044,7 +2044,7 @@ const OutreachExpandedContent = ({
                                     N
                                 </div>
                                 <div>
-                                    <div className="font-medium text-zinc-900">NeuraLeap</div>
+                                    <div className="font-medium text-zinc-900">Hire-X</div>
                                     <div className="text-xs text-zinc-500">to {data?.email_address}</div>
                                 </div>
                             </div>

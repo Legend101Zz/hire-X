@@ -147,7 +147,7 @@ const LoginPage = () => {
                 >
                   <Sparkles className="w-6 h-6 text-primary-foreground" />
                 </motion.div>
-                <CardTitle className="text-2xl font-bold">NeuraLeap</CardTitle>
+                <CardTitle className="text-2xl font-bold">Hire-X</CardTitle>
               </div>
               <CardDescription>
                 Sign in to your account to continue
@@ -279,7 +279,7 @@ const LoginPage = () => {
                 </div>
                 <div className="relative flex justify-center text-sm">
                   <span className="px-2 bg-card text-muted-foreground">
-                    New to NeuraLeap?
+                    New to Hire-X?
                   </span>
                 </div>
               </div>

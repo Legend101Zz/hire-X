@@ -50,7 +50,7 @@ function TechLoader() {
                 </div>
                 <div className="text-center space-y-1">
                     <h3 className="text-zinc-200 font-medium tracking-wide">ANALYZING PROFILE</h3>
-                    <p className="text-zinc-500 text-xs font-mono">NEURALEAP ENGINE V2</p>
+                    <p className="text-zinc-500 text-xs font-mono">Hire-X ENGINE V2</p>
                 </div>
             </div>
         </div>
@@ -421,7 +421,7 @@ export default function SharedResultPage() {
                             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-violet-500/20">
                                 <Brain className="w-4 h-4 text-white" />
                             </div>
-                            <span className="font-semibold text-white tracking-tight hidden sm:inline">NeuraLeap</span>
+                            <span className="font-semibold text-white tracking-tight hidden sm:inline">Hire-X</span>
                         </div>
                     </div>
                     <div className="flex items-center gap-3">

@@ -24,11 +24,11 @@ How Webhooks Work:
 Setting Up SendGrid Webhooks:
 -----------------------------
 1. Go to SendGrid Dashboard → Settings → Mail Settings → Event Webhook
-2. Set HTTP POST URL: https://neuraleap.shop/api/v1/webhooks/email/sendgrid
+2. Set HTTP POST URL: https://Hire-X.shop/api/v1/webhooks/email/sendgrid
 3. Select events: Delivered, Opened, Clicked, Bounced, Spam Report
 4. Enable the webhook
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 
@@ -98,7 +98,7 @@ async def sendgrid_webhook(
     4. For clicks on scheduling links, we may trigger stage updates
     
     Setup in SendGrid:
-    - URL: https://neuraleap.shop/api/v1/webhooks/email/sendgrid
+    - URL: https://Hire-X.shop/api/v1/webhooks/email/sendgrid
     - Events: Select all tracking events
     """
     try:
@@ -338,7 +338,7 @@ async def vapi_call_webhook(
     4. For call.ended, we trigger assessment generation
     
     Setup in Vapi:
-    - Webhook URL: https://neuraleap.shop/api/v1/webhooks/vapi/call
+    - Webhook URL: https://Hire-X.shop/api/v1/webhooks/vapi/call
     - Set webhook secret for authentication
     """
     try:

@@ -9,7 +9,7 @@ This module defines:
 - Outreach and email tracking
 - Job context and requirements
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 

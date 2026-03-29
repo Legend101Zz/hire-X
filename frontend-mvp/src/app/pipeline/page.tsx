@@ -244,7 +244,7 @@ const NavigationBar = () => {
                             <Bot className="w-5 h-5 text-white" />
                         </div>
                         <span className="text-lg font-bold text-white group-hover:text-violet-400 transition-colors">
-                            NeuraLeap
+                            Hire-X
                         </span>
                     </button>
 

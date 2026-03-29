@@ -15,8 +15,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const WIZARD_STORAGE_KEY = "neuraleap_wizard_v1"; // Version for tracking updates
-const WIZARD_COMPLETED_KEY = "neuraleap_wizard_completed_at";
+const WIZARD_STORAGE_KEY = "Hire-X_wizard_v1"; // Version for tracking updates
+const WIZARD_COMPLETED_KEY = "Hire-X_wizard_completed_at";
 
 interface WizardStep {
     id: number;
@@ -30,7 +30,7 @@ interface WizardStep {
 const wizardSteps: WizardStep[] = [
     {
         id: 1,
-        title: "Welcome to NeuraLeap! 🎉",
+        title: "Welcome to Hire-X! 🎉",
         description: "Hi! I'm Donna, your AI recruiting assistant. I'll help you find perfect candidates through natural conversation. Let me show you how this workspace makes hiring effortless!",
         icon: <Sparkles className="w-6 h-6" />,
     },
@@ -417,6 +417,6 @@ function KeyboardNavigation({
 // Export helper to check if wizard should show
 export function shouldShowWizard(): boolean {
     if (typeof window === "undefined") return false;
-    const wizardStatus = localStorage.getItem("neuraleap_wizard_v1");
+    const wizardStatus = localStorage.getItem("Hire-X_wizard_v1");
     return !wizardStatus || wizardStatus === "skipped"; // Show again if skipped
 }

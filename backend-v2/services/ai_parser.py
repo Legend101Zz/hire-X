@@ -85,8 +85,8 @@ class AIParser:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://neuraleap.com",
-                "X-Title": "Neuraleap Hiring Platform"
+                "HTTP-Referer": "https://Hire-X.com",
+                "X-Title": "Hire-X Hiring Platform"
             }
             
             data = {

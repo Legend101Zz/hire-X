@@ -8,7 +8,7 @@ Endpoints:
 - GET /deep-dive/results/{result_id} - Get shared result
 - GET /deep-dive/export/{result_id} - Export as CSV
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 """
 
 import csv

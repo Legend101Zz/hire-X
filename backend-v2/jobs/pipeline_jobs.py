@@ -28,7 +28,7 @@ How to Use:
 2. Jobs run automatically on schedule
 3. Can also trigger manually via API endpoints
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 

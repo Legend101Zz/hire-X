@@ -340,8 +340,8 @@ class ModelConfigManager:
         headers = {
             "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://neuraleap.com",
-            "X-Title": "Neuraleap AI Platform"
+            "HTTP-Referer": "https://Hire-X.com",
+            "X-Title": "Hire-X AI Platform"
         }
         
         data = {

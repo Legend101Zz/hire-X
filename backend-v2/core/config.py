@@ -51,7 +51,7 @@ class Settings:
     # ========================================================================
     
     MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
-    DATABASE_NAME: str = os.getenv("DATABASE_NAME", "neuraleap")
+    DATABASE_NAME: str = os.getenv("DATABASE_NAME", "Hire-X")
     
     # ========================================================================
     # MongoDB - Profiles Database (56M candidate profiles)
@@ -105,8 +105,8 @@ class Settings:
     SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
-    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "careers@neuraleap.co")
-    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "NeuraLeap Careers")
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "careers@Hire-X.co")
+    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Hire-X Careers")
     SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
 
     SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
@@ -116,7 +116,7 @@ class Settings:
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
-    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "https://neuraleap.shop")
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "https://Hire-X.shop")
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./uploads")
     
     # ========================================================================

@@ -114,7 +114,7 @@ class PipelineService:
         self.hatch = hatch_service
         self.email_service = email_service
         self.vapi_service = vapi_service
-        self.base_url = base_url or settings.APP_BASE_URL or "https://neuraleap.shop"
+        self.base_url = base_url or settings.APP_BASE_URL or "https://Hire-X.shop"
         
         # MongoDB collections
         self.pipelines_collection = mongodb.pipelines_collection
@@ -3006,7 +3006,7 @@ class PipelineService:
                 )
             
             scheduling_token = candidate.outreach.scheduling_token
-            scheduling_link = f"https://neuraleap.shop/schedule/{scheduling_token}"
+            scheduling_link = f"https://Hire-X.shop/schedule/{scheduling_token}"
             candidate.outreach.scheduling_link = scheduling_link
             
             # Generate and store draft using email service

@@ -5,8 +5,8 @@ from pymongo.asynchronous.mongo_client import AsyncMongoClient
 
 
 async def fix_concerns():
-    client = AsyncMongoClient("mongodb://profiles_app:Neuraleap123@localhost:27017/neuraleap?authSource=profiles_production")
-    db = client.neuraleap
+    client = AsyncMongoClient("mongodb://profiles_app:Hire-X123@localhost:27017/Hire-X?authSource=profiles_production")
+    db = client.Hire-X
     pipelines = db.pipelines_collection
     
     cursor = pipelines.find({

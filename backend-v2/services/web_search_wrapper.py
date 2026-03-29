@@ -217,8 +217,8 @@ class WebSearchWrapper:
         headers = {
             "Authorization": f"Bearer {self.openrouter_api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://neuraleap.shop",
-            "X-Title": "NeuraLeap"
+            "HTTP-Referer": "https://Hire-X.shop",
+            "X-Title": "Hire-X"
         }
         
         payload = {

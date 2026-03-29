@@ -36,7 +36,7 @@ export function SchedulingLayout({ children }: SchedulingLayoutProps) {
                             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
                                 <span className="text-white text-sm font-bold">N</span>
                             </div>
-                            <span className="text-white font-semibold">NeuraLeap</span>
+                            <span className="text-white font-semibold">Hire-X</span>
                         </div>
                         <span className="text-[13px] text-white/40">Interview Scheduling</span>
                     </div>
@@ -58,7 +58,7 @@ export function SchedulingLayout({ children }: SchedulingLayoutProps) {
             <footer className="relative border-t border-white/[0.06] mt-auto">
                 <div className="max-w-4xl mx-auto px-6 py-6">
                     <div className="flex items-center justify-between text-[12px] text-white/30">
-                        <span>Powered by NeuraLeap</span>
+                        <span>Powered by Hire-X</span>
                         <div className="flex items-center gap-4">
                             <a href="#" className="hover:text-white/50">Privacy</a>
                             <a href="#" className="hover:text-white/50">Terms</a>

@@ -1,7 +1,7 @@
 """
 Main FastAPI Application Entry Point - V3
 ==========================================
-This is the starting point of Neuraleap backend application.
+This is the starting point of Hire-X backend application.
 It initializes all services and sets up the API routes.
 
 Author: Mrigesh Thakur
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
     - Clean up on shutdown
     """
     logger.debug("=" * 80)
-    logger.debug("STARTING NEURALEAP BACKEND V3")
+    logger.debug("STARTING Hire-X BACKEND V3")
     logger.debug("=" * 80)
     
 
@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
         # Start the scheduler
         scheduler = get_scheduler()
         scheduler.start()
-        logger.info("✅ NeuraLeap Hire Backend started successfully")
+        logger.info("✅ Hire-X Hire Backend started successfully")
         logger.info(f"   Environment: {settings.ENVIRONMENT}")
         logger.info(f"   Base URL: {settings.APP_BASE_URL}")
         
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
     
 # Create FastAPI application
 app = FastAPI(
-    title="Neuraleap Backend V3",
+    title="Hire-X Backend V3",
     description="AI-powered candidate search with conversational interface and smart enrichment",
     version="3.0.0",
     lifespan=lifespan
@@ -102,8 +102,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",  # Alternative localhost
         "http://localhost:3001",  # Alternative port
         "http://127.0.0.1:3001",  # Alternative port
-        "https://app.neuraleap.shop/",  # Vps deployment (without trailing slash)
-        "https://app.neuraleap.shop",  # Vpsdeployment (with trailing slash)
+        "https://app.Hire-X.shop/",  # Vps deployment (without trailing slash)
+        "https://app.Hire-X.shop",  # Vpsdeployment (with trailing slash)
     ],
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods
@@ -137,7 +137,7 @@ async def root():
     Root endpoint - just a welcome message :) 
     """
     return {
-        "message": "Welcome to Neuraleap API v3.0",
+        "message": "Welcome to Hire-X API v3.0",
         "docs": "/docs",
         "health": "/health",
         "features": [

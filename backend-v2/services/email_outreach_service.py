@@ -19,7 +19,7 @@ Providers Supported:
 - Resend (modern alternative)
 - Generic SMTP
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 
@@ -141,7 +141,7 @@ class GmailSMTPProvider(EmailProvider):
                     msg[key] = value
             
             # Generate message ID
-            message_id = f"<{uuid.uuid4().hex}@neuraleap.co>"
+            message_id = f"<{uuid.uuid4().hex}@Hire-X.co>"
             msg["Message-ID"] = message_id
             
             # Attach parts
@@ -701,13 +701,13 @@ class EmailTemplateEngine:
     <div class="container">
         <div class="card">
             <div class="header">
-                <div class="logo">🚀 NeuraLeap</div>
+                <div class="logo">🚀 Hire-X</div>
             </div>
             
             {{% block content %}}{{% endblock %}}
             
             <div class="footer">
-                <p>Sent with ❤️ by NeuraLeap</p>
+                <p>Sent with ❤️ by Hire-X</p>
                 <p class="unsubscribe">
                     If you're not interested, no worries at all - just ignore this email.
                 </p>
@@ -802,7 +802,7 @@ class EmailTemplateEngine:
 
 <p>Best,<br>
 {{ sender_name }}<br>
-<span style="color: #9ca3af;">NeuraLeap Team</span></p>
+<span style="color: #9ca3af;">Hire-X Team</span></p>
 {% endblock %}"""
 
     def _get_interview_reminder_template(self) -> str:
@@ -1058,7 +1058,7 @@ Generate the perfect {tone} outreach email now:"""
                     headers={
                         "Authorization": f"Bearer {self.openrouter_key}",
                         "Content-Type": "application/json",
-                        "HTTP-Referer": "https://neuraleap.shop"
+                        "HTTP-Referer": "https://Hire-X.shop"
                     },
                     json={
                         "model": self.model,
@@ -1491,8 +1491,8 @@ class EmailOutreachService:
         self.template_engine = EmailTemplateEngine(templates_dir)
         
         # Default sender info
-        self.from_email = os.getenv("SMTP_FROM_EMAIL", "careers@neuraleap.co")
-        self.from_name = os.getenv("SMTP_FROM_NAME", "NeuraLeap Careers")
+        self.from_email = os.getenv("SMTP_FROM_EMAIL", "careers@Hire-X.co")
+        self.from_name = os.getenv("SMTP_FROM_NAME", "Hire-X Careers")
         
         logger.info(f"✅ EmailOutreachService initialized")
         logger.info(f"   Provider: {provider}")
@@ -1616,7 +1616,7 @@ Schedule a chat: {scheduling_link}
 
 Best,
 {self.from_name.replace(" Careers", "")}
-NeuraLeap Team
+Hire-X Team
 
 ---
 If you're not interested, no worries - just ignore this email."""

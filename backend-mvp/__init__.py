@@ -1,3 +1,0 @@
-"""
-Neuraleap Backend MVP Package
-"""

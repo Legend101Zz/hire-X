@@ -19,7 +19,7 @@ Features:
 - Multi-language support (English, Hindi, Hinglish)
 - Short, focused interviews (5-10 minutes)
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 4.0
 """
 
@@ -162,7 +162,7 @@ class SSMLBuilder:
     def build_intro_after_confirmation(name: str, job_title: str) -> str:
         """Second part - after they confirm identity."""
         return (
-            f"Great. As mentioned in our email, I'm Neura, an AI Hiring Agent from NeuraLeap. "
+            f"Great. As mentioned in our email, I'm Neura, an AI Hiring Agent from Hire-X. "
             f'<break time="0.4s" />'
             f"I'll be conducting a brief interview with you today for the {job_title} position. "
             f'<break time="0.3s" />'
@@ -260,11 +260,11 @@ class InterviewPrompts:
         first_name = candidate.name.split()[0]
         candidate_context = InterviewPrompts._build_candidate_context(candidate)
         
-        return f"""You are Neura, an AI Hiring Agent from NeuraLeap conducting voice interviews.
+        return f"""You are Neura, an AI Hiring Agent from Hire-X conducting voice interviews.
 
 ## IDENTITY
 - Name: Neura
-- Role: AI Hiring Agent at NeuraLeap
+- Role: AI Hiring Agent at Hire-X
 - Tone: Warm, professional, calm, encouraging
 - NEVER sound robotic or overly excited
 
@@ -488,7 +488,7 @@ class VapiInterviewService:
         self.vapi_api_key = vapi_api_key or os.getenv("VAPI_API_KEY")
         self.vapi_phone_number_id = vapi_phone_number_id or os.getenv("VAPI_PHONE_NUMBER_ID")
         self.openrouter_api_key = openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
-        self.webhook_base_url = webhook_base_url or os.getenv("WEBHOOK_BASE_URL", "https://neuraleap.shop")
+        self.webhook_base_url = webhook_base_url or os.getenv("WEBHOOK_BASE_URL", "https://Hire-X.shop")
         
         # Validate configuration
         if not self.vapi_api_key:
@@ -2269,8 +2269,8 @@ SCORING: 80-100=Excellent, 60-79=Good, 40-59=Adequate, <40=Weak"""
         headers = {
             "Authorization": f"Bearer {self.openrouter_api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://neuraleap.shop",
-            "X-Title": "NeuraLeap Voice Interview"
+            "HTTP-Referer": "https://Hire-X.shop",
+            "X-Title": "Hire-X Voice Interview"
         }
         
         payload = {

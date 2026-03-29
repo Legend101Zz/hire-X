@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🧠 Hire-X
+# Hire-X
+
+[![Watch Demo](https://img.youtube.com/vi/5--3l0IlzZc/0.jpg)](https://youtu.be/5--3l0IlzZc) 
 
 ### AI-Powered End-to-End Recruitment Automation Platform
 
@@ -13,98 +15,50 @@
 
 **From job description to hired candidate — fully automated.**
 
-[Live Demo](https://dev.damnuiwdbbvte.amplifyapp.com) · [Architecture](#architecture) · [Setup Guide](#setup) · [How It Works](#how-it-works)
+· [Architecture](#architecture) · [Setup Guide](#setup) · [How It Works](#how-it-works)
 
 </div>
 
+<img src="./assets/hire-x-home.png" width="2000px" />
+
 ---
 
-##  The Problem It Solves
+## The Problem It Solves
 
-Recruiters don't struggle to *find* candidates. They struggle to *connect* with them.
+Recruiters don't struggle to _find_ candidates. They struggle to _connect_ with them.
 
 Traditional ATS tools dump a list of names and leave the rest to a recruiter's inbox. Hire-X automates the entire funnel — from intelligent candidate discovery across **56+ million LinkedIn profiles**, to AI-powered background analysis, personalized outreach, and fully autonomous AI-conducted telephonic interviews — delivering a ranked shortlist with rich insights directly to the HR team.
 
 > Built for the Indian recruitment market. Designed to replace $500/month tools like LinkedIn Recruiter, Juicebox, and Weekday — at a fraction of the cost.
 
 ---
+<img src="./assets/hire-x-donna.png" width="2000px" />
 
-##  What Makes This Different
 
-| Feature | Traditional ATS | Hire-X Hire |
-|---|---|---|
-| Candidate Search | Keyword filter | AI intent parsing + semantic ranking |
-| Outreach | Manual, generic emails | Personalized, context-aware campaigns |
-| Background Check | Manual Google search | Automated OSINT pipeline |
-| Interview Scheduling | Calendar ping-pong | Auto-scheduled on candidate availability |
-| First-Round Interview | Human phone screen | Vapi + Cartesia AI voice agent |
-| Post-Interview Insight | "How'd the call go?" | Structured report with sentiment, confidence & fit score |
+## What Makes This Different
 
----
-
-##  Architecture
-```
-
-┌─────────────────────────────────────────────────────────────────┐
-│                         HR Dashboard                             │
-│                 (Next.js 15 + shadcn/ui + Framer Motion)        │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │  REST + WebSocket
-┌──────────────────────────────▼──────────────────────────────────┐
-│                      FastAPI Backend                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ Auth Layer   │  │  AI Engine   │  │  Workflow Orchestrator│  │
-│  │ JWT + bcrypt │  │ Claude Sonnet│  │  (Campaign Pipeline)  │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└──────┬───────────────────┬──────────────────────┬───────────────┘
-       │                   │                      │
-┌──────▼──────┐  ┌─────────▼──────────┐  ┌───────▼──────────────┐
-│   MongoDB   │  │   Redis (Cache +   │  │  External Services   │
-│  56M+       │  │   Session + Queue) │  │  ┌────────────────┐  │
-│  Profiles   │  └────────────────────┘  │  │ BrightData API │  │
-│  Collection │                          │  │ (LinkedIn Data)│  │
-└─────────────┘                          │  ├────────────────┤  │
-                                         │  │  Vapi Voice AI │  │
-                                         │  ├────────────────┤  │
-                                         │  │Cartesia Sonic  │  │
-                                         │  │  (TTS Voice)   │  │
-                                         │  ├────────────────┤  │
-                                         │  │ SendGrid/SMTP  │  │
-                                         │  │  (Email Agent) │  │
-                                         │  └────────────────┘  │
-                                         └──────────────────────┘
-```
+| Feature                | Traditional ATS        | Hire-X Hire                                              |
+| ---------------------- | ---------------------- | -------------------------------------------------------- |
+| Candidate Search       | Keyword filter         | AI intent parsing + semantic ranking                     |
+| Outreach               | Manual, generic emails | Personalized, context-aware campaigns                    |
+| Background Check       | Manual Google search   | Automated OSINT pipeline                                 |
+| Interview Scheduling   | Calendar ping-pong     | Auto-scheduled on candidate availability                 |
+| First-Round Interview  | Human phone screen     | Vapi + Cartesia AI voice agent                           |
+| Post-Interview Insight | "How'd the call go?"   | Structured report with sentiment, confidence & fit score |
 
 ---
+
+## Architecture
+
+<img src="./assets/hire-x-archi.png" width="2000px" />
 
 ## 🔄 How It Works — The Full Pipeline
 
+<img src="./assets/hire-x-flow-full.png" width="2000px" />
+
 ### Phase 1 · Intelligent Candidate Discovery
-```
-HR types: "Find me a senior backend engineer with Go + Kubernetes, 
-           fintech background, Bangalore, open to remote"
-                              │
-                              ▼
-              ┌───────────────────────────┐
-              │   Donna (AI Assistant)    │  ← Conversational query
-              │   Claude Sonnet parses    │    builder — no forms
-              │   intent, location, skills│
-              └──────────────┬────────────┘
-                             │
-                             ▼
-              ┌───────────────────────────┐
-              │   Index-First Search      │  ← MongoDB compound
-              │   56M+ LinkedIn profiles  │    indexes, not regex
-              │   Sub-5 second results    │
-              └──────────────┬────────────┘
-                             │
-                             ▼
-              ┌───────────────────────────┐
-              │   AI Ranking Engine       │  ← Skills validation,
-              │   Scores + plain-English  │    experience weight,
-              │   explanations per cand.  │    response likelihood
-              └───────────────────────────┘
-```
+
+<img src="./assets/hire-x-flow-1.png" width="2000px" />
 
 > **Dataset Note:** The LinkedIn profile dataset (56M+ records) is not included in this repo — it requires a paid BrightData subscription. See [Data Setup](#data-setup) below to plug in your own BrightData API key and seed the MongoDB `profiles` collection.
 
@@ -113,86 +67,21 @@ HR types: "Find me a senior backend engineer with Go + Kubernetes,
 ### Phase 2 · Hiring Campaign Pipeline
 
 Once an HR selects candidates to pursue, the campaign pipeline fires automatically:
-```
-HR clicks "Start Campaign" on shortlisted candidates
-                              │
-          ┌───────────────────┴───────────────────┐
-          │                                       │
-          ▼                                       ▼
-┌──────────────────────┐             ┌────────────────────────┐
-│  Background Analysis │             │   Contact Discovery    │
-│                      │             │                        │
-│ • GitHub activity    │             │ • Phone number lookup  │
-│ • StackOverflow rep  │             │ • Work email inference │
-│ • Patent/paper search│             │ • WhatsApp availability│
-│ • Salary progression │             │ • Social presence      │
-│ • Skill verification │             └───────────┬────────────┘
-└──────────┬───────────┘                         │
-           │                                     │
-           └─────────────────┬───────────────────┘
-                             │
-                             ▼
-              ┌───────────────────────────┐
-              │  Candidate Report Card    │
-              │  (Auto-generated PDF)     │
-              │  • Role fit analysis      │
-              │  • Engagement probability │
-              │  • Red/green flags        │
-              │  • Recommended opener     │
-              └──────────────┬────────────┘
-                             │
-                             ▼
-              ┌───────────────────────────┐
-              │  Personalized Outreach    │
-              │  AI drafts email/message  │
-              │  referencing their work,  │
-              │  recent activity, context │
-              └──────────────┬────────────┘
-                             │
-                             ▼
-              ┌───────────────────────────┐
-              │  Interview Scheduler      │
-              │  Sends calendar invite    │
-              │  Confirms time slot       │
-              └──────────────┬────────────┘
-```
 
----
+<img src="./assets/hire-x-flow-2.png" width="2000px" />
+
+<img src="./assets/hire-x-analysis.jpeg" width="2000px" />
 
 ### Phase 3 · AI-Conducted Telephonic Interview
-```
-At scheduled time:
-                              │
-                              ▼
-              ┌───────────────────────────┐
-              │   Vapi Voice Agent        │
-              │   + Cartesia Sonic TTS    │
-              │                           │
-              │  Conducts a structured    │
-              │  phone interview:         │
-              │  • Role-specific Qs       │
-              │  • Follow-up probing      │
-              │  • Culture fit assessment │
-              │  • Compensation gauge     │
-              └──────────────┬────────────┘
-                             │
-                             ▼
-              ┌───────────────────────────┐
-              │   Post-Interview Report   │
-              │   (Delivered to HR)       │
-              │                           │
-              │  • Full transcript        │
-              │  • Confidence score       │
-              │  • Communication quality  │
-              │  • Technical accuracy     │
-              │  • Hire / Pass / Hold     │
-              │    recommendation         │
-              └───────────────────────────┘
-```
 
----
+<img src="./assets/hire-x-flow-3.png" width="2000px" />
+
+<a href="https://drive.google.com/file/d/1SX1iy8fEZbpaGkwPR_Xf-Kc6CM_9Pt53/view?t=5.839" target="_blank">
+  <b>Demo</b>
+</a>
 
 ## 🗂️ Project Structure
+
 ```
 hire-X/
 ├── backend-mvp/               # FastAPI backend (production)
@@ -237,6 +126,7 @@ hire-X/
 - Cartesia API key
 
 ### 1. Clone & Install
+
 ```bash
 git clone https://github.com/Legend101Zz/hire-X.git
 cd hire-X
@@ -253,6 +143,7 @@ npm install
 ### 2. Environment Variables
 
 Create `backend-mvp/.env`:
+
 ```env
 # Auth
 JWT_SECRET_KEY=your-very-secure-secret-key
@@ -283,6 +174,7 @@ SENDGRID_API_KEY=...
 ### 3. Data Setup
 
 > The 56M+ LinkedIn profile dataset is **not included** in this repository. To populate your own:
+
 ```bash
 # Option A: Use BrightData LinkedIn Dataset API
 python backend-mvp/scripts/seed_from_brightdata.py \
@@ -298,6 +190,7 @@ python backend-mvp/scripts/import_profiles.py \
 The script will create the `profiles` collection and build the required compound indexes automatically.
 
 ### 4. Start Services
+
 ```bash
 # Terminal 1 — Redis
 redis-server
@@ -316,6 +209,7 @@ cd frontend-mvp && npm run dev
 ```
 
 Or use PM2 for production:
+
 ```bash
 pm2 start ecosystem.config.js
 ```
@@ -324,22 +218,25 @@ pm2 start ecosystem.config.js
 
 ## 🔑 Key API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/login` | Authenticate, receive JWT |
-| `POST` | `/parse-prompt` | Convert natural language query to search params |
-| `POST` | `/search` | Search + rank candidates from profile DB |
-| `POST` | `/campaign/start` | Trigger full hiring pipeline for selected candidates |
-| `GET` | `/campaign/{id}/status` | Real-time pipeline status |
-| `GET` | `/candidate/{id}/report` | Full background analysis report |
-| `GET` | `/interview/{id}/insights` | Post-interview AI summary |
-| `WS` | `/session/{session_id}` | WebSocket for live updates |
+| Method | Endpoint                   | Description                                          |
+| ------ | -------------------------- | ---------------------------------------------------- |
+| `POST` | `/login`                   | Authenticate, receive JWT                            |
+| `POST` | `/parse-prompt`            | Convert natural language query to search params      |
+| `POST` | `/search`                  | Search + rank candidates from profile DB             |
+| `POST` | `/campaign/start`          | Trigger full hiring pipeline for selected candidates |
+| `GET`  | `/campaign/{id}/status`    | Real-time pipeline status                            |
+| `GET`  | `/candidate/{id}/report`   | Full background analysis report                      |
+| `GET`  | `/interview/{id}/insights` | Post-interview AI summary                            |
+| `WS`   | `/session/{session_id}`    | WebSocket for live updates                           |
 
 ---
 
-##  Tech Stack
+## Tech Stack
+
+<img src="./assets/hire-x-tech-stack.png" width="2000px" />
 
 **Backend**
+
 - [FastAPI](https://fastapi.tiangolo.com) — async Python API framework
 - [MongoDB](https://mongodb.com) — profile storage (56M+ documents)
 - [Redis](https://redis.io) — caching, session management, job queues
@@ -347,37 +244,40 @@ pm2 start ecosystem.config.js
 - [Claude Haiku](https://anthropic.com) — high-volume, cost-efficient tasks
 
 **Frontend**
+
 - [Next.js 15](https://nextjs.org) + TypeScript
 - [shadcn/ui](https://ui.shadcn.com) — component library
 - [Framer Motion](https://framer.com/motion) — animations
 - [TailwindCSS](https://tailwindcss.com)
 
 **AI & Data**
+
 - [Vapi](https://vapi.ai) — AI voice call orchestration
 - [Cartesia Sonic](https://cartesia.ai) — ultra-low-latency TTS for interviews
 - [BrightData](https://brightdata.com) — LinkedIn profile dataset
 - [OpenRouter](https://openrouter.ai) — model routing fallback
 
 **Infrastructure**
+
 - Hostinger KVM VPS + Nginx reverse proxy
 - PM2 process management
 - GitHub Actions CI/CD (auto-PR from `dev` → `main` on `ready-for-prod` label)
 
 ---
 
-##  Performance
+## Performance
 
-| Metric | Value |
-|--------|-------|
-| Profile database size | 56M+ LinkedIn records |
-| Search latency (p95) | < 5 seconds |
-| Concurrent sessions | Redis-backed, horizontally scalable |
-| AI model cold start | < 800ms (cached prompts) |
-| Voice interview latency | < 400ms (Cartesia Sonic) |
+| Metric                  | Value                               |
+| ----------------------- | ----------------------------------- |
+| Profile database size   | 56M+ LinkedIn records               |
+| Search latency (p95)    | < 5 seconds                         |
+| Concurrent sessions     | Redis-backed, horizontally scalable |
+| AI model cold start     | < 800ms (cached prompts)            |
+| Voice interview latency | < 400ms (Cartesia Sonic)            |
 
 ---
 
-## 🗺️Roadmap
+## Roadmap
 
 - [x] Phase 1 — AI-powered candidate search & ranking
 - [x] Phase 2 — Background analysis & personalized outreach
@@ -385,9 +285,10 @@ pm2 start ecosystem.config.js
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 PRs are welcome. Please branch from `dev`, not `main`.
+
 ```bash
 git checkout dev && git pull
 git checkout -b feature/your-feature
@@ -407,6 +308,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 Built with ☕ and too many late nights by [Mrigesh Thakur](https://github.com/Legend101Zz)
 
-*Turning "we're hiring" into "you're hired" — automatically.*
+_Turning "we're hiring" into "you're hired" — automatically._
 
 </div>

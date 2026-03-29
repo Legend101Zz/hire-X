@@ -52,7 +52,7 @@ export function WelcomeModal({ onClose, onSelectMode }: WelcomeModalProps) {
                             <Sparkles className="w-8 h-8 text-primary" />
                         </motion.div>
                         <h2 className="text-2xl font-bold text-foreground mb-2">
-                            Welcome to NeuraLeap 🎉
+                            Welcome to Hire-X 🎉
                         </h2>
                         <p className="text-muted-foreground">
                             Two ways to find great talent — pick what fits your situation.
@@ -140,7 +140,7 @@ export function WelcomeModal({ onClose, onSelectMode }: WelcomeModalProps) {
 }
 
 // Hook to manage first-time visit
-export function useFirstTimeVisit(key: string = 'neuraleap_welcomed') {
+export function useFirstTimeVisit(key: string = 'Hire-X_welcomed') {
     const [isFirstVisit, setIsFirstVisit] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 

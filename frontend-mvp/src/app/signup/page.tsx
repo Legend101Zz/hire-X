@@ -171,7 +171,7 @@ const SignupPage = () => {
                                 >
                                     <Sparkles className="w-6 h-6 text-primary-foreground" />
                                 </motion.div>
-                                <CardTitle className="text-2xl font-bold">NeuraLeap</CardTitle>
+                                <CardTitle className="text-2xl font-bold">Hire-X</CardTitle>
                             </div>
                             <CardDescription>
                                 Create your account and start finding perfect candidates

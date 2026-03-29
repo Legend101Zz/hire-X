@@ -11,7 +11,7 @@ Features:
 - Multi-language support (English + Hindi/Hinglish)
 - Comprehensive analysis and scoring
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 3.0 - Vapi Integration Edition
 """
 
@@ -210,8 +210,8 @@ class VapiAssistantConfig(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "name": "Neura - NeuraLeap Interviewer",
-                "first_message": "Hello! This is Neura from NeuraLeap...",
+                "name": "Neura - Hire-X Interviewer",
+                "first_message": "Hello! This is Neura from Hire-X...",
                 "max_duration_seconds": 600
             }
         }
@@ -224,7 +224,7 @@ class VapiAssistantConfig(BaseModel):
 class InterviewCandidateContext(BaseModel):
     """
     Candidate information for the interview.
-    Populated from NeuraLeap enrichment data.
+    Populated from Hire-X enrichment data.
     """
     candidate_id: str = Field(..., description="MongoDB profile ID")
     name: str = Field(..., description="Candidate full name")
@@ -297,7 +297,7 @@ class InterviewJobContext(BaseModel):
         json_schema_extra = {
             "example": {
                 "job_title": "Senior Python Developer",
-                "company_name": "NeuraLeap",
+                "company_name": "Hire-X",
                 "required_skills": ["Python", "FastAPI", "MongoDB"],
                 "experience_required": "5+ years",
                 "key_responsibilities": ["Backend development", "API design", "Team mentoring"]

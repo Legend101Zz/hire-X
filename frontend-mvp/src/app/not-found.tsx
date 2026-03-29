@@ -82,7 +82,7 @@ export default function NotFound() {
                     transition={{ delay: 0.5 }}
                     className="mt-12"
                 >
-                    <p className="text-2xl font-semibold text-violet-600">neuraleap hire</p>
+                    <p className="text-2xl font-semibold text-violet-600">Hire-X hire</p>
                     <p className="text-sm text-gray-500 mt-2">Finding talent, even when pages get lost</p>
                 </motion.div>
             </motion.div>

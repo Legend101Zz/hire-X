@@ -3,7 +3,7 @@ Interview Scheduling Models
 ===========================
 Pydantic models for interview scheduling and booking.
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 

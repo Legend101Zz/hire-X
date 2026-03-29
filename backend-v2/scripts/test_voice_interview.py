@@ -15,7 +15,7 @@ Usage:
     python scripts/test_voice_interview.py --standalone
     python scripts/test_voice_interview.py --phone +919876543210
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 """
 
 import argparse
@@ -54,7 +54,7 @@ SAMPLE_CANDIDATE = {
     "name": "Yakshi Jain",
     "phone_number": "",  # Will be filled from user input
     "current_title": "Senior HR",
-    "current_company": "NeuraLeap",
+    "current_company": "Hire-X",
     "experience_years": 6,
     "skills": [
         "Talent Acquisition",
@@ -98,7 +98,7 @@ SAMPLE_CANDIDATE = {
 SAMPLE_JOB = {
     "job_id": "test-job-hr-001",
     "job_title": "Senior HR / Talent Partner",
-    "company_name": "NeuraLeap",
+    "company_name": "Hire-X",
     "required_skills": [
         "Talent Acquisition",
         "End-to-End Recruitment",
@@ -117,7 +117,7 @@ SAMPLE_JOB = {
     ],
     "experience_required": "5+ years",
     "job_description_summary": (
-        "NeuraLeap is looking for a Senior HR / Talent Partner to lead hiring "
+        "Hire-X is looking for a Senior HR / Talent Partner to lead hiring "
         "and people operations for a fast-growing AI-driven product company. "
         "This role involves owning end-to-end recruitment, working closely "
         "with leadership, and building scalable hiring processes."
@@ -353,7 +353,7 @@ class InterviewTester:
 async def run_standalone_test(phone_number: str = None):
     """Run test directly using service class (bypassing API)."""
     print("=" * 60)
-    print("🎙️ NEURALEAP VOICE INTERVIEW - STANDALONE MODE")
+    print("🎙️ Hire-X VOICE INTERVIEW - STANDALONE MODE")
     print("=" * 60)
     
     # 1. Setup
@@ -405,7 +405,7 @@ async def run_standalone_test(phone_number: str = None):
 async def run_api_test():
     """Run test via API endpoints."""
     print("=" * 60)
-    print("🎙️ NEURALEAP VOICE INTERVIEW - API TEST")
+    print("🎙️ Hire-X VOICE INTERVIEW - API TEST")
     print("=" * 60)
     
     if not AUTH_TOKEN:
@@ -464,7 +464,7 @@ async def run_api_test():
 
 async def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Test NeuraLeap Voice Interview V4")
+    parser = argparse.ArgumentParser(description="Test Hire-X Voice Interview V4")
     parser.add_argument("--standalone", action="store_true", help="Run without API server")
     parser.add_argument("--phone", type=str, help="Phone number to call")
     parser.add_argument("--api-url", type=str, help="API base URL")

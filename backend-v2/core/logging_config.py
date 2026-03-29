@@ -1,5 +1,5 @@
 """
-Centralized logging configuration for Neuraleap backend.
+Centralized logging configuration for Hire-X backend.
 
 Features:
 - Environment-based log levels (DEV vs PROD)
@@ -109,7 +109,7 @@ class LoggerManager(object):
         root_logger.addHandler(console_handler)
         # File handler with rotation (for all environments)
         file_handler = RotatingFileHandler(
-            self.log_dir / "neuraleap.log",
+            self.log_dir / "Hire-X.log",
             maxBytes=10 * 1024 * 1024,  # 10MB
             backupCount=5,
             encoding='utf-8'

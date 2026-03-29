@@ -45,7 +45,7 @@ export default function Header() {
             >
               <div>
                 <span className="text-2xl bg-gradient-to-r from-violet-600 to-purple-600 bg-clip-text text-transparent">
-                  neuraleap hire
+                  Hire-X hire
                 </span>
               </div>
             </motion.div>

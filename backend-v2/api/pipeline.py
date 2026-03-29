@@ -11,7 +11,7 @@ Endpoints:
 - Outreach
 - Dashboard
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 

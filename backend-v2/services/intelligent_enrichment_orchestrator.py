@@ -44,7 +44,7 @@ Architecture:
 │  8. Be HONEST about uncertainties                           │
 └─────────────────────────────────────────────────────────────┘
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0 - Honest Assessment Edition
 """
 
@@ -269,7 +269,7 @@ class IntelligentEnrichmentOrchestrator:
         
         self.openrouter_key = settings.OPENROUTER_API_KEY
         self.brightdata_key = settings.BRIGHTDATA_API_TOKEN
-        self.brightdata_zone = getattr(settings, 'BRIGHTDATA_ZONE', 'neuraleap_web_unlocker')
+        self.brightdata_zone = getattr(settings, 'BRIGHTDATA_ZONE', 'Hire-X_web_unlocker')
         
         # --- CENTRALIZED MODEL CONFIGURATION ---
         self.llm_config = {
@@ -3935,8 +3935,8 @@ BE BRUTALLY HONEST: If this is a poor match, say so clearly. Don't waste HR's ti
                 headers={
                     "Authorization": f"Bearer {self.openrouter_key}",
                     "Content-Type": "application/json",
-                    "HTTP-Referer": "https://neuraleap.hire",
-                    "X-Title": "NeuraLeap Hire"
+                    "HTTP-Referer": "https://Hire-X.hire",
+                    "X-Title": "Hire-X Hire"
                 },
                 json={
                     "model": model,

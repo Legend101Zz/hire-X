@@ -1,5 +1,5 @@
 [Unit]
-Description=Neuraleap Backend API
+Description=Hire-X Backend API
 After=network.target
 
 [Service]

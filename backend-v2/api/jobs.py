@@ -4,7 +4,7 @@ Jobs API
 ========
 API endpoints for managing and triggering background jobs.
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 Version: 2.0
 """
 

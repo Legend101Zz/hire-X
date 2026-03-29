@@ -2,7 +2,7 @@ module.exports = {
   // To run all the project using PM2
   apps: [
     {
-      name: "neuraleap-backend",
+      name: "Hire-X-backend",
       cwd: "/root/hire-X/backend-v2",
       script: "uvicorn",
       args: "main:app --host 0.0.0.0 --port 8000 --workers 3",
@@ -20,33 +20,29 @@ module.exports = {
         ENVIRONMENT: "production",
 
         // JWT & Security
-        JWT_SECRET_KEY:
-          "",
+        JWT_SECRET_KEY: "",
 
         // AI Configuration
-        OPENROUTER_API_KEY:
-          "",
+        OPENROUTER_API_KEY: "",
         AI_MODEL_NAME: "anthropic/claude-sonnet-4.5",
 
         // External APIs
-        BRIGHTDATA_API_TOKEN:
-         "",
-        HATCH_API_KEY:
-          "",
+        BRIGHTDATA_API_TOKEN: "",
+        HATCH_API_KEY: "",
 
         //Vapi Configuration
         VAPI_API_KEY: "",
         VAPI_PHONE_NUMBER_ID: "",
 
         //Webhook URL (server's public URL for vapi)
-        WEBHOOK_BASE_URL: "https://neuraleap.shop",
+        WEBHOOK_BASE_URL: "https://Hire-X.shop",
 
         // Cartesia (used via Vapi, but needed for direct calls)
         CARTESIA_API_KEY: "",
 
         // Interview Storage
         INTERVIEW_RECORDINGS_PATH: "./interview_recordings",
-        WEBHOOK_BASE_URL: "https://neuraleap.shop",
+        WEBHOOK_BASE_URL: "https://Hire-X.shop",
 
         // Gmail SMTP Configuration
         EMAIL_PROVIDER: "gmail",
@@ -57,16 +53,16 @@ module.exports = {
         SMTP_FROM_EMAIL: "",
         SMTP_FROM_NAME: "",
         SMTP_USE_TLS: "true",
-        APP_BASE_URL: "https://app.neuraleap.shop",
+        APP_BASE_URL: "https://app.Hire-X.shop",
 
         // MongoDB - Main Database
         MONGODB_URL:
-          "mongodb://profiles_app:Neuraleap123@localhost:27017/neuraleap?authSource=profiles_production",
-        DATABASE_NAME: "neuraleap",
+          "mongodb://profiles_app:Hire-X123@localhost:27017/Hire-X?authSource=profiles_production",
+        DATABASE_NAME: "Hire-X",
 
         // MongoDB - Profiles Database (56M candidates)
         PROFILES_DB_URL:
-          "mongodb://profiles_app:Neuraleap123@localhost:27017/profiles_production?authSource=profiles_production",
+          "mongodb://profiles_app:Hire-X123@localhost:27017/profiles_production?authSource=profiles_production",
         PROFILES_DB_NAME: "profiles_production",
 
         // Redis Configuration
@@ -75,7 +71,7 @@ module.exports = {
         REDIS_DB: "0",
         REDIS_PASSWORD: "",
         ALLOWED_ORIGINS:
-          "https://neuraleap.shop,https://www.neuraleap.shop,http://localhost:3000,https://app.neuraleap.shop",
+          "https://Hire-X.shop,https://www.Hire-X.shop,http://localhost:3000,https://app.Hire-X.shop",
 
         // Server Configuration
         HOST: "0.0.0.0",
@@ -102,7 +98,7 @@ module.exports = {
       time: true,
     },
     {
-      name: "neuraleap-frontend",
+      name: "Hire-X-frontend",
       cwd: "/root/hire-X/frontend-mvp",
       script: "npm",
       args: "start",
@@ -114,8 +110,8 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 3000,
-        NEXT_PUBLIC_API_BASE_URL: "https://neuraleap.shop",
-        NEXT_PUBLIC_WS_BASE_URL: "wss://neuraleap.shop",
+        NEXT_PUBLIC_API_BASE_URL: "https://Hire-X.shop",
+        NEXT_PUBLIC_WS_BASE_URL: "wss://Hire-X.shop",
       },
       error_file: "/root/hire-X/frontend-mvp/logs/pm2-error.log",
       out_file: "/root/hire-X/frontend-mvp/logs/pm2-out.log",

@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NeuraLeap Hire - AI-Powered Talent Search",
+  title: "Hire-X Hire - AI-Powered Talent Search",
   description:
     "Advanced AI-powered platform for finding and analyzing professional profiles with enrichment data",
   keywords: [
@@ -28,9 +28,9 @@ export const metadata: Metadata = {
     "candidate sourcing",
     "enrichment",
   ],
-  authors: [{ name: "NeuraLeap" }],
+  authors: [{ name: "Hire-X" }],
   openGraph: {
-    title: "NeuraLeap Hire - AI-Powered Talent Search",
+    title: "Hire-X Hire - AI-Powered Talent Search",
     description:
       "Find the best candidates with AI-powered search and enrichment",
     type: "website",

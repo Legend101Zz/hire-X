@@ -16,7 +16,7 @@ Usage:
     export OPENROUTER_API_KEY="your-key"
     python tests/interactive_voice_interview_v2.py
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 """
 
 import asyncio
@@ -268,7 +268,7 @@ class InteractiveInterviewV2:
         print(f"""
 {Colors.HEADER}╔═══════════════════════════════════════════════════════════════════════╗
 ║                                                                           ║
-║           🎙️  NeuraLeap Interactive Voice Interview V2  🎙️               ║
+║           🎙️  Hire-X Interactive Voice Interview V2  🎙️               ║
 ║                                                                           ║
 ║   • The AI interviewer speaks naturally with pauses and warmth            ║
 ║   • Respond in English, Hindi, or Hinglish - all are welcome!            ║
@@ -306,7 +306,7 @@ class InteractiveInterviewV2:
         """Get job context."""
         return JobContext(
             job_title="Senior Python Developer",
-            company_name="NeuraLeap",
+            company_name="Hire-X",
             required_skills=["Python", "FastAPI", "MongoDB", "Docker"],
             nice_to_have_skills=["AWS", "Kubernetes", "React"],
             experience_required="4+ years",

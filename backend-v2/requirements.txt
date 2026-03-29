@@ -1,5 +1,5 @@
 # ============================================================
-# Neuraleap Backend Requirements
+# Hire-X Backend Requirements
 # Python 3.13+ (recommended)
 # ============================================================
 

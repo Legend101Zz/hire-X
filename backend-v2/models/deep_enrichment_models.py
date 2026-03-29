@@ -11,7 +11,7 @@ These models define the structure for:
 - Notice period estimates
 - Match analysis
 
-Author: NeuraLeap Engineering
+Author: Hire-X Engineering
 """
 
 from typing import Any, Dict, List, Optional

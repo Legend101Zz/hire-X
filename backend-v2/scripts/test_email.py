@@ -49,7 +49,7 @@ async def test_email():
     # Create test job
     job = JobContext(
         job_title="Lead Backend Engineer",
-        company_name="NeuraLeap",
+        company_name="Hire-X",
         required_skills=["Python", "FastAPI", "MongoDB"],
         experience_required="5+ years"
     )
@@ -59,7 +59,7 @@ async def test_email():
     email_content = await service.generate_outreach_email(
         candidate=candidate,
         job=job,
-        scheduling_link="https://neuraleap.shop/schedule/test-token"
+        scheduling_link="https://Hire-X.shop/schedule/test-token"
     )
     
     print(f"\n   Subject: {email_content['subject']}")

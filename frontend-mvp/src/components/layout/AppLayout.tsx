@@ -524,7 +524,7 @@ export default function AppLayout({
                 >
                     <DonnaMascot size="sm" isHovered={logoHovered} />
                     {!isCollapsed && (
-                        <span className="font-bold text-lg text-white tracking-tight">NeuraLeap</span>
+                        <span className="font-bold text-lg text-white tracking-tight">Hire-X</span>
                     )}
                 </Link>
             </div>
@@ -763,7 +763,7 @@ export default function AppLayout({
                     </button>
                     <div className="flex items-center gap-2 ml-3">
                         <DonnaMascot size="sm" />
-                        <span className="font-bold text-white">NeuraLeap</span>
+                        <span className="font-bold text-white">Hire-X</span>
                     </div>
                     <div className="ml-auto">
                         <Button

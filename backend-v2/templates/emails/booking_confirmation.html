@@ -1,31 +1,35 @@
-{% extends "base.html" %}
-
-{% block content %}
+{% extends "base.html" %} {% block content %}
 <p>Hi {{ candidate_first_name }},</p>
 
 <p>Great news - your interview is confirmed! 🎉</p>
 
 <div class="highlight-box">
-    <h2>📅 {{ formatted_datetime }}</h2>
-    <p style="margin: 8px 0 0 0; color: #64748b;">{{ timezone }}</p>
+  <h2>📅 {{ formatted_datetime }}</h2>
+  <p style="margin: 8px 0 0 0; color: #64748b">{{ timezone }}</p>
 </div>
 
-<p>You'll receive a call from our AI interviewer, <strong>Neura</strong>, at the scheduled time. The interview typically takes about {{ duration_minutes }} minutes.</p>
+<p>
+  You'll receive a call from our AI interviewer, <strong>Neura</strong>, at the
+  scheduled time. The interview typically takes about {{ duration_minutes }}
+  minutes.
+</p>
 
 <div class="tips-box">
-    <strong>A few tips to prepare:</strong>
-    <ul>
-        <li>Find a quiet place with good phone reception</li>
-        <li>Have your resume handy for reference</li>
-        <li>Relax and be yourself!</li>
-    </ul>
+  <strong>A few tips to prepare:</strong>
+  <ul>
+    <li>Find a quiet place with good phone reception</li>
+    <li>Have your resume handy for reference</li>
+    <li>Relax and be yourself!</li>
+  </ul>
 </div>
 
 <p>If you need to reschedule, just reply to this email.</p>
 
 <p>Looking forward to speaking with you!</p>
 
-<p>Best,<br>
-{{ sender_name }}<br>
-<span style="color: #9ca3af;">NeuraLeap Team</span></p>
+<p>
+  Best,<br />
+  {{ sender_name }}<br />
+  <span style="color: #9ca3af">Hire-X Team</span>
+</p>
 {% endblock %}

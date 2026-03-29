@@ -50,13 +50,13 @@ function SupportPopup({ isOpen, onClose }: SupportPopupProps) {
       name: 'Mrigesh Thakur',
       role: 'Techical Co-Founder',
       phone: '+91 96198 29501', // Replace with actual phone number
-      email: 'rohan@neuraleap.co' // Replace with actual email
+      email: 'rohan@Hire-X.co' // Replace with actual email
     },
     {
       name: 'Rohan Lodha',
       role: 'CEO & Co-Founder',
       phone: '+91 96198 29501', // Replace with actual phone number
-      email: 'rohan@neuraleap.co' // Replace with actual email
+      email: 'rohan@Hire-X.co' // Replace with actual email
     }
   ];
 
